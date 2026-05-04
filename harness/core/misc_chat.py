@@ -61,6 +61,7 @@ class MiscChatRunner:
             "Do not produce Harness artifacts.",
             "Be concise, practical, and grounded in the provided context when present.",
             "When the context contains concrete paths, use those exact paths instead of placeholders.",
+            "Do not start long-running foreground commands such as dev servers; provide the command and URL instead.",
         ]
         if context:
             parts.extend(["", "## Context", context])

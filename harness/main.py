@@ -1027,7 +1027,8 @@ class InteractiveCLI:
             lines.append(f"- success_path: {success_path}")
             source_path = success_path / "source"
             if source_path.exists():
-                lines.append(f"- materialized_source: {source_path}")
+                source_label = "materialized_source" if self._looks_like_runnable_source(source_path) else "partial_materialized_source"
+                lines.append(f"- {source_label}: {source_path}")
         if latest_repo:
             lines.append(f"- latest_agent_repo_workspace: {latest_repo}")
         for artifact_type in (
@@ -1103,6 +1104,18 @@ class InteractiveCLI:
             if path.exists() and path.is_file():
                 return path
         return None
+
+    def _looks_like_runnable_source(self, path: Path) -> bool:
+        project_markers = (
+            "package.json",
+            "pyproject.toml",
+            "Cargo.toml",
+            "go.mod",
+            "pom.xml",
+            "build.gradle",
+            "index.html",
+        )
+        return any((path / marker).exists() for marker in project_markers)
 
     def _latest_agent_repo_path(self, task_id: str) -> Path | None:
         phases = {phase["phase_id"]: phase for phase in self.orchestrator.repository.list_phases(task_id)}

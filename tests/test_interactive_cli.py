@@ -186,6 +186,9 @@ def test_history_context_includes_concrete_paths_for_misc_answers(tmp_path: Path
     merged_patch.write_text("diff --git a/app.js b/app.js\n", encoding="utf-8")
     success_dir = tmp_path / "deliver" / "project-12345678"
     success_dir.mkdir(parents=True)
+    source_dir = success_dir / "source"
+    source_dir.mkdir()
+    (source_dir / "package.json").write_text('{"scripts":{"dev":"vite"}}\n', encoding="utf-8")
     success_path_md = success_dir / "success_path.md"
     success_path_md.write_text(f"success_path: {success_dir}\n", encoding="utf-8")
     for artifact_type, path in (("merged_patch.diff", merged_patch), ("success_path.md", success_path_md)):
@@ -209,8 +212,40 @@ def test_history_context_includes_concrete_paths_for_misc_answers(tmp_path: Path
     assert f"- task_workspace: {Path(cli.config['system']['workspace_root']) / task_id}" in context
     assert f"- latest_agent_repo_workspace: {repo_path}" in context
     assert f"- success_path: {success_dir}" in context
+    assert f"- materialized_source: {source_dir}" in context
     assert f"- merged_patch.diff: {merged_patch}" in context
     assert "Do not replace known concrete paths with placeholders" in context
+
+
+def test_history_context_marks_incomplete_source_as_partial(tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    task_id = cli.orchestrator.create_task("Fix the chess game", workflow_type="bugfix")
+    success_dir = tmp_path / "deliver" / "project-12345678"
+    source_dir = success_dir / "source"
+    source_dir.mkdir(parents=True)
+    (source_dir / "src" / "ui").mkdir(parents=True)
+    (source_dir / "src" / "ui" / "MenuScreen.ts").write_text("export {}\n", encoding="utf-8")
+    success_path_md = success_dir / "success_path.md"
+    success_path_md.write_text(f"success_path: {success_dir}\n", encoding="utf-8")
+    cli.orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=f"{task_id}-success_path.md",
+            task_id=task_id,
+            phase_id=None,
+            role="orchestrator",
+            agent_id="harness",
+            artifact_type="success_path.md",
+            path=success_path_md,
+            version=1,
+            hash=None,
+        )
+    )
+
+    context = cli._build_history_context(task_id)
+
+    assert context
+    assert f"- partial_materialized_source: {source_dir}" in context
+    assert f"- materialized_source: {source_dir}" not in context
 
 
 def test_project_prompt_selects_new_task_for_followup_dashboard(monkeypatch, tmp_path: Path) -> None:
