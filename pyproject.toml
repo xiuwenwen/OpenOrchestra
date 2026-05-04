@@ -8,6 +8,12 @@ dependencies = ["prompt_toolkit>=3.0.52"]
 [project.optional-dependencies]
 dev = ["pytest"]
 
+[tool.setuptools.packages.find]
+include = ["harness*"]
+
+[tool.setuptools.package-data]
+harness = ["prompts/templates/*.md", "state/migrations.sql"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
