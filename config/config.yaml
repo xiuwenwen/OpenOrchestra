@@ -1,0 +1,74 @@
+system:
+  workspace_root: "./workspaces"
+  artifact_root: "./artifacts"
+  deliver_root: "./deliver"
+  state_db: "./state/harness.db"
+  source_repo: "."
+
+agent_backend:
+  default: "codex"
+  planner: "codex"
+  executor: "codex"
+  tester: "codex"
+  reviewer: "codex"
+  judge: "codex"
+  communicator: "codex"
+
+roles:
+  planner:
+    count: 2
+  executor:
+    count: 2
+  tester:
+    count: 1
+  reviewer:
+    count: 1
+  judge:
+    count: 1
+  communicator:
+    count: 1
+
+limits:
+  max_planning_rounds: 3
+  planning_peer_review_loops: 3
+  max_test_fix_rounds: 5
+  max_review_rounds: 3
+  max_agent_retry: 2
+
+timeouts:
+  planner: 0
+  executor: 0
+  tester: 0
+  reviewer: 0
+  judge: 0
+  communicator: 0
+
+heartbeat:
+  interval_seconds: 60
+
+visualization:
+  host: "127.0.0.1"
+  port: 8765
+
+claude:
+  max_output_tokens:
+    classifier: 2048
+    misc: 168000
+    planner: 128000
+    executor: 64000
+    tester: 64000
+    reviewer: 128000
+    judge: 128000
+    communicator: 64000
+
+artifact_input:
+  max_files: 50
+  max_file_bytes: 262144
+  max_total_bytes: 1048576
+
+policy:
+  different_roles_can_run_concurrently: false
+  same_role_can_run_concurrently: true
+  require_judge_final_approval: true
+  allow_medium_bug_delivery: false
+  require_all_tests_pass: true

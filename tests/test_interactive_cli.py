@@ -1,0 +1,551 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import harness.main as main_module
+from harness.core.progress import ProgressEvent
+from harness.main import ConsoleProgressReporter, InteractiveCLI
+
+
+def _config(tmp_path: Path) -> dict:
+    return {
+        "system": {
+            "workspace_root": str(tmp_path / "workspaces"),
+            "artifact_root": str(tmp_path / "artifacts"),
+            "deliver_root": str(tmp_path / "deliver"),
+            "state_db": str(tmp_path / "state" / "harness.db"),
+        },
+        "agent_backend": {
+            "default": "mock",
+            "planner": "mock",
+            "executor": "mock",
+            "tester": "mock",
+            "reviewer": "mock",
+            "judge": "mock",
+            "communicator": "mock",
+        },
+        "roles": {
+            "planner": {"count": 1},
+            "executor": {"count": 1},
+            "tester": {"count": 1},
+            "reviewer": {"count": 1},
+            "judge": {"count": 1},
+            "communicator": {"count": 1},
+        },
+        "limits": {
+            "max_planning_rounds": 3,
+            "max_test_fix_rounds": 5,
+            "max_review_rounds": 3,
+            "max_agent_retry": 2,
+        },
+        "timeouts": {
+            "planner": 5,
+            "executor": 5,
+            "tester": 5,
+            "reviewer": 5,
+            "judge": 5,
+            "communicator": 5,
+        },
+        "policy": {
+            "different_roles_can_run_concurrently": False,
+            "same_role_can_run_concurrently": True,
+            "require_judge_final_approval": True,
+            "allow_medium_bug_delivery": False,
+            "require_all_tests_pass": True,
+        },
+        "heartbeat": {"interval_seconds": 60},
+        "visualization": {"host": "127.0.0.1", "port": 8765},
+        "claude": {
+            "max_output_tokens": {
+                "classifier": 2048,
+                "misc": 168000,
+                "planner": 128000,
+                "executor": 64000,
+                "tester": 64000,
+                "reviewer": 128000,
+                "judge": 128000,
+                "communicator": 64000,
+            }
+        },
+        "artifact_input": {"max_files": 50, "max_file_bytes": 262144, "max_total_bytes": 1048576},
+    }
+
+
+def test_resume_context_does_not_pollute_project_workflow_classification(monkeypatch, tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    historical_task_id = cli.orchestrator.create_task("Build a small weather app")
+    cli.active_task_id = historical_task_id
+    captured: dict[str, str] = {}
+
+    def fake_classify(prompt: str, backend: str, config: dict | None = None) -> str:
+        captured["classified_prompt"] = prompt
+        captured["backend"] = backend
+        captured["config_seen"] = "yes" if config else "no"
+        return "feature_change", None
+
+    def fake_run_once(orchestrator, prompt: str, workflow_type: str, project_context_md: str | None = None) -> int:
+        captured["run_prompt"] = prompt
+        captured["workflow_type"] = workflow_type
+        captured["project_context_md"] = project_context_md or ""
+        return 0
+
+    monkeypatch.setattr(main_module, "classify_workflow", fake_classify)
+    monkeypatch.setattr(main_module, "run_once", fake_run_once)
+
+    cli._run_prompt("what does the dashboard mean?")
+
+    assert captured["classified_prompt"] == "what does the dashboard mean?"
+    assert captured["backend"] == "mock"
+    assert captured["config_seen"] == "yes"
+    assert captured["workflow_type"] == "feature_change"
+    assert captured["run_prompt"] == "what does the dashboard mean?"
+    assert "Historical task id:" in captured["project_context_md"]
+
+
+def test_misc_prompt_uses_direct_chat_without_harness_task(monkeypatch, tmp_path: Path, capsys) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    historical_task_id = cli.orchestrator.create_task("Build a small weather app")
+    cli.active_task_id = historical_task_id
+    capsys.readouterr()
+    captured: dict[str, str | None] = {}
+
+    class FakeMiscChatRunner:
+        def __init__(self, backend: str, config: dict | None = None):
+            captured["backend"] = backend
+            captured["config_seen"] = "yes" if config else "no"
+
+        def ask(self, prompt: str, context: str | None = None) -> str:
+            captured["prompt"] = prompt
+            captured["context"] = context
+            return "direct answer"
+
+    def fail_run_once(*args, **kwargs) -> int:
+        raise AssertionError("misc must not run Harness task flow")
+
+    monkeypatch.setattr(main_module, "classify_workflow", lambda prompt, backend, config=None: ("misc", None))
+    monkeypatch.setattr(main_module, "MiscChatRunner", FakeMiscChatRunner)
+    monkeypatch.setattr(main_module, "run_once", fail_run_once)
+
+    cli._run_prompt("how do I use this project?")
+
+    output = capsys.readouterr().out
+    assert output.strip() == "direct answer"
+    assert "[classifier]" not in output
+    assert captured["backend"] == "mock"
+    assert captured["config_seen"] == "yes"
+    assert captured["prompt"] == "how do I use this project?"
+    assert captured["context"]
+    assert "Historical task id:" in captured["context"]
+
+
+def test_misc_classifier_fallback_prints_raw_answer_only(monkeypatch, tmp_path: Path, capsys) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+
+    class FailMiscChatRunner:
+        def __init__(self, backend: str, config: dict | None = None):
+            pass
+
+        def ask(self, prompt: str, context: str | None = None) -> str:
+            raise AssertionError("fallback answer should avoid a second model call")
+
+    monkeypatch.setattr(main_module, "classify_workflow", lambda prompt, backend, config=None: ("misc", "raw answer"))
+    monkeypatch.setattr(main_module, "MiscChatRunner", FailMiscChatRunner)
+
+    cli._run_prompt("how do I use this project?")
+
+    output = capsys.readouterr().out
+    assert output.strip() == "raw answer"
+    assert "[classifier]" not in output
+
+
+def test_project_prompt_selects_new_task_for_followup_dashboard(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    store = main_module.UiEventStore()
+    cli = InteractiveCLI(config, "mock", ConsoleProgressReporter(), ui_store=store)
+    historical_task_id = cli.orchestrator.create_task("Build a previous app")
+    cli.active_task_id = historical_task_id
+
+    monkeypatch.setattr(main_module, "classify_workflow", lambda prompt, backend, config=None: ("new_project", None))
+
+    def fake_run_once(orchestrator, prompt: str, workflow_type: str, project_context_md: str | None = None) -> int:
+        task_id = orchestrator.create_task(prompt, workflow_type=workflow_type)
+        orchestrator.repository.update_task(task_id, status="RUNNING")
+        store(ProgressEvent("task_started", task_id=task_id, status="RUNNING"))
+        return 0
+
+    monkeypatch.setattr(main_module, "run_once", fake_run_once)
+
+    cli._run_prompt("Build the next app")
+
+    assert cli.active_task_id != historical_task_id
+    assert store.latest_task_id == cli.active_task_id
+
+
+def test_prompt_has_no_leading_newline(tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+
+    assert not cli._prompt().startswith("\n")
+    assert cli._prompt().startswith("harness[mock]")
+
+
+def test_read_line_uses_prompt_toolkit_session(monkeypatch, tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    prompts: list[str] = []
+
+    class FakeTty:
+        def isatty(self) -> bool:
+            return True
+
+    class FakePromptSession:
+        def prompt(self, prompt: str) -> str:
+            prompts.append(prompt)
+            return "做一个天气软件"
+
+    monkeypatch.setattr(main_module.sys, "stdin", FakeTty())
+    monkeypatch.setattr(main_module.sys, "stdout", FakeTty())
+    cli._prompt_session = FakePromptSession()
+
+    value = cli._read_line()
+
+    assert value == "做一个天气软件"
+    assert prompts == ["harness[mock]> "]
+    assert cli.input_history == ["做一个天气软件"]
+
+
+def test_read_line_falls_back_to_standard_input_without_tty(monkeypatch, tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    prompts: list[str] = []
+
+    class FakeStream:
+        def isatty(self) -> bool:
+            return False
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+        return "中文输入"
+
+    monkeypatch.setattr(main_module.sys, "stdin", FakeStream())
+    monkeypatch.setattr(main_module.sys, "stdout", FakeStream())
+    monkeypatch.setattr(main_module.builtins, "input", fake_input)
+
+    value = cli._read_line()
+
+    assert value == "中文输入"
+    assert prompts == ["harness[mock]> "]
+    assert cli.input_history == ["中文输入"]
+
+
+def test_read_line_returns_exit_on_non_tty_eof(monkeypatch, tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+
+    class FakeStream:
+        def isatty(self) -> bool:
+            return False
+
+    def fake_input(prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr(main_module.sys, "stdin", FakeStream())
+    monkeypatch.setattr(main_module.sys, "stdout", FakeStream())
+    monkeypatch.setattr(main_module.builtins, "input", fake_input)
+
+    assert cli._read_line() == "exit"
+
+
+def test_command_completion_items_include_live_command_candidates(tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+
+    items = cli.completion_items("/us")
+
+    assert [item.text for item in items] == ["/use"]
+    assert "Switch underlying agent backend" in str(items[0].display_meta)
+
+
+def test_backend_completion_items_are_live_candidates(tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+
+    items = cli.completion_items("/use co")
+
+    assert [item.text for item in items] == ["codex"]
+    assert items[0].start_position == -2
+
+
+def test_resume_completion_items_include_task_information(tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    task_id = cli.orchestrator.create_task("Build a weather app with IP lookup")
+    cli.history_rows = cli.orchestrator.repository.list_tasks(20)
+
+    suggestions = cli.completion_items("/resume ")
+
+    assert suggestions
+    assert suggestions[0].text == "1"
+    assert task_id[:8] in str(suggestions[0].display_meta)
+    assert "CREATED" in str(suggestions[0].display_meta)
+    assert "Build a weather app" in str(suggestions[0].display_meta)
+
+
+def test_display_truncation_preserves_wide_character_width() -> None:
+    text = "做一个根据我IP来识别地区并且搜索天气的软件"
+
+    truncated = main_module.truncate_display(text, 20)
+
+    assert truncated.endswith("...")
+    assert main_module.display_width(truncated) <= 20
+
+
+def test_history_suggestions_align_chinese_prompt(tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    cli.orchestrator.create_task("做一个根据我IP来识别地区并且搜索天气的软件")
+    cli.history_rows = cli.orchestrator.repository.list_tasks(20)
+
+    suggestion = str(cli.completion_items("/resume ")[0].display_meta)
+
+    assert "做一个" in suggestion
+    assert main_module.display_width(suggestion) <= 96
+
+
+def test_dashboard_row_padding_uses_display_width(capsys) -> None:
+    reporter = main_module.DashboardProgressReporter()
+    reporter.enabled = False
+    row = main_module.RoleView(
+        role="执行者",
+        status="COMPLETED",
+        phase="阶段中文",
+        agent_id="agent-1",
+        artifacts=1,
+    )
+
+    reporter._render_row(row)
+
+    output = capsys.readouterr().out.rstrip("\n")
+    assert "执行者" in output
+    assert main_module.display_width(output) == 110
+
+
+def test_dashboard_render_does_not_draw_input_prompt(capsys) -> None:
+    reporter = main_module.DashboardProgressReporter()
+    reporter.enabled = False
+
+    reporter._render()
+
+    output = capsys.readouterr().out
+    assert "Input:" not in output
+    assert "harness>" not in output
+
+
+def test_user_env_round_trip(tmp_path: Path) -> None:
+    env_path = tmp_path / ".myharness.env"
+
+    main_module.save_user_env_value("HARNESS_BACKEND", "claude", env_path)
+
+    assert main_module.load_user_env(env_path)["HARNESS_BACKEND"] == "claude"
+
+
+def test_ensure_user_env_defaults_adds_missing_config_values(tmp_path: Path) -> None:
+    env_path = tmp_path / ".myharness.env"
+    config = _config(tmp_path)
+    config["roles"]["planner"]["count"] = 2
+    config["roles"]["executor"]["count"] = 2
+    env_path.write_text("HARNESS_BACKEND=claude\nHARNESS_TESTER_COUNT=3\n", encoding="utf-8")
+
+    main_module.ensure_user_env_defaults(config, main_module.load_user_env(env_path), env_path)
+
+    values = main_module.load_user_env(env_path)
+    assert values["HARNESS_BACKEND"] == "claude"
+    assert values["HARNESS_PLANNER_COUNT"] == "2"
+    assert values["HARNESS_EXECUTOR_COUNT"] == "2"
+    assert values["HARNESS_TESTER_COUNT"] == "3"
+    assert values["HARNESS_REVIEWER_COUNT"] == "1"
+    assert values["HARNESS_JUDGE_COUNT"] == "1"
+    assert values["HARNESS_COMMUNICATOR_COUNT"] == "1"
+    assert values["HARNESS_WORKSPACE_ROOT"] == str(tmp_path / "workspaces")
+    assert values["HARNESS_UI_PORT"] == "8765"
+    assert values["HARNESS_CLAUDE_MAX_TOKENS_MISC"] == "168000"
+    assert values["HARNESS_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY"] == "true"
+
+
+def test_env_role_counts_override_config(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    main_module.apply_env_role_counts(
+        config,
+        {
+            "HARNESS_PLANNER_COUNT": "3",
+            "HARNESS_EXECUTOR_COUNT": "4",
+            "HARNESS_TESTER_COUNT": "2",
+            "HARNESS_REVIEWER_COUNT": "1",
+        },
+    )
+
+    assert config["roles"]["planner"]["count"] == 3
+    assert config["roles"]["executor"]["count"] == 4
+    assert config["roles"]["tester"]["count"] == 2
+    assert config["roles"]["reviewer"]["count"] == 1
+
+
+def test_user_env_config_overrides_nested_values(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    main_module.apply_user_env_config(
+        config,
+        {
+            "HARNESS_BACKEND": "claude",
+            "HARNESS_WORKSPACE_ROOT": "/tmp/harness-workspaces",
+            "HARNESS_PLANNER_COUNT": "4",
+            "HARNESS_TIMEOUT_PLANNER": "0",
+            "HARNESS_UI_PORT": "9999",
+            "HARNESS_CLAUDE_MAX_TOKENS_EXECUTOR": "64000",
+            "HARNESS_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY": "false",
+        },
+    )
+
+    assert config["agent_backend"]["default"] == "claude"
+    assert config["system"]["workspace_root"] == "/tmp/harness-workspaces"
+    assert config["roles"]["planner"]["count"] == 4
+    assert config["timeouts"]["planner"] == 0
+    assert config["visualization"]["port"] == 9999
+    assert config["claude"]["max_output_tokens"]["executor"] == 64000
+    assert config["policy"]["same_role_can_run_concurrently"] is False
+
+
+def test_input_history_remembers_non_duplicate_commands(tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+
+    cli._remember_input("/history")
+    cli._remember_input("/history")
+    cli._remember_input("/resume 1")
+
+    assert cli.input_history == ["/history", "/resume 1"]
+
+
+def test_clean_removes_selected_task_intermediate_files_and_keeps_success_path(tmp_path: Path, capsys) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    task_id = cli.orchestrator.create_task("Build a weather app")
+    cli.active_task_id = task_id
+
+    success_path = cli.orchestrator._delivery_project_dir(task_id, "Build a weather app")
+    success_path.mkdir(parents=True)
+    (success_path / "final_delivery.md").write_text("done", encoding="utf-8")
+    (success_path / "success_path.md").write_text(f"success_path: {success_path}\n", encoding="utf-8")
+    workspace_task_dir = Path(cli.config["system"]["workspace_root"]) / task_id
+    artifact_task_dir = Path(cli.config["system"]["artifact_root"]) / task_id
+    workspace_task_dir.mkdir(parents=True)
+    artifact_task_dir.mkdir(parents=True)
+    (workspace_task_dir / "prompt.md").write_text("prompt", encoding="utf-8")
+    (artifact_task_dir / "patch.diff").write_text("patch", encoding="utf-8")
+
+    cli._handle_command("/clean")
+
+    output = capsys.readouterr().out
+    assert "cleaned task:" in output
+    assert "success_path:" in output
+    assert not workspace_task_dir.exists()
+    assert not artifact_task_dir.exists()
+    assert (success_path / "final_delivery.md").exists()
+
+
+def test_clean_refuses_without_final_success_path(tmp_path: Path, capsys) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    task_id = cli.orchestrator.create_task("Build a weather app")
+    cli.active_task_id = task_id
+    workspace_task_dir = Path(cli.config["system"]["workspace_root"]) / task_id
+    workspace_task_dir.mkdir(parents=True)
+    (workspace_task_dir / "prompt.md").write_text("prompt", encoding="utf-8")
+
+    cli._handle_command("/clean")
+
+    output = capsys.readouterr().out
+    assert "refusing to clean" in output
+    assert workspace_task_dir.exists()
+
+
+def test_dashboard_records_role_elapsed_seconds() -> None:
+    reporter = main_module.DashboardProgressReporter()
+    reporter.enabled = False
+
+    reporter._apply(
+        ProgressEvent(
+            "agent_completed",
+            task_id="task",
+            phase="EXECUTION",
+            role="executor",
+            agent_id="executor-1",
+            round_id=0,
+            attempt=0,
+            status="COMPLETED",
+            data={"elapsed_seconds": 1.25},
+        )
+    )
+
+    assert reporter.state.roles["executor"].elapsed_seconds == 1.25
+
+
+def test_dashboard_tracks_individual_agent_rows() -> None:
+    reporter = main_module.DashboardProgressReporter()
+    reporter.enabled = False
+
+    reporter._apply(
+        ProgressEvent(
+            "agent_completed",
+            task_id="task",
+            phase="PLANNING_DRAFT",
+            role="planner",
+            agent_id="planner-1",
+            round_id=0,
+            attempt=0,
+            status="COMPLETED",
+            data={"artifacts": 5, "elapsed_seconds": 1.0},
+        )
+    )
+    reporter._apply(
+        ProgressEvent(
+            "agent_retryable_failure",
+            task_id="task",
+            phase="PLANNING_DRAFT",
+            role="planner",
+            agent_id="planner-2",
+            round_id=0,
+            attempt=1,
+            status="OUTPUT_INVALID",
+            data={"elapsed_seconds": 2.0},
+        )
+    )
+
+    assert reporter.state.roles["planner"].artifacts == 5
+    assert reporter.state.agents["planner:planner-1"].status == "COMPLETED"
+    assert reporter.state.agents["planner:planner-1"].artifacts == 5
+    assert reporter.state.agents["planner:planner-2"].status == "OUTPUT_INVALID"
+    assert reporter.state.agents["planner:planner-2"].attempt == 2
+
+
+def test_dashboard_resets_role_and_agent_state_for_new_task() -> None:
+    reporter = main_module.DashboardProgressReporter()
+    reporter.enabled = False
+    reporter._apply(
+        ProgressEvent(
+            "agent_completed",
+            task_id="task-1",
+            phase="PLANNING_DRAFT",
+            role="planner",
+            agent_id="planner-1",
+            status="COMPLETED",
+            data={"artifacts": 5},
+        )
+    )
+
+    reporter._apply(ProgressEvent("task_created", task_id="task-2", status="CREATED"))
+
+    assert reporter.state.task_id == "task-2"
+    assert reporter.state.roles["planner"].status == "PENDING"
+    assert reporter.state.roles["planner"].artifacts == 0
+    assert reporter.state.agents == {}
+
+
+def test_dashboard_shows_running_status_when_task_starts() -> None:
+    reporter = main_module.DashboardProgressReporter()
+    reporter.enabled = False
+
+    reporter._apply(ProgressEvent("task_started", task_id="task-1", status="RUNNING"))
+
+    assert reporter.state.task_id == "task-1"
+    assert reporter.state.task_status == "RUNNING"

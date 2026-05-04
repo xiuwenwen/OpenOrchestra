@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>myHarnessSystem Execution Flow</title>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ startOnLoad: true, theme: 'default' });
+    </script>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>myHarnessSystem 详细代码执行流程图</h1>
+        <div class="mermaid">
+graph TD
+    %% 阶段 1: 初始化与交互层
+    subgraph S1 [Initialization & CLI]
+        A[main.py: main] --> B(Load Config & Env)
+        B --> C[Init Orchestrator & State DB]
+        C --> D{启动参数带有 prompt?}
+        D -- No --> E[InteractiveCLI.run 交互模式]
+        E --> F[等待/读取用户输入]
+        F --> G{是斜杠 / 命令?}
+        G -- Yes --> H[执行命令如 /resume, /history]
+        H --> F
+        G -- No --> I[WorkflowClassifier 分类意图]
+        D -- Yes --> J[WorkflowClassifier 分类意图]
+        I --> K[run_once 触发单次执行]
+        J --> K
+    end
+
+    %% 阶段 2: 核心编排与任务路由
+    subgraph S2 [Orchestrator Task Routing]
+        K --> L[Orchestrator.create_task]
+        L --> M[Orchestrator.run_task]
+        M --> N{Workflow Type?}
+        N -- BUGFIX --> O[_run_bugfix_flow]
+        N -- NEW_PROJECT / FEATURE --> P[_run_new_project_flow]
+        N -- MISC --> Q[_run_misc_flow]
+    end
+
+    %% 阶段 3: 工作流控制 (以 New Project 为例)
+    subgraph S3 [Flow Execution - New Project]
+        P --> R1[_run_planning_block 规划阶段]
+        R1 --> R2[_run_execution_test_loop 执行与测试循环]
+        R2 --> R3[_run_review_loop 审查与回归测试循环]
+        R3 --> R4[_run_final_judgement 最终裁决]
+        R4 --> R5[_run_delivery 交付物生成]
+    end
+
+    %% 阶段 4: 角色阶段调度机制
+    subgraph S4 [Role Phase Execution]
+        R1 -. 调用 .-> RP[run_role_phase]
+        R2 -. 调用 .-> RP
+        R3 -. 调用 .-> RP
+        Q -. 调用 .-> RP
+        
+        RP --> RP1{是否有已完成的 Checkpoint?}
+        RP1 -- Yes --> RP2[跳过执行, 恢复已有 Artifacts]
+        RP1 -- No --> RP3[StateRepository.create_phase 创建阶段]
+        RP3 --> RP4{Agent并发数 > 1 ?}
+        RP4 -- Yes --> RP5[_run_agents_concurrently 并发执行]
+        RP4 -- No --> RP6[_run_agent_with_retry 顺序执行]
+        RP5 --> RP6
+    end
+
+    %% 阶段 5: 智能体底层执行与验证
+    subgraph S5 [Agent Run & Validation]
+        RP6 --> A1[WorkspaceManager.create_workspace]
+        A1 --> A2[_stage_input_artifacts 挂载上下文文件]
+        A2 --> A3[PromptBuilder.build 构建提示词]
+        A3 --> A4[AgentAdapter.run 调用大模型底层 CLI/API]
+        
+        %% 心跳线程挂载在 Adapter Run 侧
+        A4 -. 伴随 .-> HB((Heartbeat Thread))
+        
+        A4 --> A5[ArtifactValidator.validate_required_outputs]
+        A5 -- 验证通过 --> A6[ArtifactManager.collect_output_dir 收集产物]
+        A5 -- 验证失败/格式错 --> A7{重试次数 < Max Retry?}
+        A7 -- Yes --> RP6
+        A7 -- No --> A8[抛出 TaskFailedError]
+    end
+
+    %% 阶段 6: 裁判逻辑
+    subgraph S6 [Judgement Phase]
+        R1 -. 评估 .-> J1[_run_judge_phase]
+        R2 -. 评估 .-> J1
+        R3 -. 评估 .-> J1
+        R4 -. 评估 .-> J1
+        
+        J1 --> J2[run_role_phase_judge]
+        J2 --> J3[解析生成的 decision.json]
+        J3 --> J4[返回 Judge 归一化判定结果]
+        J4 -- 如果判定失败 --> J5[触发修改流或抛出异常]
+    end
+    
+    %% 阶段 7: 交付输出
+    R5 --> D1[_publish_delivery 发布交付物到指定目录]
+    D1 --> END_NODE((流程结束 返回最终路径))
+        </div>
+    </div>
+</body>
+</html>

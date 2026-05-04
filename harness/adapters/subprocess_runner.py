@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import threading
+from pathlib import Path
+
+
+class SubprocessRunner:
+    def run(
+        self,
+        command: list[str],
+        cwd: Path,
+        timeout_seconds: float | None,
+        stdout_path: Path,
+        stderr_path: Path,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> int:
+        timeout = timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
+        stdout_path.parent.mkdir(parents=True, exist_ok=True)
+        stderr_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with stdout_path.open("w", encoding="utf-8") as stdout_handle, stderr_path.open(
+                "w", encoding="utf-8"
+            ) as stderr_handle:
+                process = subprocess.Popen(
+                    command,
+                    cwd=cwd,
+                    stdin=subprocess.PIPE if input_text is not None else None,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    env={**os.environ, **env} if env else None,
+                )
+                stdout_thread = threading.Thread(
+                    target=self._copy_stream,
+                    args=(process.stdout, stdout_handle),
+                    daemon=True,
+                )
+                stderr_thread = threading.Thread(
+                    target=self._copy_stream,
+                    args=(process.stderr, stderr_handle),
+                    daemon=True,
+                )
+                stdout_thread.start()
+                stderr_thread.start()
+                if input_text is not None and process.stdin is not None:
+                    process.stdin.write(input_text)
+                    process.stdin.close()
+                try:
+                    return_code = process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    return_code = 124
+                    stderr_handle.write("\nTIMEOUT\n")
+                    stderr_handle.flush()
+                stdout_thread.join(timeout=2)
+                stderr_thread.join(timeout=2)
+                return return_code
+        except subprocess.TimeoutExpired as exc:
+            # Kept for compatibility with tests or alternate subprocess implementations.
+            stdout_path.write_text(self._decode_timeout_stream(exc.stdout), encoding="utf-8")
+            stderr_path.write_text(self._decode_timeout_stream(exc.stderr) + "\nTIMEOUT\n", encoding="utf-8")
+            return 124
+
+    def _copy_stream(self, stream, handle) -> None:
+        if stream is None:
+            return
+        try:
+            for chunk in iter(stream.readline, ""):
+                if not chunk:
+                    break
+                handle.write(chunk)
+                handle.flush()
+        finally:
+            stream.close()
+
+    def _legacy_run(
+        self,
+        command: list[str],
+        cwd: Path,
+        timeout: int | None,
+        stdout_path: Path,
+        stderr_path: Path,
+        input_text: str | None,
+        env: dict[str, str] | None,
+    ) -> int:
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=cwd,
+                input=input_text,
+                text=True,
+                capture_output=True,
+                timeout=timeout if timeout and timeout > 0 else None,
+                check=False,
+                env={**os.environ, **env} if env else None,
+            )
+            stdout_path.write_text(completed.stdout, encoding="utf-8")
+            stderr_path.write_text(completed.stderr, encoding="utf-8")
+            return completed.returncode
+        except subprocess.TimeoutExpired as exc:
+            stdout_path.write_text(self._decode_timeout_stream(exc.stdout), encoding="utf-8")
+            stderr_path.write_text(self._decode_timeout_stream(exc.stderr) + "\nTIMEOUT\n", encoding="utf-8")
+            return 124
+
+    def _decode_timeout_stream(self, value: str | bytes | None) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value

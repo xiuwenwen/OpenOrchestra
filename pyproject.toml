@@ -1,0 +1,13 @@
+[project]
+name = "harness-system-mvp"
+version = "0.1.0"
+description = "MVP harness for orchestrating mature coding agents."
+requires-python = ">=3.11"
+dependencies = ["prompt_toolkit>=3.0.52"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
