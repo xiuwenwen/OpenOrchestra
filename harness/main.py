@@ -163,6 +163,23 @@ COMMAND_ALIASES = {
     "/run": "/continue",
 }
 
+BARE_COMMAND_ALIASES = {
+    "help": "/help",
+    "history": "/history",
+    "tasks": "/history",
+    "resume": "/resume",
+    "select": "/resume",
+    "task": "/resume",
+    "continue": "/continue",
+    "retry": "/continue",
+    "run": "/continue",
+    "clean": "/clean",
+    "current": "/current",
+    "ui": "/ui",
+}
+
+BARE_COMMANDS_WITH_ARGS = {"history", "tasks", "resume", "select", "task"}
+
 
 class ConsoleProgressReporter:
     def __init__(self) -> None:
@@ -648,7 +665,10 @@ class InteractiveCLI:
             if prompt.lower() in {"exit", "quit", "q", "/exit", "/quit"}:
                 return 0
             try:
-                if prompt.startswith("/"):
+                command_line = self._bare_command_line(prompt)
+                if command_line:
+                    self._handle_command(command_line)
+                elif prompt.startswith("/"):
                     self._handle_command(prompt)
                 else:
                     self._run_prompt(prompt)
@@ -659,6 +679,18 @@ class InteractiveCLI:
     def _prompt(self) -> str:
         context = f" task={self.active_task_id[:8]}" if self.active_task_id else ""
         return f"harness[{self.backend}{context}]> "
+
+    def _bare_command_line(self, text: str) -> str | None:
+        parts = text.split()
+        if not parts or parts[0].startswith("/"):
+            return None
+        token = parts[0].lower()
+        command = BARE_COMMAND_ALIASES.get(token)
+        if not command:
+            return None
+        if len(parts) > 1 and token not in BARE_COMMANDS_WITH_ARGS:
+            return None
+        return " ".join([command, *parts[1:]])
 
     def _read_line(self) -> str:
         if not PROMPT_TOOLKIT_AVAILABLE:
@@ -832,7 +864,7 @@ class InteractiveCLI:
                     "  /backend                 Show current backend",
                     "  /use claude|codex        Switch underlying agent backend",
                     "  /history [n]             List recent tasks",
-                    "  /continue                Continue/retry the active historical task",
+                    "  /continue                Continue/retry the active historical task; bare 'continue' also works",
                     "  /resume <n|task_id>      Use a historical task as context for following prompts",
                     "  /clean                   Remove selected task workspaces/artifacts; keep final success_path",
                     "  /current                 Show selected historical context",

@@ -181,6 +181,32 @@ def test_project_prompt_selects_new_task_for_followup_dashboard(monkeypatch, tmp
     assert store.latest_task_id == cli.active_task_id
 
 
+def test_bare_continue_invokes_continue_command(monkeypatch, tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    calls: list[str] = []
+    inputs = iter(["continue", "exit"])
+
+    monkeypatch.setattr(cli, "_read_line", lambda: next(inputs))
+    monkeypatch.setattr(cli, "_continue_task", lambda: calls.append("continue"))
+    monkeypatch.setattr(cli, "_run_prompt", lambda prompt: calls.append(f"prompt:{prompt}"))
+
+    assert cli.run() == 0
+    assert calls == ["continue"]
+
+
+def test_bare_continue_sentence_remains_prompt(monkeypatch, tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    calls: list[str] = []
+    inputs = iter(["continue fixing BGM", "exit"])
+
+    monkeypatch.setattr(cli, "_read_line", lambda: next(inputs))
+    monkeypatch.setattr(cli, "_continue_task", lambda: calls.append("continue"))
+    monkeypatch.setattr(cli, "_run_prompt", lambda prompt: calls.append(f"prompt:{prompt}"))
+
+    assert cli.run() == 0
+    assert calls == ["prompt:continue fixing BGM"]
+
+
 def test_prompt_has_no_leading_newline(tmp_path: Path) -> None:
     cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
 
