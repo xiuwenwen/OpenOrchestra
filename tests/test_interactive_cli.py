@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import harness.main as main_module
+from harness.agents.result import ArtifactRef
 from harness.core.progress import ProgressEvent
 from harness.main import ConsoleProgressReporter, InteractiveCLI
 
@@ -156,6 +157,60 @@ def test_misc_classifier_fallback_prints_raw_answer_only(monkeypatch, tmp_path: 
     output = capsys.readouterr().out
     assert output.strip() == "raw answer"
     assert "[classifier]" not in output
+
+
+def test_history_context_includes_concrete_paths_for_misc_answers(tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    task_id = cli.orchestrator.create_task("Fix the chess game", workflow_type="bugfix")
+    phase_id = cli.orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 0, status="COMPLETED")
+    cli.orchestrator.repository.create_agent_run(
+        task_id,
+        phase_id,
+        "executor",
+        "executor-1",
+        0,
+        status="COMPLETED",
+    )
+    repo_path = (
+        Path(cli.config["system"]["workspace_root"])
+        / task_id
+        / phase_id
+        / "executor"
+        / "executor-1"
+        / "round_0"
+        / "attempt_0"
+        / "repo"
+    )
+    repo_path.mkdir(parents=True)
+    merged_patch = tmp_path / "merged_patch.diff"
+    merged_patch.write_text("diff --git a/app.js b/app.js\n", encoding="utf-8")
+    success_dir = tmp_path / "deliver" / "project-12345678"
+    success_dir.mkdir(parents=True)
+    success_path_md = success_dir / "success_path.md"
+    success_path_md.write_text(f"success_path: {success_dir}\n", encoding="utf-8")
+    for artifact_type, path in (("merged_patch.diff", merged_patch), ("success_path.md", success_path_md)):
+        cli.orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=f"{task_id}-{artifact_type}",
+                task_id=task_id,
+                phase_id=phase_id,
+                role="executor",
+                agent_id="executor-1",
+                artifact_type=artifact_type,
+                path=path,
+                version=1,
+                hash=None,
+            )
+        )
+
+    context = cli._build_history_context(task_id)
+
+    assert context
+    assert f"- task_workspace: {Path(cli.config['system']['workspace_root']) / task_id}" in context
+    assert f"- latest_agent_repo_workspace: {repo_path}" in context
+    assert f"- success_path: {success_dir}" in context
+    assert f"- merged_patch.diff: {merged_patch}" in context
+    assert "Do not replace known concrete paths with placeholders" in context
 
 
 def test_project_prompt_selects_new_task_for_followup_dashboard(monkeypatch, tmp_path: Path) -> None:

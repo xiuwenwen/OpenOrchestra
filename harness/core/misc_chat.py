@@ -60,6 +60,7 @@ class MiscChatRunner:
             "Do not modify files.",
             "Do not produce Harness artifacts.",
             "Be concise, practical, and grounded in the provided context when present.",
+            "When the context contains concrete paths, use those exact paths instead of placeholders.",
         ]
         if context:
             parts.extend(["", "## Context", context])

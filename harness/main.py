@@ -1009,11 +1009,48 @@ class InteractiveCLI:
         task = self.orchestrator.repository.get_task(task_id)
         if not task:
             return None
+        task_workspace = Path(self.config["system"]["workspace_root"]).expanduser().resolve() / task_id
+        success_path = self._success_path(task_id)
+        latest_repo = self._latest_agent_repo_path(task_id)
         lines = [
             f"Historical task id: {task['task_id']}",
+            f"Historical workflow type: {task.get('workflow_type') or '-'}",
             f"Historical status: {task['status']}",
+            f"Historical current phase: {task.get('current_phase') or '-'}",
+            f"Historical current role: {task.get('current_role') or '-'}",
             f"Historical prompt: {task['user_prompt']}",
+            "",
+            "Historical concrete paths:",
+            f"- task_workspace: {task_workspace}",
         ]
+        if success_path:
+            lines.append(f"- success_path: {success_path}")
+            source_path = success_path / "source"
+            if source_path.exists():
+                lines.append(f"- materialized_source: {source_path}")
+        if latest_repo:
+            lines.append(f"- latest_agent_repo_workspace: {latest_repo}")
+        for artifact_type in (
+            "final_delivery.md",
+            "usage_guide.md",
+            "success_path.md",
+            "artifacts_manifest.md",
+            "merged_patch.diff",
+            "merge_report.md",
+            "patch.diff",
+            "fix_patch.diff",
+            "response.md",
+        ):
+            path = self._latest_artifact_path(task_id, artifact_type)
+            if path:
+                lines.append(f"- {artifact_type}: {path}")
+        lines.extend(
+            [
+                "",
+                "When answering how to start, run, inspect, or apply this historical task, use the concrete paths above.",
+                "Do not replace known concrete paths with placeholders such as /path/to/merged_patch.diff.",
+            ]
+        )
         for artifact_type in ("final_delivery.md", "usage_guide.md", "response.md"):
             path = self._latest_artifact_path(task_id, artifact_type)
             if path:
@@ -1028,9 +1065,24 @@ class InteractiveCLI:
             "# Project Context",
             "",
             f"Historical task id: {task['task_id']}",
+            f"Historical workflow type: {task.get('workflow_type') or '-'}",
             f"Historical status: {task['status']}",
+            f"Historical current phase: {task.get('current_phase') or '-'}",
+            f"Historical current role: {task.get('current_role') or '-'}",
             f"Historical prompt: {task['user_prompt']}",
         ]
+        task_workspace = Path(self.config["system"]["workspace_root"]).expanduser().resolve() / task_id
+        lines.extend(["", f"Historical task_workspace: {task_workspace}"])
+        success_path = self._success_path(task_id)
+        if success_path:
+            lines.append(f"Historical success_path: {success_path}")
+        latest_repo = self._latest_agent_repo_path(task_id)
+        if latest_repo:
+            lines.append(f"Historical latest_agent_repo_workspace: {latest_repo}")
+        for artifact_type in ("merged_patch.diff", "merge_report.md", "patch.diff", "fix_patch.diff"):
+            path = self._latest_artifact_path(task_id, artifact_type)
+            if path:
+                lines.append(f"Historical {artifact_type} path: {path}")
         final_delivery = self._latest_artifact_path(task_id, "final_delivery.md")
         if final_delivery:
             lines.extend(["", f"Historical final_delivery.md path: {final_delivery}"])
@@ -1050,6 +1102,26 @@ class InteractiveCLI:
             path = Path(artifact["path"])
             if path.exists() and path.is_file():
                 return path
+        return None
+
+    def _latest_agent_repo_path(self, task_id: str) -> Path | None:
+        phases = {phase["phase_id"]: phase for phase in self.orchestrator.repository.list_phases(task_id)}
+        workspace_root = Path(self.config["system"]["workspace_root"]).expanduser().resolve()
+        for run in reversed(self.orchestrator.repository.list_agent_runs(task_id)):
+            phase = phases.get(run["phase_id"], {})
+            round_id = int(phase.get("round_id") or 0)
+            repo_path = (
+                workspace_root
+                / task_id
+                / str(run["phase_id"])
+                / str(run["role"])
+                / str(run["agent_id"])
+                / f"round_{round_id}"
+                / f"attempt_{run['retry_count']}"
+                / "repo"
+            )
+            if repo_path.exists() and repo_path.is_dir():
+                return repo_path
         return None
 
     def _latest_task_id(self) -> str | None:
