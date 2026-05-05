@@ -3,7 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from harness.adapters.claude_code_adapter import ClaudeCodeAdapter
-from harness.adapters.claude_config import ClaudeContextBudgetError, claude_dynamic_max_output_tokens, estimate_prompt_tokens
+from harness.adapters.claude_config import (
+    DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS,
+    DEFAULT_CONTEXT_WINDOW_TOKENS,
+    DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE,
+    MIN_DYNAMIC_MAX_OUTPUT_TOKENS,
+    ClaudeContextBudgetError,
+    claude_dynamic_max_output_tokens,
+    estimate_prompt_tokens,
+)
 from harness.agents.context import AgentRunContext
 
 
@@ -47,7 +55,11 @@ class RequestTooLargeRunner(FakeRunner):
         return 1
 
 
-def _context(tmp_path: Path, config: dict, role: str = "planner") -> AgentRunContext:
+def _ascii_prompt_for_estimated_tokens(token_count: int) -> str:
+    return "x" * (token_count * 4)
+
+
+def _context(tmp_path: Path, config: dict, role: str = "planner", user_prompt: str = "plan") -> AgentRunContext:
     workspace = tmp_path / "workspace"
     repo = workspace / "repo"
     input_dir = workspace / "input"
@@ -62,7 +74,7 @@ def _context(tmp_path: Path, config: dict, role: str = "planner") -> AgentRunCon
         role=role,
         agent_id=f"{role}-1",
         round_id=0,
-        user_prompt="plan",
+        user_prompt=user_prompt,
         role_instruction="plan",
         workspace_dir=workspace,
         repo_dir=repo,
@@ -107,79 +119,93 @@ def test_claude_adapter_uses_configured_max_output_tokens(tmp_path: Path) -> Non
 
 
 def test_claude_dynamic_max_output_tokens_respects_context_window() -> None:
-    prompt = "x" * 4000
+    target_available_output_tokens = 32_000
+    estimated_input_tokens = (
+        DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - target_available_output_tokens
+    )
+    prompt = _ascii_prompt_for_estimated_tokens(estimated_input_tokens)
 
     adjusted = claude_dynamic_max_output_tokens(
         {
             "claude": {
-                "context_window_tokens": 2000,
-                "context_window_buffer_tokens": 0,
-                "max_output_tokens": 1500,
+                "context_window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
+                "context_window_buffer_tokens": DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS,
+                "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE["planner"],
             }
         },
         "planner",
         prompt,
     )
 
-    assert estimate_prompt_tokens(prompt) == 1000
-    assert adjusted == 1000
+    assert estimate_prompt_tokens(prompt) == estimated_input_tokens
+    assert adjusted == target_available_output_tokens
 
 
 def test_claude_adapter_lowers_max_output_for_large_prompt(tmp_path: Path) -> None:
     runner = FakeRunner()
+    user_prompt = _ascii_prompt_for_estimated_tokens(155_000)
 
     ClaudeCodeAdapter(command=["claude", "-p"], runner=runner).run(
         _context(
             tmp_path,
             config={
                 "claude": {
-                    "context_window_tokens": 3000,
-                    "context_window_buffer_tokens": 1000,
-                    "max_output_tokens": 1000,
+                    "context_window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
+                    "context_window_buffer_tokens": DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS,
+                    "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE["planner"],
                 }
             },
+            user_prompt=user_prompt,
         )
     )
 
     assert runner.env is not None
-    assert int(runner.env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"]) < 1000
+    adjusted_max_output_tokens = int(runner.env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"])
+    assert MIN_DYNAMIC_MAX_OUTPUT_TOKENS <= adjusted_max_output_tokens
+    assert adjusted_max_output_tokens < DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE["planner"]
 
 
 def test_claude_dynamic_max_output_tokens_raises_when_prompt_exceeds_budget() -> None:
-    prompt = "x" * 4000
+    target_available_output_tokens = MIN_DYNAMIC_MAX_OUTPUT_TOKENS - 1
+    estimated_input_tokens = (
+        DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - target_available_output_tokens
+    )
+    prompt = _ascii_prompt_for_estimated_tokens(estimated_input_tokens)
 
     try:
         claude_dynamic_max_output_tokens(
             {
                 "claude": {
-                    "context_window_tokens": 1000,
-                    "context_window_buffer_tokens": 0,
-                    "max_output_tokens": 500,
+                    "context_window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
+                    "context_window_buffer_tokens": DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS,
+                    "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE["planner"],
                 }
             },
             "planner",
             prompt,
         )
     except ClaudeContextBudgetError as exc:
-        assert exc.available_output_tokens == 0
-        assert exc.estimated_input_tokens == 1000
+        assert exc.available_output_tokens == target_available_output_tokens
+        assert exc.estimated_input_tokens == estimated_input_tokens
     else:
         raise AssertionError("Expected ClaudeContextBudgetError")
 
 
 def test_claude_adapter_fails_preflight_without_invoking_runner_for_oversized_prompt(tmp_path: Path) -> None:
     runner = FakeRunner()
+    user_prompt = _ascii_prompt_for_estimated_tokens(DEFAULT_CONTEXT_WINDOW_TOKENS)
 
     result = ClaudeCodeAdapter(command=["claude", "-p"], runner=runner).run(
         _context(
             tmp_path,
             config={
                 "claude": {
-                    "context_window_tokens": 1000,
-                    "context_window_buffer_tokens": 0,
-                    "max_output_tokens": 500,
+                    "context_window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
+                    "context_window_buffer_tokens": DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS,
+                    "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE["planner"],
                 }
             },
+            user_prompt=user_prompt,
         )
     )
 
