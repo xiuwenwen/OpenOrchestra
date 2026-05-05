@@ -526,10 +526,20 @@ def _html() -> str:
     .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums; }
     .grid { display:grid; gap:12px; }
     .overview { grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); margin-bottom:14px; }
-    .roles { grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); margin:12px 0; }
-    .role-card { width:100%; text-align:left; display:block; cursor:pointer; }
+    .roles { margin:12px 0; }
+    .role-flow { display:flex; align-items:stretch; gap:0; overflow-x:auto; padding:2px 2px 10px; }
+    .role-card { width:220px; min-width:220px; text-align:left; display:grid; grid-template-rows:auto 1fr auto; gap:8px; cursor:pointer; position:relative; }
     .role-card:hover { border-color:var(--accent); background:var(--accent-soft); }
     .role-card.selected { border-color:var(--accent); box-shadow:inset 3px 0 0 var(--accent); background:var(--accent-soft); }
+    .role-topline { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .role-title { display:flex; align-items:center; gap:8px; min-width:0; }
+    .role-step { display:inline-grid; place-items:center; width:24px; height:24px; border-radius:999px; background:#eef2f6; color:var(--muted); font-size:12px; font-weight:800; flex:0 0 auto; font-variant-numeric:tabular-nums; }
+    .role-card.RUNNING .role-step { background:var(--warn-soft); color:var(--warn); }
+    .role-card.COMPLETED .role-step { background:var(--good-soft); color:var(--good); }
+    .role-card.FAILED .role-step,.role-card.OUTPUT_INVALID .role-step,.role-card.TIMEOUT .role-step { background:var(--bad-soft); color:var(--bad); }
+    .role-connector { display:flex; align-items:center; justify-content:center; width:44px; min-width:44px; color:var(--muted); position:relative; }
+    .role-connector::before { content:""; width:100%; height:2px; background:var(--line); }
+    .role-connector::after { content:""; position:absolute; right:4px; width:9px; height:9px; border-top:2px solid var(--line); border-right:2px solid var(--line); transform:rotate(45deg); background:var(--bg); }
     .role-browser { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px; margin:12px 0 18px; }
     .role-pane { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; }
     .round-tabs { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 10px; }
@@ -571,7 +581,15 @@ def _html() -> str:
     .empty { padding:16px; border:1px dashed var(--line); border-radius:8px; color:var(--muted); background:#fff; }
     .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
     @media (max-width: 1040px) { .overview,.split { grid-template-columns:1fr; } }
-    @media (max-width: 840px) { main { grid-template-columns:1fr; } aside { border-right:0; border-bottom:1px solid var(--line); max-height:36vh; } }
+    @media (max-width: 840px) {
+      main { grid-template-columns:1fr; }
+      aside { border-right:0; border-bottom:1px solid var(--line); max-height:36vh; }
+      .role-flow { flex-direction:column; overflow-x:visible; padding-right:0; }
+      .role-card { width:100%; min-width:0; }
+      .role-connector { width:100%; min-width:0; height:26px; }
+      .role-connector::before { width:2px; height:100%; }
+      .role-connector::after { right:auto; bottom:3px; transform:rotate(135deg); background:var(--bg); }
+    }
   </style>
 </head>
 <body>
@@ -598,7 +616,7 @@ def _html() -> str:
       <h2 data-i18n="workflowProgress">流程进度</h2>
       <div id="workflow" class="workflow"></div>
       <h2 data-i18n="roleStatus">角色状态</h2>
-      <div id="roles" class="grid roles"></div>
+      <div id="roles" class="roles role-flow"></div>
       <h2 data-i18n="roleDeliveries">角色思考与交付</h2>
       <div class="muted" data-i18n="roleDeliveryHint">选择一个或多个角色，再选择轮次查看该角色的 prompt、stdout、stderr 与交付 md/json。</div>
       <div id="roleBrowser" class="role-browser"></div>
@@ -682,6 +700,7 @@ const i18n = {
   }
 };
 const workflowOrder = ["PLANNING_DRAFT","PLANNING_PEER_REVIEW","PLANNING_REVISION","PLAN_REVIEW","PLAN_JUDGEMENT","EXECUTION","PATCH_MERGE","TESTING","TEST_JUDGEMENT","FIXING","REVIEWING","REVIEW_JUDGEMENT","REVIEW_FIXING","REGRESSION_TESTING","FINAL_JUDGEMENT","DELIVERY"];
+const roleFlowOrder = ["orchestrator","planner","executor","tester","reviewer","judge","communicator"];
 const dateFormat = new Intl.DateTimeFormat(navigator.language || "zh-CN", {hour:"2-digit", minute:"2-digit", second:"2-digit"});
 const numberFormat = new Intl.NumberFormat(navigator.language || "zh-CN");
 
@@ -845,7 +864,7 @@ function renderSnapshot(data) {
     <div class="card"><h3>${esc(t("taskWorkspace"))}</h3><div class="mono">${esc(data.task_workspace || "-")}</div></div>
     <div class="card"><h3>${esc(t("successPath"))}</h3><div class="mono">${data.success_path ? esc(data.success_path) : "-"}</div></div>`;
   renderWorkflow(data.phases || [], task.current_phase);
-  document.getElementById("roles").innerHTML = Object.values(data.roles || {}).map(r => roleCard(r, runs)).join("");
+  renderRoleFlow(data.roles || {}, runs);
   renderRoleBrowser(data);
   renderActiveAgents(running);
   renderRuns(data.agent_runs || []);
@@ -863,7 +882,23 @@ function renderWorkflow(phases, currentPhase) {
   }).join("") : `<div class="empty">任务启动后会显示阶段流程。</div>`;
 }
 
-function roleCard(role, runs) {
+function orderedRoles(roles) {
+  const byName = roles || {};
+  const ordered = roleFlowOrder.filter(role => byName[role]).map(role => byName[role]);
+  const extras = Object.values(byName).filter(role => !roleFlowOrder.includes(role.role));
+  return [...ordered, ...extras];
+}
+
+function renderRoleFlow(roles, runs) {
+  const items = orderedRoles(roles);
+  document.getElementById("roles").innerHTML = items.map((role, index) => {
+    const card = roleCard(role, runs, index + 1);
+    if (index >= items.length - 1) return card;
+    return `${card}<div class="role-connector" aria-hidden="true"></div>`;
+  }).join("");
+}
+
+function roleCard(role, runs, stepNumber) {
   const roleRuns = runs.filter(r => r.role === role.role);
   const latest = roleRuns[roleRuns.length - 1];
   const quick = latest ? [
@@ -873,8 +908,12 @@ function roleCard(role, runs) {
     ...preferredArtifacts(latest).map(a => artifactButton(a, true))
   ].join("") : "";
   const selected = selectedRoles.has(role.role);
-  return `<div role="button" tabindex="0" class="card role-card ${selected ? "selected" : ""}" data-toggle-role="${esc(role.role)}">
-    <div class="agent-head"><h3>${esc(roleLabel(role.role))}</h3>${statusPill(role.status)}</div>
+  const statusClass = esc(role.status || "PENDING");
+  return `<div role="button" tabindex="0" class="card role-card ${statusClass} ${selected ? "selected" : ""}" data-toggle-role="${esc(role.role)}" aria-label="${esc(roleLabel(role.role))}">
+    <div class="role-topline">
+      <div class="role-title"><span class="role-step">${numberFormat.format(stepNumber)}</span><h3>${esc(roleLabel(role.role))}</h3></div>
+      ${statusPill(role.status)}
+    </div>
     <div class="muted">${esc(labelPhase(role.phase || "-"))} · ${numberFormat.format(role.agent_count || 0)} agent · ${numberFormat.format(role.artifact_count || 0)} artifact</div>
     <div class="files">${quick || `<span class="muted">${uiLanguage === "en" ? "Waiting for this role." : "等待该角色产出。"}</span>`}</div>
   </div>`;
@@ -885,7 +924,7 @@ function toggleRole(role) {
   else selectedRoles.add(role);
   persistRoleSelection();
   if (latestData) {
-    document.getElementById("roles").innerHTML = Object.values(latestData.roles || {}).map(r => roleCard(r, latestData.agent_runs || [])).join("");
+    renderRoleFlow(latestData.roles || {}, latestData.agent_runs || []);
     renderRoleBrowser(latestData);
   }
 }

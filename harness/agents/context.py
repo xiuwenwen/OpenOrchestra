@@ -24,4 +24,4 @@ class AgentRunContext:
     required_outputs: list[str] = field(default_factory=list)
     timeout_seconds: int = 300
     config: dict[str, Any] = field(default_factory=dict)
-
+    metadata: dict[str, Any] = field(default_factory=dict)

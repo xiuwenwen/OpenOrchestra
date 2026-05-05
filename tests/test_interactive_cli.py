@@ -57,14 +57,16 @@ def _config(tmp_path: Path) -> dict:
         "heartbeat": {"interval_seconds": 60},
         "visualization": {"host": "127.0.0.1", "port": 8765},
         "claude": {
+            "context_window_tokens": 200000,
+            "context_window_buffer_tokens": 2048,
             "max_output_tokens": {
                 "classifier": 2048,
-                "misc": 168000,
-                "planner": 128000,
+                "misc": 64000,
+                "planner": 64000,
                 "executor": 64000,
                 "tester": 64000,
-                "reviewer": 128000,
-                "judge": 128000,
+                "reviewer": 64000,
+                "judge": 64000,
                 "communicator": 64000,
             }
         },
@@ -476,7 +478,7 @@ def test_ensure_user_env_defaults_adds_missing_config_values(tmp_path: Path) -> 
     assert values["HARNESS_COMMUNICATOR_COUNT"] == "1"
     assert values["HARNESS_WORKSPACE_ROOT"] == str(tmp_path / "workspaces")
     assert values["HARNESS_UI_PORT"] == "8765"
-    assert values["HARNESS_CLAUDE_MAX_TOKENS_MISC"] == "168000"
+    assert values["HARNESS_CLAUDE_MAX_TOKENS_MISC"] == "64000"
     assert values["HARNESS_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY"] == "true"
 
 

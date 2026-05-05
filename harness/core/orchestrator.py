@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
+import tempfile
 import threading
 import time
 import re
+import uuid
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
 from harness.adapters.base import AgentAdapter
-from harness.adapters.claude_code_adapter import ClaudeCodeAdapter
+from harness.adapters.claude_code_adapter import ClaudeCodeAdapter, REQUEST_SIZE_ERROR_PATTERNS
 from harness.adapters.codex_cli_adapter import CodexCLIAdapter
 from harness.adapters.mock_adapter import MockAgentAdapter
 from harness.agents.context import AgentRunContext
@@ -92,6 +95,13 @@ ROLE_INSTRUCTIONS = {
         "if the final delivery documentation is complete."
     ),
 }
+
+
+class NonRetryableAgentError(TaskFailedError):
+    """Agent failure that cannot be fixed by rerunning the same prompt."""
+
+
+MATERIALIZED_SUCCESS_MARKER = ".harness_materialized_success.json"
 
 
 class Orchestrator:
@@ -645,7 +655,11 @@ class Orchestrator:
                 attempt,
                 source_repo=self._source_repo_for_workspace(),
             )
+            self._prepare_materialized_workspace_repo(task_id, role, phase, workspace.repo_dir)
             input_artifacts = self._stage_input_artifacts(task_id, workspace.input_dir, role, phase, exclude_phase_id=phase_id)
+            task_for_metadata = self.repository.get_task(task_id) or {"task_id": task_id, "user_prompt": user_prompt}
+            metadata = self._context_metadata(task_for_metadata, role, phase)
+            metadata.update(self._repo_context_metadata(task_id, role, phase))
             context = AgentRunContext(
                 task_id=task_id,
                 phase_id=phase_id,
@@ -664,6 +678,7 @@ class Orchestrator:
                 required_outputs=required_outputs,
                 timeout_seconds=timeout_seconds,
                 config=self.config,
+                metadata=metadata,
             )
             context.log_dir.mkdir(parents=True, exist_ok=True)
             (context.log_dir / "prompt.md").write_text(self.prompt_builder.build(context), encoding="utf-8")
@@ -723,6 +738,10 @@ class Orchestrator:
                     return result
                 status = "OUTPUT_INVALID" if not ok else "FAILED"
                 message = "; ".join(errors) if errors else f"Agent exit_code={result.exit_code} status={result.status}"
+                terminal_failure = self._is_request_size_failure(result, context, message)
+                if terminal_failure:
+                    status = "FAILED"
+                    message = self._request_size_failure_message(context)
                 last_error_message = message
                 self.repository.update_agent_run_status(run_id, status, message)
                 elapsed_seconds = round(time.monotonic() - attempt_started_at, 3)
@@ -736,7 +755,7 @@ class Orchestrator:
                     event_data["diagnostics"] = str(diagnostics_path)
                 self._emit(
                     ProgressEvent(
-                        "agent_retryable_failure",
+                        "agent_failed" if terminal_failure else "agent_retryable_failure",
                         task_id=task_id,
                         phase=phase,
                         role=role,
@@ -748,11 +767,22 @@ class Orchestrator:
                         data=event_data,
                     )
                 )
+                if terminal_failure:
+                    raise NonRetryableAgentError(message)
                 last_result = result
+            except NonRetryableAgentError:
+                raise
             except Exception as exc:
                 last_error_message = str(exc)
                 failure_status = "TIMEOUT" if cancel_event and cancel_event.is_set() else "FAILED"
-                self.repository.update_agent_run_status(run_id, failure_status, str(exc))
+                terminal_failure = self._text_contains_request_size_error(str(exc)) or self._logs_contain_request_size_error(
+                    context.log_dir
+                )
+                status_message = str(exc)
+                if terminal_failure:
+                    last_error_message = self._request_size_failure_message(context)
+                    status_message = last_error_message
+                self.repository.update_agent_run_status(run_id, failure_status, status_message)
                 elapsed_seconds = round(time.monotonic() - attempt_started_at, 3)
                 diagnostics_path = context.log_dir / "request_diagnostics.md"
                 event_data = {"logs": str(context.log_dir), "elapsed_seconds": elapsed_seconds}
@@ -760,7 +790,7 @@ class Orchestrator:
                     event_data["diagnostics"] = str(diagnostics_path)
                 self._emit(
                     ProgressEvent(
-                        "agent_retryable_failure",
+                        "agent_failed" if terminal_failure else "agent_retryable_failure",
                         task_id=task_id,
                         phase=phase,
                         role=role,
@@ -768,10 +798,12 @@ class Orchestrator:
                         round_id=round_id,
                         attempt=attempt,
                         status=failure_status,
-                        message=str(exc),
+                        message=status_message,
                         data=event_data,
                     )
                 )
+                if terminal_failure:
+                    raise NonRetryableAgentError(last_error_message) from exc
                 last_result = AgentRunResult(task_id, phase_id, role, agent_id, "FAILED", exit_code=1)
             if attempt >= max_retry:
                 break
@@ -781,6 +813,34 @@ class Orchestrator:
                 f"Agent {agent_id} failed after {max_retry + 1} attempt(s): {details}"
             )
         raise TaskFailedError(f"Agent {agent_id} failed before producing a result")
+
+    def _is_request_size_failure(self, result: AgentRunResult, context: AgentRunContext, message: str) -> bool:
+        if self._text_contains_request_size_error(message):
+            return True
+        texts = []
+        for path in (result.stdout_path, result.stderr_path, context.log_dir / "request_diagnostics.md"):
+            if path and path.exists():
+                texts.append(path.read_text(encoding="utf-8", errors="replace"))
+        return self._text_contains_request_size_error("\n".join(texts))
+
+    def _logs_contain_request_size_error(self, log_dir: Path) -> bool:
+        texts = []
+        for name in ("stdout.log", "stderr.log", "request_diagnostics.md"):
+            path = log_dir / name
+            if path.exists():
+                texts.append(path.read_text(encoding="utf-8", errors="replace"))
+        return self._text_contains_request_size_error("\n".join(texts))
+
+    def _text_contains_request_size_error(self, text: str) -> bool:
+        return any(pattern in text for pattern in REQUEST_SIZE_ERROR_PATTERNS)
+
+    def _request_size_failure_message(self, context: AgentRunContext) -> str:
+        diagnostics_path = context.log_dir / "request_diagnostics.md"
+        return (
+            "Agent request exceeded the model context/request-size budget; not retrying the same prompt. "
+            f"Lower claude.max_output_tokens for role={context.role}, reduce staged artifact input, or use a larger model window. "
+            f"Diagnostics: {diagnostics_path}"
+        )
 
     def _run_adapter_with_heartbeat(self, adapter: AgentAdapter, context: AgentRunContext, attempt: int) -> AgentRunResult:
         interval = float(self.config.get("heartbeat", {}).get("interval_seconds", 60))
@@ -847,6 +907,273 @@ class Orchestrator:
             user_prompt,
             agent_count_override=1,
         )
+        self._run_patch_validation(task_id, round_id)
+
+    def _run_patch_validation(self, task_id: str, round_id: int) -> None:
+        merged_artifacts = self.repository.list_artifacts(task_id, "merged_patch.diff")
+        if not merged_artifacts:
+            return
+        latest = merged_artifacts[-1]
+        patch_path = Path(latest["path"])
+        if not patch_path.exists():
+            return
+        report = self._validate_patch_apply_check(patch_path)
+        status = self._patch_validation_status(report)
+        materialized_repo: Path | None = None
+        materialize_report = self._materialized_repo_report(
+            task_id=task_id,
+            round_id=round_id,
+            patch_path=patch_path,
+            status="skipped",
+            repo_path=None,
+            stdout="",
+            stderr=f"Patch validation status was {status}; materialization only runs when status is pass.",
+            exit_code=None,
+        )
+        if status == "pass":
+            materialized_repo, materialize_report = self._materialize_merged_patch_repo(task_id, round_id, patch_path)
+            if materialized_repo is None:
+                materialize_status = self._materialized_repo_status(materialize_report)
+                if materialize_status in {"failed", "skipped"}:
+                    status = "fail"
+        ref = self.artifact_manager.create_text_artifact(
+            task_id,
+            "patch_validation.md",
+            report,
+            phase_id=latest.get("phase_id"),
+            role="orchestrator",
+            agent_id="patch-validator",
+        )
+        materialized_ref = self.artifact_manager.create_text_artifact(
+            task_id,
+            "materialized_repo.md",
+            materialize_report,
+            phase_id=latest.get("phase_id"),
+            role="orchestrator",
+            agent_id="patch-materializer",
+        )
+        self._emit(
+            ProgressEvent(
+                "patch_validated",
+                task_id=task_id,
+                phase=PATCH_MERGE,
+                role="orchestrator",
+                agent_id="patch-validator",
+                round_id=round_id,
+                status=status.upper(),
+                message=f"Patch validation {status}",
+                data={
+                    "artifacts": 2,
+                    "patch_validation": str(ref.path),
+                    "materialized_repo_report": str(materialized_ref.path),
+                    "materialized_repo": str(materialized_repo) if materialized_repo else "-",
+                },
+            )
+        )
+
+    def _validate_patch_apply_check(self, patch_path: Path) -> str:
+        source_repo = self._configured_source_repo()
+        if not shutil.which("git"):
+            return self._patch_validation_report(
+                patch_path=patch_path,
+                source_repo=source_repo,
+                status="skipped",
+                exit_code=None,
+                stdout="",
+                stderr="git executable was not found on PATH.",
+            )
+        with tempfile.TemporaryDirectory(prefix="harness-patch-check-") as tmp:
+            check_dir = Path(tmp) / "repo"
+            if source_repo:
+                self._copy_source_for_patch_validation(source_repo, check_dir)
+            else:
+                check_dir.mkdir(parents=True, exist_ok=True)
+            command = ["git", "apply", "--check", "--whitespace=nowarn", str(patch_path)]
+            completed = subprocess.run(
+                command,
+                cwd=check_dir,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            status = "pass" if completed.returncode == 0 else "fail"
+            return self._patch_validation_report(
+                patch_path=patch_path,
+                source_repo=source_repo,
+                status=status,
+                exit_code=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
+
+    def _copy_source_for_patch_validation(self, source_repo: Path, destination: Path) -> None:
+        shutil.copytree(
+            source_repo,
+            destination,
+            ignore=lambda directory, names: {
+                name
+                for name in names
+                if name in WorkspaceManager.DEFAULT_COPY_IGNORE_NAMES
+                or self._is_relative_to((Path(directory) / name).resolve(), self.workspace_manager.workspace_root)
+            },
+        )
+
+    def _patch_validation_report(
+        self,
+        *,
+        patch_path: Path,
+        source_repo: Path | None,
+        status: str,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+    ) -> str:
+        return "\n".join(
+            [
+                "# Patch Validation",
+                "",
+                f"status: {status}",
+                f"patch: {patch_path}",
+                f"source_repo: {source_repo or 'none'}",
+                "command: git apply --check --whitespace=nowarn <merged_patch.diff>",
+                f"exit_code: {exit_code if exit_code is not None else 'n/a'}",
+                "",
+                "## stdout",
+                "",
+                "```text",
+                stdout.strip(),
+                "```",
+                "",
+                "## stderr",
+                "",
+                "```text",
+                stderr.strip(),
+                "```",
+                "",
+            ]
+        )
+
+    def _patch_validation_status(self, report: str) -> str:
+        for line in report.splitlines():
+            if line.startswith("status: "):
+                return line.split(":", 1)[1].strip().lower()
+        return "unknown"
+
+    def _materialized_repo_status(self, report: str) -> str:
+        for line in report.splitlines():
+            if line.startswith("status: "):
+                return line.split(":", 1)[1].strip().lower()
+        return "unknown"
+
+    def _materialize_merged_patch_repo(
+        self,
+        task_id: str,
+        round_id: int,
+        patch_path: Path,
+    ) -> tuple[Path | None, str]:
+        if not shutil.which("git"):
+            return None, self._materialized_repo_report(
+                task_id=task_id,
+                round_id=round_id,
+                patch_path=patch_path,
+                status="skipped",
+                repo_path=None,
+                stdout="",
+                stderr="git executable was not found on PATH.",
+                exit_code=None,
+            )
+        repo_dir = self._materialized_repo_dir(task_id, round_id)
+        tmp_repo_dir = repo_dir.parent / f".repo_tmp_{uuid.uuid4().hex}"
+        repo_dir.parent.mkdir(parents=True, exist_ok=True)
+        if repo_dir.exists():
+            shutil.rmtree(repo_dir)
+        source_repo = self._configured_source_repo()
+        if source_repo:
+            self._copy_source_for_patch_validation(source_repo, tmp_repo_dir)
+        else:
+            tmp_repo_dir.mkdir(parents=True, exist_ok=True)
+        completed = subprocess.run(
+            ["git", "apply", "--whitespace=nowarn", str(patch_path)],
+            cwd=tmp_repo_dir,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            if tmp_repo_dir.exists():
+                shutil.rmtree(tmp_repo_dir)
+            return None, self._materialized_repo_report(
+                task_id=task_id,
+                round_id=round_id,
+                patch_path=patch_path,
+                status="failed",
+                repo_path=None,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                exit_code=completed.returncode,
+            )
+        self._write_materialized_success_marker(tmp_repo_dir, task_id, round_id, patch_path)
+        tmp_repo_dir.rename(repo_dir)
+        return repo_dir, self._materialized_repo_report(
+            task_id=task_id,
+            round_id=round_id,
+            patch_path=patch_path,
+            status="success",
+            repo_path=repo_dir,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            exit_code=completed.returncode,
+        )
+
+    def _write_materialized_success_marker(self, repo_dir: Path, task_id: str, round_id: int, patch_path: Path) -> None:
+        marker = {
+            "status": "success",
+            "task_id": task_id,
+            "round_id": round_id,
+            "patch_path": str(patch_path),
+            "patch_hash": sha256_file(patch_path) if patch_path.exists() else None,
+        }
+        (repo_dir / MATERIALIZED_SUCCESS_MARKER).write_text(json.dumps(marker, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def _materialized_repo_report(
+        self,
+        *,
+        task_id: str,
+        round_id: int,
+        patch_path: Path,
+        status: str,
+        repo_path: Path | None,
+        stdout: str,
+        stderr: str,
+        exit_code: int | None,
+    ) -> str:
+        return "\n".join(
+            [
+                "# Materialized Repository",
+                "",
+                f"status: {status}",
+                f"task_id: {task_id}",
+                f"round_id: {round_id}",
+                f"repo_path: {repo_path or 'none'}",
+                f"patch: {patch_path}",
+                f"source_repo: {self._configured_source_repo() or 'none'}",
+                "command: git apply --whitespace=nowarn <merged_patch.diff>",
+                f"exit_code: {exit_code if exit_code is not None else 'n/a'}",
+                "",
+                "## stdout",
+                "",
+                "```text",
+                stdout.strip(),
+                "```",
+                "",
+                "## stderr",
+                "",
+                "```text",
+                stderr.strip(),
+                "```",
+                "",
+            ]
+        )
 
     def _backend_for(self, role: str) -> str:
         return self.config["agent_backend"].get(role) or self.config["agent_backend"].get("default", "mock")
@@ -869,6 +1196,113 @@ class Orchestrator:
         path = Path(str(source_repo)).expanduser().resolve()
         return path if path.exists() and path.is_dir() else None
 
+    def _should_use_materialized_repo(self, role: str, phase: str) -> bool:
+        if role == "executor":
+            return phase in {FIXING, REVIEW_FIXING}
+        if role == "tester":
+            return phase in {TESTING, REGRESSION_TESTING}
+        if role == "reviewer":
+            return phase != PLAN_REVIEW
+        if role == "judge":
+            return phase != PLAN_JUDGEMENT
+        if role == "communicator":
+            return True
+        return False
+
+    def _prepare_materialized_workspace_repo(self, task_id: str, role: str, phase: str, repo_dir: Path) -> None:
+        if not self._should_use_materialized_repo(role, phase):
+            return
+        materialized_repo = self._latest_materialized_repo(task_id)
+        if not materialized_repo:
+            return
+        if repo_dir.exists():
+            shutil.rmtree(repo_dir)
+        shutil.copytree(materialized_repo, repo_dir, ignore=self._copy_ignore_for_materialized_workspace)
+
+    def _copy_ignore_for_materialized_workspace(self, directory: str, names: list[str]) -> set[str]:
+        return {
+            name
+            for name in names
+            if name in {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", MATERIALIZED_SUCCESS_MARKER}
+        }
+
+    def _repo_context_metadata(self, task_id: str, role: str, phase: str) -> dict[str, Any]:
+        if self._should_use_materialized_repo(role, phase):
+            materialized_repo = self._latest_materialized_repo(task_id)
+            if materialized_repo:
+                return {
+                    "repository_source_type": "materialized_merged_patch",
+                    "repository_source_path": str(materialized_repo),
+                    "repository_source_note": "This role's repository directory was copied from the latest Harness materialized merged patch.",
+                }
+        source_repo = self._source_repo_for_workspace()
+        if source_repo:
+            return {
+                "repository_source_type": "configured_source_repo",
+                "repository_source_path": str(source_repo),
+            }
+        return {"repository_source_type": "empty_workspace_repo"}
+
+    def _materialized_root(self, task_id: str) -> Path:
+        return self.workspace_manager.workspace_root / task_id / "_materialized"
+
+    def _materialized_repo_dir(self, task_id: str, round_id: int) -> Path:
+        return self._materialized_root(task_id) / f"round_{round_id}" / "repo"
+
+    def _latest_materialized_repo(self, task_id: str) -> Path | None:
+        latest_success_round = self._latest_successful_materialized_round_from_artifacts(task_id)
+        if latest_success_round is None:
+            return None
+        root = self._materialized_root(task_id)
+        if not root.exists():
+            return None
+        candidate = self._materialized_repo_dir(task_id, latest_success_round)
+        if not self._materialized_success_marker_ok(candidate, task_id, latest_success_round):
+            return None
+        return candidate
+
+    def _materialized_round_number(self, path: Path) -> int:
+        try:
+            return int(path.name.removeprefix("round_"))
+        except ValueError:
+            return -1
+
+    def _latest_successful_materialized_round_from_artifacts(self, task_id: str) -> int | None:
+        artifacts = self.repository.list_artifacts(task_id, "materialized_repo.md")
+        for artifact in reversed(artifacts):
+            path = Path(artifact["path"])
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if self._materialized_repo_status(text) != "success":
+                return None
+            round_id = self._extract_materialized_report_round(text)
+            return round_id
+        return None
+
+    def _extract_materialized_report_round(self, report: str) -> int | None:
+        for line in report.splitlines():
+            if line.startswith("round_id: "):
+                try:
+                    return int(line.split(":", 1)[1].strip())
+                except ValueError:
+                    return None
+        return None
+
+    def _materialized_success_marker_ok(self, repo_dir: Path, task_id: str, round_id: int) -> bool:
+        marker_path = repo_dir / MATERIALIZED_SUCCESS_MARKER
+        if not repo_dir.is_dir() or not marker_path.is_file():
+            return False
+        try:
+            payload = json.loads(marker_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return False
+        return (
+            payload.get("status") == "success"
+            and payload.get("task_id") == task_id
+            and int(payload.get("round_id", -1)) == round_id
+        )
+
     def _single_active_task_id(self, user_prompt: str | None) -> str:
         if self._active_task_id:
             return self._active_task_id
@@ -889,6 +1323,19 @@ class Orchestrator:
     def _emit(self, event: ProgressEvent) -> None:
         if self.progress_callback:
             self.progress_callback(event)
+
+    def _context_metadata(self, task: dict[str, Any], role: str, phase: str) -> dict[str, Any]:
+        if role != "communicator" or phase != DELIVERY:
+            return {}
+        task_id = str(task["task_id"])
+        expected_success_path = self._delivery_project_dir(task_id, str(task["user_prompt"]))
+        return {
+            "expected_success_path": str(expected_success_path),
+            "expected_final_delivery": str(expected_success_path / "final_delivery.md"),
+            "expected_usage_guide": str(expected_success_path / "usage_guide.md"),
+            "expected_artifacts_manifest": str(expected_success_path / "artifacts_manifest.md"),
+            "publish_timing": "Harness will publish these files after the communicator role succeeds.",
+        }
 
     def _workflow_prompt(self, user_prompt: str, workflow_type: str) -> str:
         if workflow_type == BUGFIX:
@@ -1110,6 +1557,8 @@ class Orchestrator:
                     "implementation_plan.md",
                     "changed_files.md",
                     "merged_patch.diff",
+                    "patch_validation.md",
+                    "materialized_repo.md",
                     "self_check.md",
                     "merge_report.md",
                     "build_report.md",
@@ -1123,6 +1572,8 @@ class Orchestrator:
                     "implementation_plan.md",
                     "changed_files.md",
                     "merged_patch.diff",
+                    "patch_validation.md",
+                    "materialized_repo.md",
                     "self_check.md",
                     "merge_report.md",
                     "build_report.md",
@@ -1138,6 +1589,8 @@ class Orchestrator:
                 "implementation_plan.md",
                 "changed_files.md",
                 "merged_patch.diff",
+                "patch_validation.md",
+                "materialized_repo.md",
                 "fix_schedule.md",
                 "fix_notes.md",
                 "self_check.md",
@@ -1158,6 +1611,8 @@ class Orchestrator:
                 "implementation_plan.md",
                 "changed_files.md",
                 "merged_patch.diff",
+                "patch_validation.md",
+                "materialized_repo.md",
                 "fix_schedule.md",
                 "fix_notes.md",
                 "self_check.md",
@@ -1213,7 +1668,7 @@ class Orchestrator:
         if usage_guide and usage_guide.exists():
             shutil.copy2(usage_guide, project_dir / "usage_guide.md")
         copied_artifacts = self._publish_supporting_artifacts(task_id, project_dir)
-        source_files = self._publish_materialized_source(project_dir)
+        source_files = self._publish_materialized_source(task_id, project_dir)
         success_path = self._write_success_path(task_id, project_dir, destination, usage_guide)
         manifest = project_dir / "artifacts_manifest.md"
         lines = [
@@ -1312,6 +1767,8 @@ class Orchestrator:
     def _publish_supporting_artifacts(self, task_id: str, project_dir: Path) -> list[tuple[str, Path]]:
         artifact_types = [
             "merged_patch.diff",
+            "patch_validation.md",
+            "materialized_repo.md",
             "merge_report.md",
             "patch.diff",
             "fix_patch.diff",
@@ -1348,11 +1805,15 @@ class Orchestrator:
                 shutil.copy2(source, patch_dir / "final.patch")
         return copied
 
-    def _publish_materialized_source(self, project_dir: Path) -> list[Path]:
+    def _publish_materialized_source(self, task_id: str, project_dir: Path) -> list[Path]:
         patch_path = project_dir / "patches" / "final.patch"
         source_dir = project_dir / "source"
         if source_dir.exists():
             shutil.rmtree(source_dir)
+        materialized_repo = self._latest_materialized_repo(task_id)
+        if materialized_repo:
+            shutil.copytree(materialized_repo, source_dir, ignore=self._copy_ignore_for_publish)
+            return sorted(path for path in source_dir.rglob("*") if path.is_file())
         if not patch_path.exists():
             return []
         files = self._materialized_files_from_unified_diff(
@@ -1371,6 +1832,13 @@ class Orchestrator:
             destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
             written.append(destination)
         return written
+
+    def _copy_ignore_for_publish(self, directory: str, names: list[str]) -> set[str]:
+        return {
+            name
+            for name in names
+            if name in {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", MATERIALIZED_SUCCESS_MARKER}
+        }
 
     def _new_files_from_unified_diff(self, patch_text: str) -> dict[Path, list[str]]:
         return self._materialized_files_from_unified_diff(patch_text, source_repo=None, include_modified=False)
@@ -1490,6 +1958,13 @@ class Orchestrator:
 
     def _is_safe_relative_path(self, path: Path) -> bool:
         return not path.is_absolute() and ".." not in path.parts
+
+    def _is_relative_to(self, path: Path, parent: Path) -> bool:
+        try:
+            path.relative_to(parent)
+            return True
+        except ValueError:
+            return False
 
     def _slugify_project_name(self, prompt: str) -> str:
         ascii_prompt = prompt.encode("ascii", "ignore").decode("ascii").lower()

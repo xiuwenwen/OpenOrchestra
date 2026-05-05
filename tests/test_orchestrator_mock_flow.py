@@ -527,6 +527,65 @@ def test_materialized_source_applies_modified_file_patch(tmp_path: Path) -> None
     assert files[Path("app.py")] == ["one", "TWO", "three"]
 
 
+def test_failed_materialization_does_not_leave_usable_repo(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("bad patch")
+    patch = tmp_path / "bad.patch"
+    patch.write_text(
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1 +1 @@\n"
+        "-missing\n"
+        "+present\n",
+        encoding="utf-8",
+    )
+
+    repo, report = orchestrator._materialize_merged_patch_repo(task_id, 0, patch)
+
+    assert repo is None
+    assert "status: failed" in report
+    assert not orchestrator._materialized_repo_dir(task_id, 0).exists()
+    assert orchestrator._latest_materialized_repo(task_id) is None
+
+
+def test_latest_materialized_repo_requires_latest_success_artifact_and_marker(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("materialized freshness")
+    success_repo = orchestrator._materialized_repo_dir(task_id, 0)
+    success_repo.mkdir(parents=True)
+    patch = tmp_path / "ok.patch"
+    patch.write_text("diff --git a/a.txt b/a.txt\n", encoding="utf-8")
+    orchestrator._write_materialized_success_marker(success_repo, task_id, 0, patch)
+    success_report = tmp_path / "materialized-success.md"
+    success_report.write_text(
+        "\n".join(["# Materialized Repository", "", "status: success", f"task_id: {task_id}", "round_id: 0", f"repo_path: {success_repo}", ""]),
+        encoding="utf-8",
+    )
+    failure_report = tmp_path / "materialized-failure.md"
+    failure_report.write_text(
+        "\n".join(["# Materialized Repository", "", "status: failed", f"task_id: {task_id}", "round_id: 1", "repo_path: none", ""]),
+        encoding="utf-8",
+    )
+    phase_id = orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 0, status="COMPLETED")
+    for index, path in enumerate((success_report, failure_report), start=1):
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=f"materialized-{index}",
+                task_id=task_id,
+                phase_id=phase_id,
+                role="orchestrator",
+                agent_id="patch-materializer",
+                artifact_type="materialized_repo.md",
+                path=path,
+                version=index,
+                hash="hash",
+            )
+        )
+
+    assert orchestrator._latest_materialized_repo(task_id) is None
+
+
 def test_missing_delivery_md_is_output_invalid_not_file_error(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     config["roles"]["executor"]["count"] = 1
@@ -574,6 +633,57 @@ def test_missing_delivery_md_is_output_invalid_not_file_error(monkeypatch, tmp_p
     runs = orchestrator.repository.list_agent_runs(task_id)
     assert runs[-1]["status"] == "OUTPUT_INVALID"
     assert runs[-1]["error_message"] == "Missing required output: delivery.md"
+
+
+def test_context_window_failure_is_not_retried(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["roles"]["executor"]["count"] = 1
+    config["limits"]["max_agent_retry"] = 2
+    events: list[ProgressEvent] = []
+    orchestrator = Orchestrator(config, progress_callback=events.append)
+    task_id = orchestrator.create_task("large context")
+
+    class ContextWindowAdapter:
+        def run(self, context):
+            context.log_dir.mkdir(parents=True, exist_ok=True)
+            stdout = context.log_dir / "stdout.log"
+            stderr = context.log_dir / "stderr.log"
+            stdout.write_text("", encoding="utf-8")
+            stderr.write_text(
+                "ContextWindowExceededError: This model's maximum context length is 200000 tokens.",
+                encoding="utf-8",
+            )
+            return AgentRunResult(
+                task_id=context.task_id,
+                phase_id=context.phase_id,
+                role=context.role,
+                agent_id=context.agent_id,
+                status="FAILED",
+                exit_code=1,
+                stdout_path=stdout,
+                stderr_path=stderr,
+            )
+
+    monkeypatch.setattr(orchestrator, "_adapter_for_backend", lambda backend: ContextWindowAdapter())
+
+    try:
+        orchestrator.run_role_phase(
+            "executor",
+            PATCH_MERGE,
+            0,
+            required_outputs_for("executor", PATCH_MERGE),
+            "large context",
+        )
+    except Exception as exc:
+        assert "exceeded the model context/request-size budget" in str(exc)
+    else:
+        raise AssertionError("Expected context-window failure")
+
+    runs = orchestrator.repository.list_agent_runs(task_id)
+    assert len(runs) == 1
+    assert runs[0]["status"] == "FAILED"
+    assert any(event.event_type == "agent_failed" for event in events)
+    assert not any(event.event_type == "agent_retryable_failure" for event in events)
 
 
 def test_current_phase_artifacts_are_excluded_from_agent_inputs(tmp_path: Path) -> None:
@@ -755,12 +865,21 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     assert (final_delivery.parent / "usage_guide.md").exists()
     assert (final_delivery.parent / "patches" / "final.patch").exists()
     assert (final_delivery.parent / "artifacts" / "merged_patch.diff").exists()
+    assert (final_delivery.parent / "artifacts" / "patch_validation.md").exists()
+    assert (final_delivery.parent / "artifacts" / "materialized_repo.md").exists()
     assert (final_delivery.parent / "artifacts" / "merge_report.md").exists()
     assert (final_delivery.parent / "artifacts" / "patch.diff").exists()
     assert (final_delivery.parent / "source" / "mock.txt").read_text(encoding="utf-8") == "mock change\n"
     merged_artifacts = orchestrator.repository.list_artifacts(task_id, "merged_patch.diff")
+    validation_artifacts = orchestrator.repository.list_artifacts(task_id, "patch_validation.md")
+    materialized_artifacts = orchestrator.repository.list_artifacts(task_id, "materialized_repo.md")
     success_path_artifacts = orchestrator.repository.list_artifacts(task_id, "success_path.md")
     assert merged_artifacts
+    assert validation_artifacts
+    assert "status: pass" in Path(validation_artifacts[-1]["path"]).read_text(encoding="utf-8")
+    assert materialized_artifacts
+    materialized_report = Path(materialized_artifacts[-1]["path"]).read_text(encoding="utf-8")
+    assert "status: success" in materialized_report
     assert success_path_artifacts
     assert Path(success_path_artifacts[-1]["path"]) == final_delivery.parent / "success_path.md"
     assert (final_delivery.parent / "patches" / "final.patch").read_text(encoding="utf-8") == Path(
@@ -771,7 +890,28 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     assert f"success_path: {final_delivery.parent}" in manifest
     assert f"success_path: {final_delivery.parent}" in success_path
     assert "patches/final.patch" in manifest
+    assert "patch_validation.md" in manifest
+    assert "materialized_repo.md" in manifest
     assert "source/mock.txt" in manifest
+    tester_run = next(
+        run
+        for run in orchestrator.repository.list_agent_runs(task_id)
+        if run["role"] == "tester" and run["status"] == "COMPLETED"
+    )
+    tester_phase = next(
+        phase for phase in orchestrator.repository.list_phases(task_id) if phase["phase_id"] == tester_run["phase_id"]
+    )
+    tester_repo = (
+        Path(config["system"]["workspace_root"])
+        / task_id
+        / tester_run["phase_id"]
+        / "tester"
+        / tester_run["agent_id"]
+        / f"round_{tester_phase['round_id']}"
+        / f"attempt_{tester_run['retry_count']}"
+        / "repo"
+    )
+    assert (tester_repo / "mock.txt").read_text(encoding="utf-8") == "mock change\n"
 
 
 def test_delivery_project_name_uses_ascii_safe_slug(tmp_path: Path) -> None:

@@ -105,6 +105,10 @@ def test_prompt_builder_uses_balanced_planner_when_count_is_one(tmp_path: Path) 
     assert "Specialization: Balanced Planner." in prompt
     assert "Balanced planning, covering MVP feasibility" in prompt
     assert "Define clear validation criteria for Tester." in prompt
+    assert "`todo_breakdown.md` must use this exact repeated task schema" in prompt
+    assert "`files: <target paths or path globs>`" in prompt
+    assert "`acceptance_criteria:` with concrete observable outcomes" in prompt
+    assert "`test_commands:` with exact commands or `not_applicable: <reason>`" in prompt
 
 
 def test_prompt_builder_specializes_two_planners(tmp_path: Path) -> None:
@@ -162,3 +166,35 @@ def test_prompt_builder_has_plan_review_selection_contract(tmp_path: Path) -> No
 
     assert "planning review phase" in prompt
     assert "select the best planner proposal by `agent_id`" in prompt
+
+
+def test_prompt_builder_injects_communicator_publish_metadata(tmp_path: Path) -> None:
+    context = AgentRunContext(
+        task_id="task-1",
+        phase_id="phase-1",
+        phase="DELIVERY",
+        role="communicator",
+        agent_id="communicator-1",
+        round_id=0,
+        user_prompt="Build a small weather application.",
+        role_instruction="Create final delivery artifacts.",
+        workspace_dir=tmp_path / "workspace",
+        repo_dir=tmp_path / "workspace" / "repo",
+        input_dir=tmp_path / "workspace" / "input",
+        output_dir=tmp_path / "workspace" / "output",
+        log_dir=tmp_path / "workspace" / "logs",
+        input_artifacts=[],
+        required_outputs=["final_delivery.md", "usage_guide.md", "delivery.md"],
+        timeout_seconds=30,
+        config={},
+        metadata={
+            "expected_success_path": str(tmp_path / "deliver" / "weather-task"),
+            "publish_timing": "Harness will publish these files after the communicator role succeeds.",
+        },
+    )
+
+    prompt = PromptBuilder().build(context)
+
+    assert "## Harness Metadata" in prompt
+    assert f"- expected_success_path: {tmp_path / 'deliver' / 'weather-task'}" in prompt
+    assert "The expected success path is precomputed before publishing" in prompt

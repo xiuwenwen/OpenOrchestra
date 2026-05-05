@@ -125,6 +125,8 @@ ENV_CONFIG_SPECS: dict[str, tuple[tuple[str, ...], type]] = {
     "HARNESS_CLAUDE_MAX_TOKENS_REVIEWER": (("claude", "max_output_tokens", "reviewer"), int),
     "HARNESS_CLAUDE_MAX_TOKENS_JUDGE": (("claude", "max_output_tokens", "judge"), int),
     "HARNESS_CLAUDE_MAX_TOKENS_COMMUNICATOR": (("claude", "max_output_tokens", "communicator"), int),
+    "HARNESS_CLAUDE_CONTEXT_WINDOW_TOKENS": (("claude", "context_window_tokens"), int),
+    "HARNESS_CLAUDE_CONTEXT_WINDOW_BUFFER_TOKENS": (("claude", "context_window_buffer_tokens"), int),
     "HARNESS_ARTIFACT_INPUT_MAX_FILES": (("artifact_input", "max_files"), int),
     "HARNESS_ARTIFACT_INPUT_MAX_FILE_BYTES": (("artifact_input", "max_file_bytes"), int),
     "HARNESS_ARTIFACT_INPUT_MAX_TOTAL_BYTES": (("artifact_input", "max_total_bytes"), int),
@@ -351,7 +353,7 @@ class DashboardProgressReporter(ConsoleProgressReporter):
                 row.artifacts = int(event.data["artifacts"])
         if "delivery_status" in event.data:
             row.delivery_status = str(event.data["delivery_status"])
-        if "elapsed_seconds" in event.data and event.event_type in {"agent_completed", "agent_retryable_failure", "phase_completed", "phase_failed", "agent_heartbeat"}:
+        if "elapsed_seconds" in event.data and event.event_type in {"agent_completed", "agent_retryable_failure", "agent_failed", "phase_completed", "phase_failed", "agent_heartbeat"}:
             row.elapsed_seconds = float(event.data["elapsed_seconds"])
         row.message = event.message or row.message
 

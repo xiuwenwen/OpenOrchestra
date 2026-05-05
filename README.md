@@ -188,9 +188,10 @@ cat ~/.myharness.env
 `config/config.yaml` remains the project default template. You normally do not
 need to edit it.
 
-Set any role timeout to `0` to disable timeout enforcement for that role. The
-default config uses `0` for all roles, so Claude/Codex can keep working until it
-exits; heartbeat events still show that the role is alive.
+Set any role timeout to `0` to disable timeout enforcement for that role. Use a
+positive timeout in day-to-day Claude/Codex runs so provider or gateway hangs do
+not leave Harness waiting forever; heartbeat events show that the role is still
+alive while the process runs.
 
 Example `~/.myharness.env` keys:
 
@@ -207,12 +208,14 @@ HARNESS_TESTER_COUNT=1
 HARNESS_REVIEWER_COUNT=1
 HARNESS_JUDGE_COUNT=1
 HARNESS_COMMUNICATOR_COUNT=1
-HARNESS_TIMEOUT_PLANNER=0
-HARNESS_TIMEOUT_EXECUTOR=0
+HARNESS_TIMEOUT_PLANNER=1800
+HARNESS_TIMEOUT_EXECUTOR=3600
 HARNESS_UI_HOST=127.0.0.1
 HARNESS_UI_PORT=8765
 HARNESS_PLANNING_PEER_REVIEW_LOOPS=3
-HARNESS_CLAUDE_MAX_TOKENS_PLANNER=128000
+HARNESS_CLAUDE_CONTEXT_WINDOW_TOKENS=200000
+HARNESS_CLAUDE_CONTEXT_WINDOW_BUFFER_TOKENS=2048
+HARNESS_CLAUDE_MAX_TOKENS_PLANNER=64000
 HARNESS_CLAUDE_MAX_TOKENS_EXECUTOR=64000
 ```
 
@@ -281,21 +284,28 @@ also does not force Claude `--permission-mode`; set `claude.permission_mode` in
 config only if you explicitly want to pass one.
 
 Harness overrides Claude Code's output-token reservation for role execution via
-`claude.max_output_tokens`. This prevents a large global Claude setting such as
-`CLAUDE_CODE_MAX_OUTPUT_TOKENS=200000` from reserving most of a 200k context
-window and causing `input_tokens + max_tokens` overflow. The config may be a
-single integer or a per-role mapping:
+`claude.max_output_tokens`. This controls the output reservation only; it does
+not shrink the input prompt or model-side conversation. For a 200k context
+window, `input_tokens + max_output_tokens` must still fit. Harness also uses
+`claude.context_window_tokens` to lower the per-request output reservation when
+the estimated prompt size would exceed the configured context window. The local
+estimate is conservative but not identical to provider tokenization, so request
+diagnostics still handle provider-side context errors.
+
+The config may be a single integer or a per-role mapping:
 
 ```yaml
 claude:
+  context_window_tokens: 200000
+  context_window_buffer_tokens: 2048
   max_output_tokens:
     classifier: 2048
-    misc: 168000
-    planner: 128000
+    misc: 64000
+    planner: 64000
     executor: 64000
     tester: 64000
-    reviewer: 128000
-    judge: 128000
+    reviewer: 64000
+    judge: 64000
     communicator: 64000
 ```
 

@@ -36,12 +36,12 @@ limits:
   max_agent_retry: 2
 
 timeouts:
-  planner: 0
-  executor: 0
-  tester: 0
-  reviewer: 0
-  judge: 0
-  communicator: 0
+  planner: 1800
+  executor: 3600
+  tester: 1800
+  reviewer: 1800
+  judge: 1200
+  communicator: 1200
 
 heartbeat:
   interval_seconds: 60
@@ -51,14 +51,16 @@ visualization:
   port: 8765
 
 claude:
+  context_window_tokens: 200000
+  context_window_buffer_tokens: 2048
   max_output_tokens:
     classifier: 2048
-    misc: 168000
-    planner: 128000
+    misc: 64000
+    planner: 64000
     executor: 64000
     tester: 64000
-    reviewer: 128000
-    judge: 128000
+    reviewer: 64000
+    judge: 64000
     communicator: 64000
 
 artifact_input:

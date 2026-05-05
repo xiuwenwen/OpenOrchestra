@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.adapters.base import AgentAdapter
-from harness.adapters.claude_config import claude_env_for_role
+from harness.adapters.claude_config import ClaudeContextBudgetError, claude_env_for_role
 from harness.adapters.subprocess_runner import SubprocessRunner
 from harness.agents.context import AgentRunContext
 from harness.agents.result import AgentRunResult
@@ -14,6 +14,10 @@ from harness.prompts.builder import PromptBuilder
 
 
 REQUEST_SIZE_ERROR_PATTERNS = (
+    "ContextWindowExceededError",
+    "maximum context length",
+    "parameter=input_tokens",
+    "Please reduce the length of the input prompt",
     "Request too large",
     "request_too_large",
     "budget_exceeds_model_limit",
@@ -38,7 +42,24 @@ class ClaudeCodeAdapter(AgentAdapter):
         command = self.command + self._extra_args(context)
         redacted_command = list(command)
         (context.log_dir / "command.txt").write_text(" ".join(redacted_command), encoding="utf-8")
-        env_overrides = self._env(context)
+        try:
+            env_overrides = self._env(context, prompt)
+        except ClaudeContextBudgetError as exc:
+            stdout_path.write_text("", encoding="utf-8")
+            stderr_path.write_text(f"{exc}\n", encoding="utf-8")
+            diagnostics_path = self._write_context_budget_diagnostics(context, prompt, exc)
+            with stderr_path.open("a", encoding="utf-8") as stderr:
+                stderr.write(f"\nHarness request diagnostics: {diagnostics_path}\n")
+            return AgentRunResult(
+                task_id=context.task_id,
+                phase_id=context.phase_id,
+                role=context.role,
+                agent_id=context.agent_id,
+                status="FAILED",
+                exit_code=1,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
         (context.log_dir / "env_overrides.txt").write_text(
             "\n".join(f"{key}={value}" for key, value in sorted(env_overrides.items())) + "\n",
             encoding="utf-8",
@@ -90,8 +111,45 @@ class ClaudeCodeAdapter(AgentAdapter):
         )
         return args
 
-    def _env(self, context: AgentRunContext) -> dict[str, str]:
-        return claude_env_for_role(context.config, context.role)
+    def _env(self, context: AgentRunContext, prompt: str) -> dict[str, str]:
+        return claude_env_for_role(context.config, context.role, prompt)
+
+    def _write_context_budget_diagnostics(
+        self,
+        context: AgentRunContext,
+        prompt: str,
+        exc: ClaudeContextBudgetError,
+    ) -> Path:
+        diagnostics_path = context.log_dir / "request_diagnostics.md"
+        lines = [
+            "# Request Diagnostics",
+            "",
+            "## Run",
+            f"- task_id: `{context.task_id}`",
+            f"- phase: `{context.phase}`",
+            f"- role: `{context.role}`",
+            f"- agent_id: `{context.agent_id}`",
+            "- exit_code: `not invoked`",
+            f"- prompt_bytes: `{self._byte_len(prompt)}`",
+            "",
+            "## Error Signals",
+            "- request_size_error_detected: `true`",
+            "- preflight_context_budget_error: `true`",
+            "- missing_required_outputs: `not checked`",
+            "",
+            "## Context Budget",
+            f"- context_window_tokens: `{exc.context_window}`",
+            f"- context_window_buffer_tokens: `{exc.buffer_tokens}`",
+            f"- estimated_input_tokens: `{exc.estimated_input_tokens}`",
+            f"- available_output_tokens: `{exc.available_output_tokens}`",
+            f"- minimum_output_tokens: `{exc.minimum_output_tokens}`",
+            "",
+            "## Recommendation",
+            "- Reduce staged artifact input, lower prompt size, or increase claude.context_window_tokens.",
+            "",
+        ]
+        diagnostics_path.write_text("\n".join(lines), encoding="utf-8")
+        return diagnostics_path
 
     def _maybe_write_request_diagnostics(
         self,

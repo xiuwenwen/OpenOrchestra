@@ -265,6 +265,7 @@ class PromptBuilder:
         input_artifacts = "\n".join(f"- {path}" for path in context.input_artifacts) or "- none"
         required_outputs = "\n".join(f"- {name}" for name in context.required_outputs) or "- none"
         role_specialization = self._role_specialization(context)
+        metadata_lines = self._metadata_lines(context)
         return "\n".join(
             [
                 "# Harness Agent Contract",
@@ -285,6 +286,9 @@ class PromptBuilder:
                 "## Role Specialization",
                 *role_specialization,
                 "",
+                "## Harness Metadata",
+                *metadata_lines,
+                "",
                 "## Workspace Boundaries",
                 f"- Workspace directory: {context.workspace_dir}",
                 f"- Repository directory: {context.repo_dir}",
@@ -302,10 +306,12 @@ class PromptBuilder:
                 "- Treat truncated artifacts as partial evidence; call out missing evidence in your required reports instead of guessing.",
                 "- Do not assume artifact source paths outside this workspace are readable.",
                 "- Treat artifacts as authoritative evidence for previous phases.",
-                "- This harness uses artifact-based patch merge in MVP mode. The repository directory may be empty in later phases.",
+                "- This harness uses artifact-based patch merge. After PATCH_MERGE succeeds, the repository directory should contain Harness materialized source from `merged_patch.diff` when the patch can be applied.",
                 "- `merged_patch.diff` is the authoritative implementation artifact after PATCH_MERGE exists.",
+                "- `patch_validation.md`, when present, is Harness-generated evidence about whether `merged_patch.diff` can be applied with `git apply --check`.",
+                "- `materialized_repo.md`, when present, records the Harness materialized repository path used for downstream role workspaces.",
                 "- `patch.diff` and `fix_patch.diff` are candidate inputs for PATCH_MERGE only; tester, reviewer, judge, and communicator roles must not treat them as final deliverables.",
-                "- Tester, reviewer, and judge roles must evaluate `merged_patch.diff`, `merge_report.md`, reports, and summaries, not fail solely because the repo directory is empty.",
+                "- Tester, reviewer, and judge roles must evaluate the repository directory, `merged_patch.diff`, `merge_report.md`, `patch_validation.md`, `materialized_repo.md`, reports, and summaries.",
                 "",
                 "## Required Output Files",
                 required_outputs,
@@ -346,7 +352,7 @@ class PromptBuilder:
                 return [
                     "- For TEST_JUDGEMENT, `decision.json` must contain a top-level `decision` string with value `pass` or `fail`.",
                     "- Use `pass` only when tester artifacts indicate success and `merged_patch.diff` is present, coherent, and testable.",
-                    "- Use `fail` when tests failed, required evidence is missing, `merged_patch.diff` is missing, or the merged patch is not testable.",
+                    "- Use `fail` when tests failed, required evidence is missing, `merged_patch.diff` is missing, `patch_validation.md` reports status `fail`, or the merged patch is not testable.",
                 ]
             if context.phase in {"REVIEW_JUDGEMENT", "FINAL_JUDGEMENT", "PLAN_JUDGEMENT"}:
                 rules = [
@@ -358,6 +364,7 @@ class PromptBuilder:
                     rules.extend(
                         [
                             "- Treat `merged_patch.diff` as the authoritative implementation artifact.",
+                            "- Treat `patch_validation.md` as Harness evidence for whether the authoritative patch applies cleanly.",
                             "- Do not approve based on raw `patch.diff` or `fix_patch.diff` when `merged_patch.diff` is absent or inconsistent.",
                         ]
                     )
@@ -384,6 +391,7 @@ class PromptBuilder:
         if context.role == "executor":
             return [
                 "- If the repository is empty, still produce implementation artifacts and a complete unified diff representing the proposed files.",
+                "- If the repository already contains materialized source from a previous PATCH_MERGE, make fix changes against that repository state.",
                 "- `patch.diff` or `fix_patch.diff` must be a valid unified diff that could create or update implementation files.",
                 "- Create or update implementation files under the repository directory first, then generate `patch.diff` or `fix_patch.diff` mechanically from repository changes.",
                 f"- Prefer command-generated diffs written directly to the output directory. For git repositories, use `git add -N . && git diff --no-ext-diff -- . > {context.output_dir / 'patch.diff'}` or the corresponding `fix_patch.diff` path.",
@@ -397,6 +405,9 @@ class PromptBuilder:
         if context.role == "tester":
             return [
                 "- Use `merged_patch.diff` as the implementation under test whenever it exists.",
+                "- Prefer running build, tests, and smoke checks directly in the repository directory when it contains materialized source.",
+                "- Read `materialized_repo.md` when present to understand which Harness materialized source snapshot was copied into the repository directory.",
+                "- Read `patch_validation.md` when present. If it reports `status: fail`, report testing as fail unless you have stronger direct evidence from applying and testing the patch yourself.",
                 "- Treat raw `patch.diff` and `fix_patch.diff` as non-authoritative candidate inputs; do not pass a task based only on raw candidate patches.",
                 "- If no merged repository exists, report that the implementation is not ready for testing unless the current phase explicitly predates PATCH_MERGE.",
                 "- `build_report.md` must describe setup/build outcome or explain why build execution was not possible.",
@@ -418,13 +429,13 @@ class PromptBuilder:
                     "- Read all available `peer_review.md` artifacts, especially comments directed at your previous plan.",
                     "- Revise `plan.md`, `assumptions.md`, `risk.md`, and `todo_breakdown.md` based on feedback you accept.",
                     "- When you reject feedback, state the rejected feedback and rationale in `plan.md` or `risk.md` instead of silently ignoring it.",
-                    "- `todo_breakdown.md` must remain executable by executor agents and include a concise implementation sequence.",
+                    *self._todo_breakdown_schema_rules(),
                 ]
             return [
                 "- `plan.md` must describe the proposed approach, architecture or code areas affected, and acceptance criteria.",
                 "- `assumptions.md` must separate verified facts from assumptions.",
                 "- `risk.md` must identify technical, integration, testing, and delivery risks.",
-                "- `todo_breakdown.md` must provide executable work items suitable for an executor role.",
+                *self._todo_breakdown_schema_rules(),
             ]
         if context.role == "reviewer":
             if context.phase == "PLAN_REVIEW":
@@ -437,6 +448,7 @@ class PromptBuilder:
                 ]
             return [
                 "- Review `merged_patch.diff` as the authoritative implementation artifact whenever it exists.",
+                "- Review `patch_validation.md` as Harness-generated apply-check evidence whenever it exists.",
                 "- Treat raw `patch.diff` and `fix_patch.diff` as background candidates only, not as the delivered implementation.",
                 "- `review_report.md` must state `approved` or `changes_required`.",
                 "- Review correctness, scope control, regressions, test adequacy, security, and maintainability.",
@@ -445,7 +457,8 @@ class PromptBuilder:
         if context.role == "communicator":
             return [
                 "- `final_delivery.md` must summarize final status, completed work, artifact paths or names, validation result, and known risks.",
-                "- `final_delivery.md` must include the success path, source/project directory path when available, and the exact commands a user should run next.",
+                "- `final_delivery.md` must include the expected success path from Harness Metadata, source/project directory path when available, and the exact commands a user should run next.",
+                "- The expected success path is precomputed before publishing; Harness will create/copy the final files there after this communicator phase succeeds.",
                 "- `usage_guide.md` must explain how to use the delivered result.",
                 "- `usage_guide.md` must include prerequisites, setup steps, run commands, configuration values, verification steps, common failure modes, and where relevant artifacts are stored.",
                 "- Put paths and commands in fenced or inline code blocks so they remain copyable and are not translated in the UI.",
@@ -453,6 +466,32 @@ class PromptBuilder:
                 "- Do not invent implementation details that are not supported by artifacts.",
             ]
         return []
+
+    def _todo_breakdown_schema_rules(self) -> list[str]:
+        return [
+            "- `todo_breakdown.md` must provide executable work items suitable for an executor role.",
+            "- `todo_breakdown.md` must use this exact repeated task schema so executor agents receive consistent plans:",
+            "  - `## Task <number>: <short imperative title>`",
+            "  - `files: <target paths or path globs>`",
+            "  - `steps:` with ordered implementation steps",
+            "  - `acceptance_criteria:` with concrete observable outcomes",
+            "  - `test_commands:` with exact commands or `not_applicable: <reason>`",
+            "  - `dependencies:` with prerequisite task numbers or `none`",
+            "  - `risk_notes:` with task-specific risks or `none`",
+            "- Keep each task scoped so an executor can implement it without inferring missing files, commands, or acceptance criteria.",
+        ]
+
+    def _metadata_lines(self, context: AgentRunContext) -> list[str]:
+        if not context.metadata:
+            return ["- none"]
+        lines: list[str] = []
+        for key in sorted(context.metadata):
+            value = context.metadata[key]
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                lines.append(f"- {key}: {value}")
+            else:
+                lines.append(f"- {key}: {value!r}")
+        return lines
 
     def _role_specialization(self, context: AgentRunContext) -> list[str]:
         specializations_by_role = {
