@@ -1173,6 +1173,9 @@ class InteractiveCLI:
         success_path = self._success_path(task_id)
         if success_path:
             lines.append(f"Historical success_path: {success_path}")
+            source_path = success_path / "source"
+            if source_path.exists():
+                lines.append(f"Historical source_repo: {source_path}")
         latest_repo = self._latest_agent_repo_path(task_id)
         if latest_repo:
             lines.append(f"Historical latest_agent_repo_workspace: {latest_repo}")

@@ -10,7 +10,7 @@ from harness.artifacts.schemas import required_outputs_for
 import harness.core.orchestrator as orchestrator_module
 from harness.core.orchestrator import Orchestrator
 from harness.core.progress import ProgressEvent
-from harness.core.state_machine import PATCH_MERGE, PLAN_JUDGEMENT, PLANNING_DRAFT, RUNNING
+from harness.core.state_machine import FIXING, PATCH_MERGE, PLAN_JUDGEMENT, PLANNING_DRAFT, REVIEW_FIXING, RUNNING
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 
 
@@ -290,6 +290,36 @@ def test_same_role_agents_start_concurrently_when_configured(tmp_path: Path) -> 
     assert {event.agent_id for event in relevant if event.event_type == "agent_started"} == {"planner-1", "planner-2"}
 
 
+def test_fix_phases_force_single_executor_even_when_configured_for_multiple(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["roles"]["executor"]["count"] = 3
+    events: list[ProgressEvent] = []
+    orchestrator = Orchestrator(config, progress_callback=events.append)
+    orchestrator.create_task("fix one defect")
+
+    for phase in (FIXING, REVIEW_FIXING):
+        results = orchestrator.run_role_phase(
+            "executor",
+            phase,
+            0,
+            required_outputs_for("executor", phase),
+            "fix one defect",
+            agent_count_override=4,
+        )
+
+        assert [result.agent_id for result in results] == ["executor-1"]
+
+    started = [
+        event
+        for event in events
+        if event.role == "executor" and event.event_type == "phase_started" and event.phase in {FIXING, REVIEW_FIXING}
+    ]
+    assert [event.message for event in started] == [
+        "FIXING started with 1 executor agent(s)",
+        "REVIEW_FIXING started with 1 executor agent(s)",
+    ]
+
+
 def test_concurrent_phase_timeout_budget_includes_agent_retries(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     config["timeouts"]["planner"] = 7
@@ -513,6 +543,77 @@ def test_source_repo_is_used_only_for_existing_project_workflows(tmp_path: Path)
     assert orchestrator._source_repo_for_workspace() is None
 
 
+def test_project_context_source_repo_overrides_configured_source_repo(tmp_path: Path) -> None:
+    configured_repo = tmp_path / "configured"
+    configured_repo.mkdir()
+    historical_source = tmp_path / "deliver" / "project-12345678" / "source"
+    historical_source.mkdir(parents=True)
+    config = _config(tmp_path)
+    config["system"]["source_repo"] = str(configured_repo)
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("fix the previous delivery", workflow_type=BUGFIX)
+    orchestrator.attach_project_context(task_id, f"Historical success_path: {historical_source.parent}\n")
+
+    orchestrator._active_task_id = task_id
+    orchestrator._active_workflow_type = BUGFIX
+    try:
+        assert orchestrator._source_repo_for_workspace() == historical_source.resolve()
+        metadata = orchestrator._repo_context_metadata(task_id, "executor", FIXING)
+    finally:
+        orchestrator._active_task_id = None
+        orchestrator._active_workflow_type = None
+
+    assert metadata["repository_source_type"] == "project_context_source_repo"
+    assert metadata["repository_source_path"] == str(historical_source.resolve())
+
+
+def test_patch_validation_uses_project_context_source_repo(tmp_path: Path) -> None:
+    configured_repo = tmp_path / "configured"
+    configured_repo.mkdir()
+    (configured_repo / "app.py").write_text("wrong\n", encoding="utf-8")
+    historical_source = tmp_path / "deliver" / "project-12345678" / "source"
+    historical_source.mkdir(parents=True)
+    (historical_source / "app.py").write_text("old\n", encoding="utf-8")
+    config = _config(tmp_path)
+    config["system"]["source_repo"] = str(configured_repo)
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("fix the previous delivery", workflow_type=BUGFIX)
+    orchestrator.attach_project_context(task_id, f"Historical success_path: {historical_source.parent}\n")
+    phase_id = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 0, status="COMPLETED")
+    patch = tmp_path / "merged_patch.diff"
+    patch.write_text(
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n",
+        encoding="utf-8",
+    )
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id="merged-patch",
+            task_id=task_id,
+            phase_id=phase_id,
+            role="executor",
+            agent_id="executor-1",
+            artifact_type="merged_patch.diff",
+            path=patch,
+            version=1,
+            hash="hash",
+        )
+    )
+
+    assert orchestrator._run_patch_validation(task_id, 0)
+    validation_report = Path(orchestrator.repository.list_artifacts(task_id, "patch_validation.md")[-1]["path"]).read_text(encoding="utf-8")
+    materialized_report = Path(orchestrator.repository.list_artifacts(task_id, "materialized_repo.md")[-1]["path"]).read_text(encoding="utf-8")
+    materialized_app = orchestrator._latest_materialized_repo(task_id) / "app.py"
+
+    assert f"source_repo: {historical_source.resolve()}" in validation_report
+    assert f"source_repo: {historical_source.resolve()}" in materialized_report
+    assert materialized_app.read_text(encoding="utf-8") == "new\n"
+
+
 def test_materialized_source_applies_modified_file_patch(tmp_path: Path) -> None:
     source_repo = tmp_path / "source"
     source_repo.mkdir()
@@ -547,7 +648,7 @@ def test_failed_materialization_does_not_leave_usable_repo(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    repo, report = orchestrator._materialize_merged_patch_repo(task_id, 0, patch)
+    repo, report = orchestrator._materialize_merged_patch_repo(task_id, 0, patch, source_repo=None)
 
     assert repo is None
     assert "status: failed" in report

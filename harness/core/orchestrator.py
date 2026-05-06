@@ -102,6 +102,7 @@ class NonRetryableAgentError(TaskFailedError):
 
 
 MATERIALIZED_SUCCESS_MARKER = ".harness_materialized_success.json"
+SINGLE_EXECUTOR_FIX_PHASES = {FIXING, REVIEW_FIXING}
 
 
 class Orchestrator:
@@ -383,7 +384,7 @@ class Orchestrator:
         if not task:
             raise KeyError(f"Task not found: {task_id}")
         user_prompt = user_prompt if user_prompt is not None else task["user_prompt"]
-        agent_count = agent_count_override if agent_count_override is not None else int(self.config["roles"][role]["count"])
+        agent_count = self._effective_agent_count(role, phase, agent_count_override)
 
         # Check for already completed/recoverable phase to support checkpoint resume.
         # Older Harness versions could mark a phase FAILED after all concurrent
@@ -930,7 +931,8 @@ class Orchestrator:
         patch_path = Path(latest["path"])
         if not patch_path.exists():
             return False
-        report = self._validate_patch_apply_check(patch_path)
+        source_repo = self._source_repo_for_existing_project_task(task_id)
+        report = self._validate_patch_apply_check(patch_path, source_repo)
         status = self._patch_validation_status(report)
         materialize_status = "skipped"
         materialized_repo: Path | None = None
@@ -938,6 +940,7 @@ class Orchestrator:
             task_id=task_id,
             round_id=round_id,
             patch_path=patch_path,
+            source_repo=source_repo,
             status="skipped",
             repo_path=None,
             stdout="",
@@ -945,7 +948,12 @@ class Orchestrator:
             exit_code=None,
         )
         if status == "pass":
-            materialized_repo, materialize_report = self._materialize_merged_patch_repo(task_id, round_id, patch_path)
+            materialized_repo, materialize_report = self._materialize_merged_patch_repo(
+                task_id,
+                round_id,
+                patch_path,
+                source_repo,
+            )
             materialize_status = self._materialized_repo_status(materialize_report)
             if materialized_repo is None:
                 if materialize_status in {"failed", "skipped"}:
@@ -986,8 +994,7 @@ class Orchestrator:
         )
         return status == "pass" and materialize_status == "success"
 
-    def _validate_patch_apply_check(self, patch_path: Path) -> str:
-        source_repo = self._configured_source_repo()
+    def _validate_patch_apply_check(self, patch_path: Path, source_repo: Path | None) -> str:
         if not shutil.which("git"):
             return self._patch_validation_report(
                 patch_path=patch_path,
@@ -1085,12 +1092,14 @@ class Orchestrator:
         task_id: str,
         round_id: int,
         patch_path: Path,
+        source_repo: Path | None,
     ) -> tuple[Path | None, str]:
         if not shutil.which("git"):
             return None, self._materialized_repo_report(
                 task_id=task_id,
                 round_id=round_id,
                 patch_path=patch_path,
+                source_repo=source_repo,
                 status="skipped",
                 repo_path=None,
                 stdout="",
@@ -1102,7 +1111,6 @@ class Orchestrator:
         repo_dir.parent.mkdir(parents=True, exist_ok=True)
         if repo_dir.exists():
             shutil.rmtree(repo_dir)
-        source_repo = self._configured_source_repo()
         if source_repo:
             self._copy_source_for_patch_validation(source_repo, tmp_repo_dir)
         else:
@@ -1121,6 +1129,7 @@ class Orchestrator:
                 task_id=task_id,
                 round_id=round_id,
                 patch_path=patch_path,
+                source_repo=source_repo,
                 status="failed",
                 repo_path=None,
                 stdout=completed.stdout,
@@ -1133,6 +1142,7 @@ class Orchestrator:
             task_id=task_id,
             round_id=round_id,
             patch_path=patch_path,
+            source_repo=source_repo,
             status="success",
             repo_path=repo_dir,
             stdout=completed.stdout,
@@ -1156,6 +1166,7 @@ class Orchestrator:
         task_id: str,
         round_id: int,
         patch_path: Path,
+        source_repo: Path | None,
         status: str,
         repo_path: Path | None,
         stdout: str,
@@ -1171,7 +1182,7 @@ class Orchestrator:
                 f"round_id: {round_id}",
                 f"repo_path: {repo_path or 'none'}",
                 f"patch: {patch_path}",
-                f"source_repo: {self._configured_source_repo() or 'none'}",
+                f"source_repo: {source_repo or 'none'}",
                 "command: git apply --whitespace=nowarn <merged_patch.diff>",
                 f"exit_code: {exit_code if exit_code is not None else 'n/a'}",
                 "",
@@ -1203,13 +1214,81 @@ class Orchestrator:
         raise ValueError(f"Unsupported agent backend: {backend}")
 
     def _source_repo_for_workspace(self) -> Path | None:
-        source_repo = self.config.get("system", {}).get("source_repo")
-        if not source_repo:
+        if self._active_task_id:
+            return self._source_repo_for_existing_project_task(self._active_task_id)
+        if self._active_workflow_type in {BUGFIX, FEATURE_CHANGE}:
+            return self._configured_source_repo()
+        return None
+
+    def _source_repo_for_existing_project_task(self, task_id: str) -> Path | None:
+        if not self._task_uses_existing_project_source(task_id):
             return None
-        if self._active_workflow_type not in {BUGFIX, FEATURE_CHANGE}:
+        return self._project_context_source_repo(task_id) or self._configured_source_repo()
+
+    def _task_uses_existing_project_source(self, task_id: str) -> bool:
+        if self._active_task_id == task_id and self._active_workflow_type:
+            workflow_type = self._active_workflow_type
+        else:
+            task = self.repository.get_task(task_id)
+            workflow_type = str(task.get("workflow_type") or NEW_PROJECT) if task else NEW_PROJECT
+        return normalize_workflow_type(workflow_type) in {BUGFIX, FEATURE_CHANGE}
+
+    def _project_context_source_repo(self, task_id: str) -> Path | None:
+        for artifact in reversed(self.repository.list_artifacts(task_id, "project_context.md")):
+            path = Path(artifact["path"])
+            if not path.exists() or not path.is_file():
+                continue
+            content = path.read_text(encoding="utf-8", errors="replace")
+            for candidate in self._project_context_source_candidates(content):
+                resolved = candidate.expanduser().resolve()
+                if resolved.exists() and resolved.is_dir():
+                    return resolved
+        return None
+
+    def _project_context_source_candidates(self, content: str) -> list[Path]:
+        explicit_source_paths: list[Path] = []
+        success_source_paths: list[Path] = []
+        fallback_repo_paths: list[Path] = []
+        for raw_line in content.splitlines():
+            line = raw_line.strip()
+            for prefix in ("Historical source_repo:", "- source_repo:"):
+                value = self._context_line_value(line, prefix)
+                if value:
+                    explicit_source_paths.append(Path(value))
+            for prefix in (
+                "Historical materialized_source:",
+                "Historical partial_materialized_source:",
+                "- materialized_source:",
+                "- partial_materialized_source:",
+            ):
+                value = self._context_line_value(line, prefix)
+                if value:
+                    explicit_source_paths.append(Path(value))
+            for prefix in ("Historical success_path:", "- success_path:"):
+                value = self._context_line_value(line, prefix)
+                if value:
+                    success_source_paths.append(Path(value) / "source")
+            for prefix in ("Historical latest_agent_repo_workspace:", "- latest_agent_repo_workspace:"):
+                value = self._context_line_value(line, prefix)
+                if value:
+                    fallback_repo_paths.append(Path(value))
+        return explicit_source_paths + success_source_paths + fallback_repo_paths
+
+    def _context_line_value(self, line: str, prefix: str) -> str | None:
+        if not line.startswith(prefix):
             return None
-        path = Path(str(source_repo)).expanduser().resolve()
-        return path if path.exists() and path.is_dir() else None
+        value = line[len(prefix) :].strip()
+        return value or None
+
+    def _effective_agent_count(self, role: str, phase: str, agent_count_override: int | None = None) -> int:
+        if role == "executor" and phase in SINGLE_EXECUTOR_FIX_PHASES:
+            # Intentional hard rule for future AI maintainers: fix phases use one executor.
+            # Multiple fix executors produce competing patches for the same defect, which
+            # increases merge conflicts, context size, and risk of broad accidental changes.
+            return 1
+        if agent_count_override is not None:
+            return agent_count_override
+        return int(self.config["roles"][role]["count"])
 
     def _should_use_materialized_repo(self, role: str, phase: str) -> bool:
         if role == "executor":
@@ -1250,6 +1329,17 @@ class Orchestrator:
                     "repository_source_path": str(materialized_repo),
                     "repository_source_note": "This role's repository directory was copied from the latest Harness materialized merged patch.",
                 }
+        project_context_source_repo = (
+            self._project_context_source_repo(task_id)
+            if self._task_uses_existing_project_source(task_id)
+            else None
+        )
+        if project_context_source_repo:
+            return {
+                "repository_source_type": "project_context_source_repo",
+                "repository_source_path": str(project_context_source_repo),
+                "repository_source_note": "This role's repository directory was copied from the source repo selected from project_context.md.",
+            }
         source_repo = self._source_repo_for_workspace()
         if source_repo:
             return {
@@ -1874,7 +1964,7 @@ class Orchestrator:
             return []
         files = self._materialized_files_from_unified_diff(
             patch_path.read_text(encoding="utf-8", errors="replace"),
-            self._configured_source_repo(),
+            self._source_repo_for_existing_project_task(task_id),
             include_modified=True,
         )
         if not files:

@@ -129,6 +129,13 @@ def test_ui_html_uses_data_attributes_for_dynamic_file_buttons() -> None:
     assert "openFile('" not in html
 
 
+def test_ui_role_card_labels_artifacts_by_agent() -> None:
+    html = _html()
+
+    assert "latestRolePhaseRuns" in html
+    assert "${item.agent_id} -> ${item.artifact.artifact_type}" in html
+
+
 def test_ui_html_auto_follows_running_latest_task() -> None:
     html = _html()
 

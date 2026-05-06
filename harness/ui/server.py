@@ -901,11 +901,12 @@ function renderRoleFlow(roles, runs) {
 function roleCard(role, runs, stepNumber) {
   const roleRuns = runs.filter(r => r.role === role.role);
   const latest = roleRuns[roleRuns.length - 1];
+  const quickRuns = latest ? latestRolePhaseRuns(roleRuns, latest) : [];
   const quick = latest ? [
     fileButton(latest.stdout_path, "stdout", true),
     fileButton(latest.stderr_path, "stderr", false),
     fileButton(latest.diagnostics_path, "diagnostics", false),
-    ...preferredArtifacts(latest).map(a => artifactButton(a, true))
+    ...preferredRoleArtifacts(quickRuns).map(item => artifactButton(item.artifact, true, `${item.agent_id} -> ${item.artifact.artifact_type}`))
   ].join("") : "";
   const selected = selectedRoles.has(role.role);
   const statusClass = esc(role.status || "PENDING");
@@ -1053,13 +1054,29 @@ function fileButton(info, label, primary) {
   return `<button type="button" class="file-btn ${primary ? "primary" : ""}" data-file-path="${esc(info.path)}" data-file-label="${esc(display)}">${esc(display)}${size}</button>`;
 }
 
-function artifactButton(a, primary) {
+function artifactButton(a, primary, label) {
   if (!a.exists) return "";
-  return `<button type="button" class="file-btn ${primary ? "primary" : ""}" data-file-path="${esc(a.path)}" data-file-label="${esc(a.artifact_type)}">${esc(short(a.artifact_type, 28))}</button>`;
+  const display = label || a.artifact_type;
+  return `<button type="button" class="file-btn ${primary ? "primary" : ""}" data-file-path="${esc(a.path)}" data-file-label="${esc(display)}">${esc(short(display, 36))}</button>`;
+}
+
+function latestRolePhaseRuns(roleRuns, latest) {
+  return roleRuns.filter(run => run.phase_type === latest.phase_type && Number(run.phase_round_id || 0) === Number(latest.phase_round_id || 0));
+}
+
+function preferredRoleArtifacts(roleRuns) {
+  const priority = ["peer_review.md","selected_plan.md","plan.md","todo_breakdown.md","final_delivery.md","usage_guide.md","response.md","merged_patch.diff","merge_report.md","test_report.md","bug_report.md","review_report.md","decision_summary.md","delivery.md"];
+  return roleRuns.flatMap(run => preferredArtifacts(run).map(artifact => ({agent_id: run.agent_id, artifact})))
+    .sort((a, b) => {
+      const byPriority = priorityIndex(a.artifact.artifact_type, priority) - priorityIndex(b.artifact.artifact_type, priority);
+      if (byPriority !== 0) return byPriority;
+      return String(a.agent_id).localeCompare(String(b.agent_id));
+    })
+    .slice(0, 6);
 }
 
 function preferredArtifacts(run) {
-  const priority = ["final_delivery.md","usage_guide.md","response.md","merged_patch.diff","merge_report.md","test_report.md","bug_report.md","review_report.md","decision_summary.md","plan.md","todo_breakdown.md","delivery.md"];
+  const priority = ["peer_review.md","selected_plan.md","plan.md","todo_breakdown.md","final_delivery.md","usage_guide.md","response.md","merged_patch.diff","merge_report.md","test_report.md","bug_report.md","review_report.md","decision_summary.md","delivery.md"];
   return (run.artifacts || []).slice().sort((a, b) => priorityIndex(a.artifact_type, priority) - priorityIndex(b.artifact_type, priority)).slice(0, 3);
 }
 
