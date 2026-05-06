@@ -21,7 +21,7 @@ The harness does not implement internal tools like FileTool, ShellTool, EditTool
 Interactive mode:
 
 ```bash
-.venv/bin/python -m harness.main
+./orchestra
 ```
 
 Then type a task prompt at `harness>`. Use `exit` to quit.
@@ -59,15 +59,20 @@ When stdout is a TTY, task execution uses a live terminal dashboard. It shows:
 
 When stdout is not a TTY, the CLI falls back to line-oriented progress logs.
 
-For a richer view, start the local Web execution viewer:
+The local Web execution viewer starts by default:
 
 ```bash
-.venv/bin/python -m harness.main --ui
-.venv/bin/python -m harness.main --ui --backend claude "做一个简单工具"
+./orchestra
+./orchestra --backend claude "做一个简单工具"
 ```
 
-In interactive mode, `/ui` starts the viewer on demand and prints the local URL.
-By default it listens on `http://127.0.0.1:8765`.
+In interactive mode, `/ui` shows or starts the viewer and prints the local URL.
+By default it listens on `http://127.0.0.1:8765`. Use `--no-ui` to run without
+the viewer:
+
+```bash
+./orchestra --no-ui
+```
 
 The Web viewer shows:
 
@@ -99,7 +104,7 @@ Claude/Codex while keeping Harness task records immutable.
 One-shot mode:
 
 ```bash
-.venv/bin/python -m harness.main "实现一个简单任务"
+./orchestra "实现一个简单任务"
 ```
 
 If `--workflow` is not provided, Harness asks the selected backend model to
@@ -118,10 +123,10 @@ orchestrator. For `misc`, Harness prints only the model answer.
 You can also choose the workflow explicitly:
 
 ```bash
-.venv/bin/python -m harness.main --workflow bugfix "修复登录失败的问题"
-.venv/bin/python -m harness.main --workflow feature_change "给现有应用增加导出功能"
-.venv/bin/python -m harness.main --workflow new_project "做一个根据 IP 查询天气的软件"
-.venv/bin/python -m harness.main --workflow misc "解释一下当前 dashboard 的含义"
+./orchestra --workflow bugfix "修复登录失败的问题"
+./orchestra --workflow feature_change "给现有应用增加导出功能"
+./orchestra --workflow new_project "做一个根据 IP 查询天气的软件"
+./orchestra --workflow misc "解释一下当前 dashboard 的含义"
 ```
 
 During execution, the CLI prints live progress events for the current phase,
@@ -135,18 +140,15 @@ The CLI uses a real backend by default. `--backend auto` prefers `codex`, then
 `claude`. You can force one:
 
 ```bash
-.venv/bin/python -m harness.main --backend codex "实现一个简单任务"
-.venv/bin/python -m harness.main --backend claude "实现一个简单任务"
+./orchestra --backend codex "实现一个简单任务"
+./orchestra --backend claude "实现一个简单任务"
 ```
 
 The command finally prints:
 
-- `task_id`
-- for project workflows, the shallow `deliver/<ascii-project-name>-<task-number>/final_delivery.md` path
-- for project workflows, `success_path`, the shallow delivery directory containing the final delivery, usage guide, manifest, patch, and copied supporting artifacts
-- `task_workspace`, the stable workspace root for the task; `/continue` reuses
-  the same task id and keeps follow-up role runs under this root
-- the `usage_guide.md` path in the same delivery directory when produced
+- `project_dir`, the delivered project source directory
+- `run_command`, the command to start or verify the delivered project
+- `dependency_install`, the dependency installation command, or `not_required`
 - for the `misc` workflow, the direct model answer is printed instead
 
 Use `/clean` after `/resume <n|task_id>` to remove intermediate

@@ -11,7 +11,7 @@ import harness.core.orchestrator as orchestrator_module
 from harness.core.orchestrator import Orchestrator
 from harness.core.progress import ProgressEvent
 from harness.core.state_machine import PATCH_MERGE, PLAN_JUDGEMENT, PLANNING_DRAFT, RUNNING
-from harness.core.workflow_type import FEATURE_CHANGE, NEW_PROJECT
+from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 
 
 def _config(tmp_path: Path) -> dict:
@@ -101,16 +101,17 @@ def test_orchestrator_mock_flow_completes_and_generates_delivery(tmp_path: Path)
     assert "Role: planner" in prompt_path.read_text(encoding="utf-8")
 
 
-def test_orchestrator_bugfix_flow_skips_planning_and_completes(tmp_path: Path) -> None:
+def test_orchestrator_bugfix_flow_uses_persisted_workflow_and_runs_review(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
-    task_id = orchestrator.create_task("fix a failing command")
+    task_id = orchestrator.create_task("fix a failing command", workflow_type=BUGFIX)
 
-    final_delivery = orchestrator.run_task(task_id, workflow_type="bugfix")
+    final_delivery = orchestrator.run_task(task_id)
 
     phases = [phase["phase_type"] for phase in orchestrator.repository.list_phases(task_id)]
     assert "PLANNING_DRAFT" not in phases
     assert "FIXING" in phases
     assert "TESTING" in phases
+    assert "REVIEWING" in phases
     assert final_delivery.exists()
 
 
@@ -178,6 +179,11 @@ def test_planning_block_runs_peer_review_loop_and_plan_review(monkeypatch, tmp_p
     assert ("PLAN_REVIEW", "reviewer", 1) in phases
     assert orchestrator.repository.list_artifacts(task_id, "peer_review.md")
     assert orchestrator.repository.list_artifacts(task_id, "review_report.md")
+    assert orchestrator.repository.list_artifacts(task_id, "selected_plan.md")
+
+    staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "executor-input", "executor", "EXECUTION")
+    manifest = staged[0].read_text(encoding="utf-8")
+    assert "selected_plan.md" in manifest
 
 
 def test_planner_retry_can_see_previous_planning_artifacts(tmp_path: Path) -> None:
@@ -810,6 +816,73 @@ def test_tester_sees_authoritative_merged_patch_not_raw_candidate_patches(tmp_pa
     assert "merge_report.md" in manifest
     assert not re.search(r"## \d+\. patch\.diff\b", manifest)
     assert not re.search(r"## \d+\. fix_patch\.diff\b", manifest)
+
+
+def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_patch_only(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("merge current patch only")
+    execution_phase_id = orchestrator.repository.create_phase(task_id, "EXECUTION", "executor", 0)
+    old_fix_phase_id = orchestrator.repository.create_phase(task_id, "FIXING", "executor", 1)
+    previous_merge_phase_id = orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 1)
+    current_fix_phase_id = orchestrator.repository.create_phase(task_id, "FIXING", "executor", 2)
+    current_merge_phase_id = orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 2)
+    artifact_rows = [
+        ("patch.diff", execution_phase_id, "executor", "old-execution.patch"),
+        ("fix_patch.diff", old_fix_phase_id, "executor", "old-fix.patch"),
+        ("merged_patch.diff", previous_merge_phase_id, "executor", "previous-merged.patch"),
+        ("fix_patch.diff", current_fix_phase_id, "executor", "current-fix.patch"),
+    ]
+    for artifact_type, phase_id, role, filename in artifact_rows:
+        path = tmp_path / filename
+        path.write_text(filename, encoding="utf-8")
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id=phase_id,
+                role=role,
+                agent_id="executor-1",
+                artifact_type=artifact_type,
+                path=path,
+                version=1,
+                hash="hash",
+            )
+        )
+
+    staged = orchestrator._stage_input_artifacts(
+        task_id,
+        tmp_path / "input",
+        "executor",
+        "PATCH_MERGE",
+        exclude_phase_id=current_merge_phase_id,
+        round_id=2,
+    )
+    manifest = staged[0].read_text(encoding="utf-8")
+
+    assert "current-fix.patch" in manifest
+    assert "previous-merged.patch" in manifest
+    assert "old-execution.patch" not in manifest
+    assert "old-fix.patch" not in manifest
+
+
+def test_invalid_patch_merge_skips_testing_and_enters_fix_round(monkeypatch, tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("repair invalid patch")
+    validation_rounds: list[int] = []
+
+    def fake_patch_validation(task_id: str, round_id: int) -> bool:
+        validation_rounds.append(round_id)
+        return round_id > 0
+
+    monkeypatch.setattr(orchestrator, "_run_patch_validation", fake_patch_validation)
+
+    orchestrator._run_execution_test_loop(task_id, "repair invalid patch")
+
+    phases = [(phase["phase_type"], phase["round_id"]) for phase in orchestrator.repository.list_phases(task_id)]
+    assert validation_rounds[:2] == [0, 1]
+    assert ("FIXING", 1) in phases
+    assert ("TESTING", 0) not in phases
+    assert ("TESTING", 1) in phases
 
 
 def test_staged_input_artifacts_respect_size_budget(tmp_path: Path) -> None:

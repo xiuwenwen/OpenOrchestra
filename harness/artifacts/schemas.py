@@ -17,7 +17,10 @@ REQUIRED_OUTPUTS: dict[str, dict[str, list[str]] | list[str]] = {
         "REVIEW_FIXING": ["fix_schedule.md", "fix_patch.diff", "fix_notes.md", "self_check.md"],
     },
     "tester": ["build_report.md", "test_report.md", "bug_report.md"],
-    "reviewer": ["review_report.md"],
+    "reviewer": {
+        "PLAN_REVIEW": ["review_report.md", "selected_plan.md"],
+        "REVIEWING": ["review_report.md"],
+    },
     "judge": ["decision.json", "decision_summary.md"],
     "communicator": ["final_delivery.md", "usage_guide.md"],
 }

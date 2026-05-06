@@ -444,6 +444,8 @@ class PromptBuilder:
                     "- Review all planner `plan.md`, `assumptions.md`, `risk.md`, `todo_breakdown.md`, and `peer_review.md` artifacts against the user's request.",
                     "- `review_report.md` must select the best planner proposal by `agent_id` and explain why it should guide executor agents.",
                     "- If no single proposal is sufficient, choose the best base proposal and list required adjustments.",
+                    "- `selected_plan.md` must consolidate the chosen proposal into the single authoritative plan for executor agents.",
+                    "- `selected_plan.md` must include files, steps, acceptance criteria, test commands, dependencies, and risks using the planner todo schema.",
                     "- State `approved` when the selected proposal is actionable enough for execution; otherwise state `changes_required`.",
                 ]
             return [
@@ -457,10 +459,13 @@ class PromptBuilder:
         if context.role == "communicator":
             return [
                 "- `final_delivery.md` must summarize final status, completed work, artifact paths or names, validation result, and known risks.",
-                "- `final_delivery.md` must include the expected success path from Harness Metadata, source/project directory path when available, and the exact commands a user should run next.",
+                "- `final_delivery.md` must include a short handoff section with exactly these fields: `project_dir`, `run_command`, and `dependency_install`.",
+                "- `project_dir` must point to the delivered source/project directory when available, not merely to Harness internal artifact files.",
+                "- `run_command` must be the exact command the user should execute from the project directory.",
+                "- `dependency_install` must be the exact dependency install command when dependencies exist; use `none` when no dependency installation is required.",
                 "- The expected success path is precomputed before publishing; Harness will create/copy the final files there after this communicator phase succeeds.",
                 "- `usage_guide.md` must explain how to use the delivered result.",
-                "- `usage_guide.md` must include prerequisites, setup steps, run commands, configuration values, verification steps, common failure modes, and where relevant artifacts are stored.",
+                "- `usage_guide.md` must include prerequisites, dependency installation from `requirements.txt` when present, setup steps, run commands, configuration values, verification steps, and common failure modes.",
                 "- Put paths and commands in fenced or inline code blocks so they remain copyable and are not translated in the UI.",
                 "- Keep `usage_guide.md` practical and task-specific. Do not repeat generic Harness internals unless they are needed to use the delivery.",
                 "- Do not invent implementation details that are not supported by artifacts.",

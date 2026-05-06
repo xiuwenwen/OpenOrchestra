@@ -136,11 +136,11 @@ class Orchestrator:
         if content.strip():
             self.artifact_manager.create_text_artifact(task_id, "project_context.md", content)
 
-    def run_task(self, task_id: str, workflow_type: str = NEW_PROJECT) -> Path:
+    def run_task(self, task_id: str, workflow_type: str | None = None) -> Path:
         task = self.repository.get_task(task_id)
         if not task:
             raise KeyError(f"Task not found: {task_id}")
-        workflow_type = normalize_workflow_type(workflow_type)
+        workflow_type = normalize_workflow_type(workflow_type or task.get("workflow_type") or NEW_PROJECT)
         
         # Persist workflow_type if not already set
         if not task.get("workflow_type"):
@@ -203,13 +203,16 @@ class Orchestrator:
     def _run_bugfix_flow(self, task_id: str, user_prompt: str) -> Path:
         for round_id in range(self.config["limits"]["max_test_fix_rounds"]):
             self.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
-            self._run_patch_merge(task_id, round_id, user_prompt)
+            merge_ok = self._run_patch_merge(task_id, round_id, user_prompt)
+            if not merge_ok:
+                continue
             self.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
             test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
             if self.judge.is_test_pass(test_decision):
                 break
         else:
             raise TaskFailedError("Bugfix testing did not pass within max_test_fix_rounds")
+        self._run_review_loop(task_id, user_prompt)
         self._run_final_judgement(task_id, user_prompt)
         return self._run_delivery(task_id, user_prompt)
 
@@ -296,16 +299,18 @@ class Orchestrator:
 
     def _run_execution_test_loop(self, task_id: str, user_prompt: str) -> None:
         self.run_role_phase("executor", EXECUTION, 0, required_outputs_for("executor", EXECUTION), user_prompt)
-        self._run_patch_merge(task_id, 0, user_prompt)
-        for round_id in range(self.config["limits"]["max_test_fix_rounds"]):
-            self.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
-            test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
-            if self.judge.is_test_pass(test_decision):
-                break
+        merge_ok = self._run_patch_merge(task_id, 0, user_prompt)
+        max_rounds = int(self.config["limits"]["max_test_fix_rounds"])
+        for round_id in range(max_rounds):
+            if merge_ok:
+                self.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
+                test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
+                if self.judge.is_test_pass(test_decision):
+                    break
             # Use next round_id for fixing effort to signal progression in dashboard
             next_round = round_id + 1
             self.run_role_phase("executor", FIXING, next_round, required_outputs_for("executor", FIXING), user_prompt)
-            self._run_patch_merge(task_id, next_round, user_prompt)
+            merge_ok = self._run_patch_merge(task_id, next_round, user_prompt)
         else:
             raise TaskFailedError("Testing did not pass within max_test_fix_rounds")
 
@@ -319,25 +324,26 @@ class Orchestrator:
             # Use next round_id for fixing effort to signal progression in dashboard
             next_review_round = round_id + 1
             self.run_role_phase("executor", REVIEW_FIXING, next_review_round, required_outputs_for("executor", REVIEW_FIXING), user_prompt)
-            self._run_patch_merge(task_id, next_review_round, user_prompt)
-            self._run_regression_test_fix_loop(task_id, user_prompt, next_review_round)
+            merge_ok = self._run_patch_merge(task_id, next_review_round, user_prompt)
+            self._run_regression_test_fix_loop(task_id, user_prompt, next_review_round, merge_ok)
         else:
             raise TaskFailedError("Review was not approved within max_review_rounds")
 
-    def _run_regression_test_fix_loop(self, task_id: str, user_prompt: str, review_round_id: int) -> None:
+    def _run_regression_test_fix_loop(self, task_id: str, user_prompt: str, review_round_id: int, merge_ok: bool) -> None:
         max_rounds = int(self.config["limits"]["max_test_fix_rounds"])
         for test_round_id in range(max_rounds):
             phase_round_id = (review_round_id * max_rounds) + test_round_id
-            self.run_role_phase(
-                "tester",
-                REGRESSION_TESTING,
-                phase_round_id,
-                required_outputs_for("tester", REGRESSION_TESTING),
-                user_prompt,
-            )
-            test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, phase_round_id, user_prompt)
-            if self.judge.is_test_pass(test_decision):
-                return
+            if merge_ok:
+                self.run_role_phase(
+                    "tester",
+                    REGRESSION_TESTING,
+                    phase_round_id,
+                    required_outputs_for("tester", REGRESSION_TESTING),
+                    user_prompt,
+                )
+                test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, phase_round_id, user_prompt)
+                if self.judge.is_test_pass(test_decision):
+                    return
             
             # Use next phase_round_id for fixing effort
             next_phase_round = phase_round_id + 1
@@ -348,7 +354,7 @@ class Orchestrator:
                 required_outputs_for("executor", REVIEW_FIXING),
                 user_prompt,
             )
-            self._run_patch_merge(task_id, next_phase_round, user_prompt)
+            merge_ok = self._run_patch_merge(task_id, next_phase_round, user_prompt)
         raise TaskFailedError("Regression testing did not pass within max_test_fix_rounds")
 
     def _run_final_judgement(self, task_id: str, user_prompt: str) -> None:
@@ -656,7 +662,14 @@ class Orchestrator:
                 source_repo=self._source_repo_for_workspace(),
             )
             self._prepare_materialized_workspace_repo(task_id, role, phase, workspace.repo_dir)
-            input_artifacts = self._stage_input_artifacts(task_id, workspace.input_dir, role, phase, exclude_phase_id=phase_id)
+            input_artifacts = self._stage_input_artifacts(
+                task_id,
+                workspace.input_dir,
+                role,
+                phase,
+                exclude_phase_id=phase_id,
+                round_id=round_id,
+            )
             task_for_metadata = self.repository.get_task(task_id) or {"task_id": task_id, "user_prompt": user_prompt}
             metadata = self._context_metadata(task_for_metadata, role, phase)
             metadata.update(self._repo_context_metadata(task_id, role, phase))
@@ -898,7 +911,7 @@ class Orchestrator:
         self.repository.create_judge_decision(task_id, phase_id, phase, normalized)
         return normalized
 
-    def _run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> None:
+    def _run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:
         self.run_role_phase(
             "executor",
             PATCH_MERGE,
@@ -907,18 +920,19 @@ class Orchestrator:
             user_prompt,
             agent_count_override=1,
         )
-        self._run_patch_validation(task_id, round_id)
+        return self._run_patch_validation(task_id, round_id)
 
-    def _run_patch_validation(self, task_id: str, round_id: int) -> None:
+    def _run_patch_validation(self, task_id: str, round_id: int) -> bool:
         merged_artifacts = self.repository.list_artifacts(task_id, "merged_patch.diff")
         if not merged_artifacts:
-            return
+            return False
         latest = merged_artifacts[-1]
         patch_path = Path(latest["path"])
         if not patch_path.exists():
-            return
+            return False
         report = self._validate_patch_apply_check(patch_path)
         status = self._patch_validation_status(report)
+        materialize_status = "skipped"
         materialized_repo: Path | None = None
         materialize_report = self._materialized_repo_report(
             task_id=task_id,
@@ -932,8 +946,8 @@ class Orchestrator:
         )
         if status == "pass":
             materialized_repo, materialize_report = self._materialize_merged_patch_repo(task_id, round_id, patch_path)
+            materialize_status = self._materialized_repo_status(materialize_report)
             if materialized_repo is None:
-                materialize_status = self._materialized_repo_status(materialize_report)
                 if materialize_status in {"failed", "skipped"}:
                     status = "fail"
         ref = self.artifact_manager.create_text_artifact(
@@ -970,6 +984,7 @@ class Orchestrator:
                 },
             )
         )
+        return status == "pass" and materialize_status == "success"
 
     def _validate_patch_apply_check(self, patch_path: Path) -> str:
         source_repo = self._configured_source_repo()
@@ -1373,8 +1388,10 @@ class Orchestrator:
         role: str,
         phase: str,
         exclude_phase_id: str | None = None,
+        round_id: int | None = None,
     ) -> list[Path]:
         artifacts = self.repository.list_artifacts(task_id)
+        phases_by_id = {phase_row["phase_id"]: phase_row for phase_row in self.repository.list_phases(task_id)}
         staged_dir = input_dir / "artifacts"
         staged_dir.mkdir(parents=True, exist_ok=True)
         staged_paths: list[Path] = []
@@ -1389,6 +1406,7 @@ class Orchestrator:
             if not (exclude_phase_id and artifact["phase_id"] == exclude_phase_id)
             and self._artifact_visible_to(target_role, phase, artifact)
         ]
+        visible_artifacts = self._filter_visible_artifacts_for_phase(visible_artifacts, phases_by_id, role, phase, round_id)
         for index, artifact in enumerate(reversed(visible_artifacts), start=1):
             source = Path(artifact["path"])
             if not source.exists():
@@ -1432,6 +1450,40 @@ class Orchestrator:
         manifest_path = input_dir / "manifest.md"
         manifest_path.write_text("\n".join(manifest_lines), encoding="utf-8")
         return [manifest_path, *staged_paths]
+
+    def _filter_visible_artifacts_for_phase(
+        self,
+        artifacts: list[dict[str, Any]],
+        phases_by_id: dict[str, dict[str, Any]],
+        role: str,
+        phase: str,
+        round_id: int | None,
+    ) -> list[dict[str, Any]]:
+        if role != "executor" or phase != PATCH_MERGE or round_id is None:
+            return artifacts
+
+        latest_authoritative: dict[str, dict[str, Any]] = {}
+        filtered: list[dict[str, Any]] = []
+        candidate_patch_types = {"patch.diff", "fix_patch.diff"}
+        authoritative_types = {"merged_patch.diff", "merge_report.md", "patch_validation.md", "materialized_repo.md"}
+        for artifact in artifacts:
+            artifact_type = artifact["artifact_type"]
+            phase_row = phases_by_id.get(artifact.get("phase_id") or "")
+            artifact_round = int(phase_row["round_id"]) if phase_row and phase_row.get("round_id") is not None else None
+            artifact_phase = phase_row["phase_type"] if phase_row else None
+
+            if artifact_type in candidate_patch_types:
+                if artifact_round == round_id and artifact_phase in {EXECUTION, FIXING, REVIEW_FIXING}:
+                    filtered.append(artifact)
+                continue
+            if artifact_type in authoritative_types:
+                if artifact_round is not None and artifact_round < round_id:
+                    latest_authoritative[artifact_type] = artifact
+                continue
+            filtered.append(artifact)
+
+        filtered.extend(latest_authoritative.values())
+        return filtered
 
     def _artifact_input_limits(self) -> dict[str, int]:
         configured = self.config.get("artifact_input", {})
@@ -1521,6 +1573,7 @@ class Orchestrator:
         if role == "executor":
             if phase == EXECUTION:
                 return artifact_role in {"planner", "reviewer", "judge"} and artifact_type in {
+                    "selected_plan.md",
                     "plan.md",
                     "assumptions.md",
                     "risk.md",
@@ -1532,6 +1585,7 @@ class Orchestrator:
                 }
             if phase == PATCH_MERGE:
                 return artifact_role in {"planner", "executor", "tester", "reviewer", "judge", "orchestrator"} and artifact_type in {
+                    "selected_plan.md",
                     "plan.md",
                     "assumptions.md",
                     "risk.md",
@@ -1626,6 +1680,7 @@ class Orchestrator:
         if role == "judge":
             if phase == PLAN_JUDGEMENT:
                 return artifact_role in {"planner", "reviewer"} and artifact_type in {
+                    "selected_plan.md",
                     "plan.md",
                     "assumptions.md",
                     "risk.md",
@@ -1773,6 +1828,7 @@ class Orchestrator:
             "patch.diff",
             "fix_patch.diff",
             "implementation_plan.md",
+            "selected_plan.md",
             "changed_files.md",
             "self_check.md",
             "fix_schedule.md",

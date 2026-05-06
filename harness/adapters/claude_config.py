@@ -19,6 +19,7 @@ DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE = {
 }
 DEFAULT_MAX_OUTPUT_TOKENS = 16000
 MIN_DYNAMIC_MAX_OUTPUT_TOKENS = 64
+TOKEN_ESTIMATE_SAFETY_MULTIPLIER = 1.15
 CJK_CHARACTER_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 
@@ -120,7 +121,8 @@ def estimate_prompt_tokens(prompt: str) -> int:
     cjk_count = len(CJK_CHARACTER_RE.findall(prompt))
     non_cjk_text = CJK_CHARACTER_RE.sub("", prompt)
     non_cjk_bytes = len(non_cjk_text.encode("utf-8"))
-    return cjk_count + math.ceil(non_cjk_bytes / 4)
+    base_estimate = cjk_count + math.ceil(non_cjk_bytes / 4)
+    return math.ceil(base_estimate * TOKEN_ESTIMATE_SAFETY_MULTIPLIER)
 
 
 def _parse_max_output_tokens(value: Any, field_name: str) -> int | None:

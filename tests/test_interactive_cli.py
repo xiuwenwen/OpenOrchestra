@@ -161,6 +161,40 @@ def test_misc_classifier_fallback_prints_raw_answer_only(monkeypatch, tmp_path: 
     assert "[classifier]" not in output
 
 
+def test_delivery_handoff_prefers_source_dir_and_requirements(tmp_path: Path) -> None:
+    delivery_dir = tmp_path / "deliver" / "project-12345678"
+    source_dir = delivery_dir / "source"
+    source_dir.mkdir(parents=True)
+    (source_dir / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+    final_delivery = delivery_dir / "final_delivery.md"
+    final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
+    usage_guide = delivery_dir / "usage_guide.md"
+    usage_guide.write_text("```bash\npython app.py\n```\n", encoding="utf-8")
+
+    lines = main_module.format_delivery_handoff(final_delivery, usage_guide)
+
+    assert lines[0] == f"project_dir: {source_dir}"
+    assert lines[1] == f"run_command: cd {source_dir} && python app.py"
+    assert lines[2] == (
+        f"dependency_install: cd {source_dir} && "
+        "python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt"
+    )
+
+
+def test_run_once_prints_user_handoff_not_internal_delivery_paths(tmp_path: Path, capsys) -> None:
+    orchestrator = main_module.Orchestrator(_config(tmp_path))
+
+    main_module.run_once(orchestrator, "Build a weather app", workflow_type="new_project")
+
+    output = capsys.readouterr().out
+    assert "project_dir:" in output
+    assert "run_command:" in output
+    assert "dependency_install:" in output
+    assert "final_delivery:" not in output
+    assert "success_path:" not in output
+    assert "usage_guide:" not in output
+
+
 def test_history_context_includes_concrete_paths_for_misc_answers(tmp_path: Path) -> None:
     cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
     task_id = cli.orchestrator.create_task("Fix the chess game", workflow_type="bugfix")
@@ -534,6 +568,39 @@ def test_input_history_remembers_non_duplicate_commands(tmp_path: Path) -> None:
     cli._remember_input("/resume 1")
 
     assert cli.input_history == ["/history", "/resume 1"]
+
+
+def test_main_starts_ui_by_default_and_can_disable_it(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("unused: true\n", encoding="utf-8")
+    starts: list[str] = []
+
+    def fake_load_config(path):
+        assert str(path) == str(config_path)
+        return _config(tmp_path)
+
+    class FakeCLI:
+        def __init__(self, config, backend, progress_callback, **kwargs):
+            self.ui_server = kwargs.get("ui_server")
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(main_module, "load_user_env", lambda path=main_module.USER_ENV_PATH: {"HARNESS_BACKEND": "codex"})
+    monkeypatch.setattr(main_module, "ensure_user_env_defaults", lambda config, values, path=main_module.USER_ENV_PATH: None)
+    monkeypatch.setattr(main_module, "resolve_real_backend", lambda requested: requested)
+    monkeypatch.setattr(main_module, "start_ui_server", lambda *args, **kwargs: starts.append("ui") or object())
+    monkeypatch.setattr(main_module, "InteractiveCLI", FakeCLI)
+
+    monkeypatch.setattr(main_module.sys, "argv", ["harness", "--config", str(config_path)])
+    assert main_module.main() == 0
+    assert starts == ["ui"]
+
+    starts.clear()
+    monkeypatch.setattr(main_module.sys, "argv", ["harness", "--config", str(config_path), "--no-ui"])
+    assert main_module.main() == 0
+    assert starts == []
 
 
 def test_clean_removes_selected_task_intermediate_files_and_keeps_success_path(tmp_path: Path, capsys) -> None:

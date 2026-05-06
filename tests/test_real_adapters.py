@@ -12,6 +12,7 @@ from harness.adapters.claude_config import (
     claude_dynamic_max_output_tokens,
     estimate_prompt_tokens,
 )
+from harness.adapters.codex_cli_adapter import CodexCLIAdapter
 from harness.agents.context import AgentRunContext
 
 
@@ -19,6 +20,7 @@ class FakeRunner:
     def __init__(self):
         self.command: list[str] | None = None
         self.env: dict[str, str] | None = None
+        self.input_text: str | None = None
 
     def run(
         self,
@@ -32,6 +34,7 @@ class FakeRunner:
     ) -> int:
         self.command = command
         self.env = env
+        self.input_text = input_text
         stdout_path.write_text("ok", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
         return 0
@@ -119,11 +122,11 @@ def test_claude_adapter_uses_configured_max_output_tokens(tmp_path: Path) -> Non
 
 
 def test_claude_dynamic_max_output_tokens_respects_context_window() -> None:
-    target_available_output_tokens = 32_000
-    estimated_input_tokens = (
-        DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - target_available_output_tokens
+    prompt = _ascii_prompt_for_estimated_tokens(145_000)
+    estimated_input_tokens = estimate_prompt_tokens(prompt)
+    expected_available_output_tokens = (
+        DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - estimated_input_tokens
     )
-    prompt = _ascii_prompt_for_estimated_tokens(estimated_input_tokens)
 
     adjusted = claude_dynamic_max_output_tokens(
         {
@@ -137,13 +140,14 @@ def test_claude_dynamic_max_output_tokens_respects_context_window() -> None:
         prompt,
     )
 
-    assert estimate_prompt_tokens(prompt) == estimated_input_tokens
-    assert adjusted == target_available_output_tokens
+    assert MIN_DYNAMIC_MAX_OUTPUT_TOKENS <= expected_available_output_tokens
+    assert expected_available_output_tokens < DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE["planner"]
+    assert adjusted == expected_available_output_tokens
 
 
 def test_claude_adapter_lowers_max_output_for_large_prompt(tmp_path: Path) -> None:
     runner = FakeRunner()
-    user_prompt = _ascii_prompt_for_estimated_tokens(155_000)
+    user_prompt = _ascii_prompt_for_estimated_tokens(135_000)
 
     ClaudeCodeAdapter(command=["claude", "-p"], runner=runner).run(
         _context(
@@ -165,12 +169,31 @@ def test_claude_adapter_lowers_max_output_for_large_prompt(tmp_path: Path) -> No
     assert adjusted_max_output_tokens < DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE["planner"]
 
 
-def test_claude_dynamic_max_output_tokens_raises_when_prompt_exceeds_budget() -> None:
-    target_available_output_tokens = MIN_DYNAMIC_MAX_OUTPUT_TOKENS - 1
-    estimated_input_tokens = (
-        DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - target_available_output_tokens
+def test_dynamic_max_output_tokens_keeps_128k_requests_below_200k_context() -> None:
+    prompt = _ascii_prompt_for_estimated_tokens(72_001)
+
+    adjusted = claude_dynamic_max_output_tokens(
+        {
+            "claude": {
+                "context_window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
+                "context_window_buffer_tokens": DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS,
+                "max_output_tokens": 128_000,
+            }
+        },
+        "planner",
+        prompt,
     )
-    prompt = _ascii_prompt_for_estimated_tokens(estimated_input_tokens)
+
+    assert adjusted == DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - estimate_prompt_tokens(prompt)
+    assert adjusted < 128_000
+
+
+def test_claude_dynamic_max_output_tokens_raises_when_prompt_exceeds_budget() -> None:
+    prompt = _ascii_prompt_for_estimated_tokens(DEFAULT_CONTEXT_WINDOW_TOKENS)
+    estimated_input_tokens = estimate_prompt_tokens(prompt)
+    expected_available_output_tokens = (
+        DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - estimated_input_tokens
+    )
 
     try:
         claude_dynamic_max_output_tokens(
@@ -185,7 +208,8 @@ def test_claude_dynamic_max_output_tokens_raises_when_prompt_exceeds_budget() ->
             prompt,
         )
     except ClaudeContextBudgetError as exc:
-        assert exc.available_output_tokens == target_available_output_tokens
+        assert expected_available_output_tokens < MIN_DYNAMIC_MAX_OUTPUT_TOKENS
+        assert exc.available_output_tokens == expected_available_output_tokens
         assert exc.estimated_input_tokens == estimated_input_tokens
     else:
         raise AssertionError("Expected ClaudeContextBudgetError")
@@ -214,6 +238,73 @@ def test_claude_adapter_fails_preflight_without_invoking_runner_for_oversized_pr
     diagnostics = tmp_path / "workspace" / "logs" / "request_diagnostics.md"
     assert diagnostics.exists()
     assert "preflight_context_budget_error: `true`" in diagnostics.read_text(encoding="utf-8")
+
+
+def test_codex_adapter_applies_context_window_and_max_output_config(tmp_path: Path) -> None:
+    runner = FakeRunner()
+
+    CodexCLIAdapter(command=["codex", "exec"], runner=runner).run(_context(tmp_path, config={}))
+
+    assert runner.command is not None
+    assert "-c" in runner.command
+    assert "model_context_window=200000" in runner.command
+    assert "max_output_tokens=64000" in runner.command
+    assert runner.env is None
+
+
+def test_codex_adapter_lowers_max_output_for_large_prompt(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    user_prompt = _ascii_prompt_for_estimated_tokens(65_000)
+
+    CodexCLIAdapter(command=["codex", "exec"], runner=runner).run(
+        _context(
+            tmp_path,
+            config={
+                "claude": {
+                    "context_window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
+                    "context_window_buffer_tokens": DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS,
+                    "max_output_tokens": {"planner": 128_000},
+                }
+            },
+            user_prompt=user_prompt,
+        )
+    )
+
+    assert runner.command is not None
+    assert runner.input_text is not None
+    max_output_arg = next(arg for arg in runner.command if arg.startswith("max_output_tokens="))
+    adjusted_max_output_tokens = int(max_output_arg.split("=", 1)[1])
+    expected_available_output_tokens = (
+        DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - estimate_prompt_tokens(runner.input_text)
+    )
+    assert adjusted_max_output_tokens == expected_available_output_tokens
+    assert adjusted_max_output_tokens < 128_000
+
+
+def test_codex_adapter_fails_preflight_without_invoking_runner_for_oversized_prompt(tmp_path: Path) -> None:
+    runner = FakeRunner()
+
+    result = CodexCLIAdapter(command=["codex", "exec"], runner=runner).run(
+        _context(
+            tmp_path,
+            config={
+                "claude": {
+                    "context_window_tokens": DEFAULT_CONTEXT_WINDOW_TOKENS,
+                    "context_window_buffer_tokens": DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS,
+                    "max_output_tokens": {"planner": 128_000},
+                }
+            },
+            user_prompt=_ascii_prompt_for_estimated_tokens(DEFAULT_CONTEXT_WINDOW_TOKENS),
+        )
+    )
+
+    assert result.status == "FAILED"
+    assert runner.command is None
+    diagnostics = tmp_path / "workspace" / "logs" / "request_diagnostics.md"
+    assert diagnostics.exists()
+    diagnostics_text = diagnostics.read_text(encoding="utf-8")
+    assert "- backend: `codex`" in diagnostics_text
+    assert "preflight_context_budget_error: `true`" in diagnostics_text
 
 
 def test_claude_adapter_uses_role_specific_max_output_tokens(tmp_path: Path) -> None:

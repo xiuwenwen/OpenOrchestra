@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import builtins
 import json
+import re
+import shlex
 import shutil
 import sys
 import threading
@@ -181,6 +183,9 @@ BARE_COMMAND_ALIASES = {
 }
 
 BARE_COMMANDS_WITH_ARGS = {"history", "tasks", "resume", "select", "task"}
+COMMAND_LINE_PATTERN = re.compile(
+    r"^(?:python3?|\.\/|npm|pnpm|yarn|bun|uv|streamlit|flask|fastapi|uvicorn|node|deno|go|cargo|java|mvn|gradle|make|docker|docker-compose|bash|sh)\b"
+)
 
 
 class ConsoleProgressReporter:
@@ -257,6 +262,13 @@ class DashboardState:
     roles: dict[str, RoleView] = field(default_factory=dict)
     agents: dict[str, RoleView] = field(default_factory=dict)
     events: deque[str] = field(default_factory=lambda: deque(maxlen=8))
+
+
+@dataclass(frozen=True)
+class DeliveryHandoff:
+    project_dir: Path
+    run_command: str | None
+    dependency_install: str | None
 
 
 class DashboardProgressReporter(ConsoleProgressReporter):
@@ -380,9 +392,11 @@ class DashboardProgressReporter(ConsoleProgressReporter):
         for line in self.state.events:
             sys.stdout.write(f"  {truncate_display(line, 84)}\n")
         sys.stdout.write("-" * 88 + "\n")
-        sys.stdout.write(f"Result: {self.state.result_type} {self.state.result_path}\n")
-        if self.state.success_path != "-":
-            sys.stdout.write(f"Success path: {self.state.success_path}\n")
+        if self.state.result_type == "final_delivery" and self.state.result_path != "-":
+            for line in format_delivery_handoff(Path(self.state.result_path)):
+                sys.stdout.write(f"{line}\n")
+        elif self.state.result_path != "-":
+            sys.stdout.write(f"response: {self.state.result_path}\n")
         sys.stdout.flush()
 
     def _render_row(self, row: RoleView) -> None:
@@ -408,7 +422,7 @@ def make_progress_reporter() -> ConsoleProgressReporter:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the Harness System MVP.")
+    parser = argparse.ArgumentParser(prog="orchestra", description="Run the Harness System MVP.")
     parser.add_argument("prompt", nargs="*", help="User task prompt to run through the harness")
     parser.add_argument("--config", default="config/config.yaml", help="Path to config.yaml")
     parser.add_argument(
@@ -427,7 +441,14 @@ def main() -> int:
         choices=[BUGFIX, FEATURE_CHANGE, NEW_PROJECT, MISC],
         help="Override automatic workflow classification.",
     )
-    parser.add_argument("--ui", action="store_true", help="Start the local Web execution viewer.")
+    parser.add_argument(
+        "--ui",
+        dest="ui",
+        action="store_true",
+        default=True,
+        help="Start the local Web execution viewer. Enabled by default.",
+    )
+    parser.add_argument("--no-ui", dest="ui", action="store_false", help="Do not start the local Web execution viewer.")
     parser.add_argument("--ui-port", type=int, default=None, help="Port for the local Web execution viewer.")
     args = parser.parse_args()
 
@@ -486,6 +507,85 @@ def start_ui_server(
     return server
 
 
+def build_delivery_handoff(result_path: Path, usage_guide: Path | None = None) -> DeliveryHandoff:
+    delivery_dir = result_path.parent
+    project_dir = delivery_dir / "source" if (delivery_dir / "source").is_dir() else delivery_dir
+    dependency_file = next(
+        (path for path in (project_dir / "requirements.txt", project_dir / "request.txt") if path.exists()),
+        None,
+    )
+    dependency_install = None
+    if dependency_file:
+        dependency_install = (
+            f"cd {shlex.quote(str(project_dir))} && "
+            f"python3 -m venv .venv && .venv/bin/python -m pip install -r {shlex.quote(dependency_file.name)}"
+        )
+    run_command = _first_delivery_run_command(project_dir, result_path, usage_guide)
+    return DeliveryHandoff(project_dir=project_dir, run_command=run_command, dependency_install=dependency_install)
+
+
+def format_delivery_handoff(result_path: Path, usage_guide: Path | None = None) -> list[str]:
+    handoff = build_delivery_handoff(result_path, usage_guide)
+    return [
+        f"project_dir: {handoff.project_dir}",
+        f"run_command: {handoff.run_command or 'not found in delivery docs'}",
+        f"dependency_install: {handoff.dependency_install or 'none'}",
+    ]
+
+
+def _first_delivery_run_command(project_dir: Path, result_path: Path, usage_guide: Path | None) -> str | None:
+    for command in _delivery_run_commands(project_dir, result_path, usage_guide):
+        return command
+    return None
+
+
+def _delivery_run_commands(project_dir: Path, result_path: Path, usage_guide: Path | None) -> list[str]:
+    delivery_dir = result_path.parent
+    candidates = [
+        usage_guide,
+        delivery_dir / "usage_guide.md",
+        project_dir / "README.md",
+        project_dir / "readme.md",
+        result_path,
+    ]
+    commands: list[str] = []
+    for path in candidates:
+        if not path or not path.exists() or not path.is_file():
+            continue
+        for command in _extract_shell_commands(path.read_text(encoding="utf-8", errors="replace")):
+            if _is_dependency_install_command(command):
+                continue
+            commands.append(_with_project_cd(project_dir, command))
+    return list(dict.fromkeys(commands))
+
+
+def _extract_shell_commands(text: str) -> list[str]:
+    commands: list[str] = []
+    fenced_blocks = re.findall(r"```(?:bash|sh|shell|zsh|console|text)?\s*\n(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    scan_texts = fenced_blocks or [text]
+    for block in scan_texts:
+        for raw_line in block.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith(("#", "$", ">")):
+                line = line.lstrip("$> ").strip()
+            if not line or line.startswith("#") or line.startswith("cd "):
+                continue
+            if COMMAND_LINE_PATTERN.match(line):
+                commands.append(line)
+    return commands
+
+
+def _is_dependency_install_command(command: str) -> bool:
+    lowered = command.lower()
+    return "pip install" in lowered or "npm install" in lowered or "pnpm install" in lowered or "yarn install" in lowered
+
+
+def _with_project_cd(project_dir: Path, command: str) -> str:
+    if command.startswith("cd "):
+        return command
+    return f"cd {shlex.quote(str(project_dir))} && {command}"
+
+
 def resolve_real_backend(requested: str) -> str:
     if requested == "auto":
         for candidate in ("codex", "claude"):
@@ -507,16 +607,12 @@ def run_once(
     if project_context_md:
         orchestrator.attach_project_context(task_id, project_context_md)
     result_path = orchestrator.run_task(task_id, workflow_type=workflow_type)
-    usage_guide = orchestrator.communicator.latest_usage_guide(task_id)
-    print(f"task_id: {task_id}")
-    print(f"workflow: {workflow_type}")
     if workflow_type == MISC:
         print(f"response: {Path(result_path)}")
     else:
-        print(f"final_delivery: {Path(result_path)}")
-        print(f"success_path: {Path(result_path).parent}")
-    if workflow_type != MISC and usage_guide:
-        print(f"usage_guide: {usage_guide}")
+        usage_guide = orchestrator.communicator.latest_usage_guide(task_id)
+        for line in format_delivery_handoff(Path(result_path), usage_guide):
+            print(line)
     return 0
 
 
@@ -944,11 +1040,9 @@ class InteractiveCLI:
         print(f"task_workspace: {task_workspace}")
         result_path = self.orchestrator.run_task(self.active_task_id, workflow_type=workflow_type)
         if workflow_type != MISC:
-            print(f"final_delivery: {Path(result_path)}")
-            print(f"success_path: {Path(result_path).parent}")
             usage_guide = self._latest_artifact_path(self.active_task_id, "usage_guide.md")
-            if usage_guide:
-                print(f"usage_guide: {usage_guide}")
+            for line in format_delivery_handoff(Path(result_path), usage_guide):
+                print(line)
 
     def _print_current(self) -> None:
         if not self.active_task_id:

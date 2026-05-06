@@ -30,7 +30,7 @@ REQUEST_SIZE_ERROR_PATTERNS = (
 class ClaudeCodeAdapter(AgentAdapter):
     def __init__(self, command: list[str] | None = None, runner: SubprocessRunner | None = None):
         self.command = command or ["claude", "-p"]
-        self.runner = runner or SubprocessRunner()
+        self.runner = runner or SubprocessRunner(stream_output=True, stream_prefix="[claude] ")
         self.prompt_builder = PromptBuilder()
 
     def run(self, context: AgentRunContext) -> AgentRunResult:

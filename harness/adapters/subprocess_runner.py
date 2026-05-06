@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
 
 class SubprocessRunner:
+    def __init__(self, stream_output: bool = False, stream_prefix: str = ""):
+        self.stream_output = stream_output
+        self.stream_prefix = stream_prefix
+
     def run(
         self,
         command: list[str],
@@ -36,12 +41,12 @@ class SubprocessRunner:
                 )
                 stdout_thread = threading.Thread(
                     target=self._copy_stream,
-                    args=(process.stdout, stdout_handle),
+                    args=(process.stdout, stdout_handle, sys.stdout),
                     daemon=True,
                 )
                 stderr_thread = threading.Thread(
                     target=self._copy_stream,
-                    args=(process.stderr, stderr_handle),
+                    args=(process.stderr, stderr_handle, sys.stderr),
                     daemon=True,
                 )
                 stdout_thread.start()
@@ -65,7 +70,7 @@ class SubprocessRunner:
             stderr_path.write_text(self._decode_timeout_stream(exc.stderr) + "\nTIMEOUT\n", encoding="utf-8")
             return 124
 
-    def _copy_stream(self, stream, handle) -> None:
+    def _copy_stream(self, stream, handle, live_handle) -> None:
         if stream is None:
             return
         try:
@@ -74,6 +79,9 @@ class SubprocessRunner:
                     break
                 handle.write(chunk)
                 handle.flush()
+                if self.stream_output:
+                    live_handle.write(f"{self.stream_prefix}{chunk}")
+                    live_handle.flush()
         finally:
             stream.close()
 

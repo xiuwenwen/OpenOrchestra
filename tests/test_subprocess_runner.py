@@ -42,3 +42,27 @@ def test_subprocess_runner_merges_env(monkeypatch, tmp_path: Path) -> None:
 
     assert exit_code == 0
     assert stdout_path.read_text(encoding="utf-8").splitlines() == ["yes", "16000"]
+
+
+def test_subprocess_runner_can_stream_output_while_writing_logs(tmp_path: Path, capsys) -> None:
+    stdout_path = tmp_path / "stdout.log"
+    stderr_path = tmp_path / "stderr.log"
+
+    exit_code = SubprocessRunner(stream_output=True, stream_prefix="[agent] ").run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('live stdout', flush=True); print('live stderr', file=sys.stderr, flush=True)",
+        ],
+        tmp_path,
+        0,
+        stdout_path,
+        stderr_path,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "[agent] live stdout" in captured.out
+    assert "[agent] live stderr" in captured.err
+    assert stdout_path.read_text(encoding="utf-8").strip() == "live stdout"
+    assert stderr_path.read_text(encoding="utf-8").strip() == "live stderr"

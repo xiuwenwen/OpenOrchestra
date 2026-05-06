@@ -69,10 +69,16 @@ class MockAgentAdapter(AgentAdapter):
             return "# Notes\n\nContext used: mock input artifacts.\nLimitations: mock adapter output.\n"
         if context.role == "reviewer" and name == "review_report.md":
             return "# Review Report\n\nstatus: approved\nNo changes required.\n"
+        if context.role == "reviewer" and name == "selected_plan.md":
+            return "# Selected Plan\n\nUse the mock planner proposal as the single execution plan.\n"
         if context.role == "communicator" and name == "final_delivery.md":
             return (
                 "# Final Delivery\n\n"
                 f"Task `{context.task_id}` completed through the mock harness flow.\n\n"
+                "## Handoff\n\n"
+                "- project_dir: source\n"
+                "- run_command: python mock.py\n"
+                "- dependency_install: none\n\n"
                 "The orchestrator collected all required artifacts and received final judge approval.\n"
             )
         if context.role == "communicator" and name == "usage_guide.md":
@@ -81,9 +87,9 @@ class MockAgentAdapter(AgentAdapter):
                 "## Prerequisites\n\n"
                 "- Use the collected artifacts for this task.\n\n"
                 "## How To Use The Delivery\n\n"
-                "1. Open final_delivery.md for the outcome summary.\n"
-                "2. Review implementation, test, review, and judge artifacts for supporting evidence.\n"
-                "3. Apply or inspect the patch artifact produced by the executor.\n\n"
+                "```bash\n"
+                "python mock.py\n"
+                "```\n\n"
                 "## Verification\n\n"
                 "- Confirm every role delivery.md reports `status: success`.\n"
                 "- Confirm final judge approval exists.\n\n"
