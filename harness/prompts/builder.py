@@ -310,8 +310,13 @@ class PromptBuilder:
                 "- `merged_patch.diff` is the authoritative implementation artifact after PATCH_MERGE exists.",
                 "- `patch_validation.md`, when present, is Harness-generated evidence about whether `merged_patch.diff` can be applied with `git apply --check`.",
                 "- `materialized_repo.md`, when present, records the Harness materialized repository path used for downstream role workspaces.",
+                "- `objective_gate.md` and `test_gate.md`, when present, are Harness-generated hard-gate evidence that LLM roles cannot override.",
+                "- Every `patch.diff` and `fix_patch.diff` patch artifact must have sibling `patch_metadata.md`; every `merged_patch.diff` artifact must have sibling `merged_patch_metadata.md`.",
+                "- Patch metadata must declare `patch_artifact`, `base_source_type`, `base_source_path`, `base_round`, `base_task_id`, `apply_target`, `patch_scope`, `changed_files`, `expected_apply_command`, and `compatibility_notes`.",
+                "- Valid `patch_scope` values are `full_project`, `incremental_fix`, and `merged_authoritative`.",
+                "- Treat any patch artifact as invalid evidence when its metadata is missing, does not name that patch artifact, or declares a baseline/apply target incompatible with the current repository.",
                 "- `patch.diff` and `fix_patch.diff` are candidate inputs for PATCH_MERGE only; tester, reviewer, judge, and communicator roles must not treat them as final deliverables.",
-                "- Tester, reviewer, and judge roles must evaluate the repository directory, `merged_patch.diff`, `merge_report.md`, `patch_validation.md`, `materialized_repo.md`, reports, and summaries.",
+                "- Tester, reviewer, and judge roles must evaluate the repository directory, `merged_patch.diff`, `merge_report.md`, Harness gate reports, role reports, and summaries.",
                 "",
                 "## Required Output Files",
                 required_outputs,
@@ -352,7 +357,7 @@ class PromptBuilder:
                 return [
                     "- For TEST_JUDGEMENT, `decision.json` must contain a top-level `decision` string with value `pass` or `fail`.",
                     "- Use `pass` only when tester artifacts indicate success and `merged_patch.diff` is present, coherent, and testable.",
-                    "- Use `fail` when tests failed, required evidence is missing, `merged_patch.diff` is missing, `patch_validation.md` reports status `fail`, or the merged patch is not testable.",
+                    "- Use `fail` when tests failed, required evidence is missing, `merged_patch.diff` is missing, `merged_patch_metadata.md` is missing or incompatible, any Harness gate reports `status: fail`, or the merged patch is not testable.",
                 ]
             if context.phase in {"REVIEW_JUDGEMENT", "FINAL_JUDGEMENT", "PLAN_JUDGEMENT"}:
                 rules = [
@@ -364,8 +369,10 @@ class PromptBuilder:
                     rules.extend(
                         [
                             "- Treat `merged_patch.diff` as the authoritative implementation artifact.",
+                            "- Treat `merged_patch_metadata.md` as required baseline evidence for the authoritative implementation artifact.",
                             "- Treat `patch_validation.md` as Harness evidence for whether the authoritative patch applies cleanly.",
-                            "- Do not approve based on raw `patch.diff` or `fix_patch.diff` when `merged_patch.diff` is absent or inconsistent.",
+                            "- Treat `objective_gate.md` and `test_gate.md` as hard Harness evidence; do not approve when either reports fail.",
+                            "- Do not approve based on raw `patch.diff` or `fix_patch.diff` when `merged_patch.diff` is absent, metadata is absent, or metadata is inconsistent.",
                         ]
                     )
                 return rules
@@ -380,19 +387,26 @@ class PromptBuilder:
         if context.role == "executor" and context.phase == "PATCH_MERGE":
             return [
                 "- This is the model-driven PATCH_MERGE phase.",
-                "- Read all candidate `patch.diff` and `fix_patch.diff` artifacts listed in the input manifest.",
+                "- Read all candidate `patch.diff`, `fix_patch.diff`, and `patch_metadata.md` artifacts listed in the input manifest.",
+                "- Before selecting any candidate patch, verify its `patch_metadata.md` names the exact patch artifact and declares a baseline/apply target compatible with the current repository directory.",
+                "- Do not select a patch based only on filename, artifact version, model wording, or previous role confidence.",
+                "- Prior `merged_patch.diff` artifacts are historical evidence, not candidates to reuse, unless `merged_patch_metadata.md` proves they target the same baseline and apply target as the current repository.",
+                "- Reject or omit candidates whose metadata is missing, names a different patch, has stale `base_round` or `base_task_id`, uses a `full_project` scope against an already materialized project, or otherwise conflicts with the current repository baseline.",
                 "- Produce exactly one authoritative `merged_patch.diff` that represents the implementation candidate downstream roles must test, review, judge, and deliver.",
+                "- Produce `merged_patch_metadata.md` next to `merged_patch.diff`; it must declare `patch_artifact: merged_patch.diff`, selected candidate metadata, baseline compatibility decision, current `apply_target`, and `patch_scope: merged_authoritative`.",
                 "- Do not concatenate blindly. Resolve overlaps, choose compatible changes, and explain any omitted or adjusted candidate patch in `merge_report.md`.",
                 "- `merged_patch.diff` must be a valid unified diff. If the candidate patches cannot be merged into a coherent diff, still write `merged_patch.diff` with the best safe subset and mark `delivery.md` as `failed` or `partial`.",
                 "- Generate `merged_patch.diff` into the output directory via shell redirection or file operations; do not paste a large merged diff as a Write-tool payload.",
                 "- Do not print full candidate patches or the full merged patch to stdout. Use `wc -c`, diff stats, and short excerpts only when verifying.",
-                "- `merge_report.md` must state selected candidate artifacts, rejected candidate artifacts, conflict handling, known risks, and whether the merged patch is ready for testing.",
+                "- `merge_report.md` must state selected candidate artifacts, rejected candidate artifacts, metadata compatibility checks, conflict handling, known risks, and whether the merged patch is ready for testing.",
             ]
         if context.role == "executor":
             return [
                 "- If the repository is empty, still produce implementation artifacts and a complete unified diff representing the proposed files.",
                 "- If the repository already contains materialized source from a previous PATCH_MERGE, make fix changes against that repository state.",
                 "- `patch.diff` or `fix_patch.diff` must be a valid unified diff that could create or update implementation files.",
+                "- Produce `patch_metadata.md` next to the patch. It must name the exact patch file, the current repository baseline, the intended apply target, the patch scope, changed files, and the expected apply command.",
+                "- For FIXING and REVIEW_FIXING, prefer `patch_scope: incremental_fix` and target the current materialized/source repository; do not describe a historical empty project baseline unless the current repository is actually empty.",
                 "- Create or update implementation files under the repository directory first, then generate `patch.diff` or `fix_patch.diff` mechanically from repository changes.",
                 f"- Prefer command-generated diffs written directly to the output directory. For git repositories, use `git add -N . && git diff --no-ext-diff -- . > {context.output_dir / 'patch.diff'}` or the corresponding `fix_patch.diff` path.",
                 "- If the repository is not a git worktree, initialize a temporary git baseline or use a script/diff command that writes unified diff output directly to the required patch file.",
@@ -408,6 +422,8 @@ class PromptBuilder:
                 "- Prefer running build, tests, and smoke checks directly in the repository directory when it contains materialized source.",
                 "- Read `materialized_repo.md` when present to understand which Harness materialized source snapshot was copied into the repository directory.",
                 "- Read `patch_validation.md` when present. If it reports `status: fail`, report testing as fail unless you have stronger direct evidence from applying and testing the patch yourself.",
+                "- Read `objective_gate.md` and `test_gate.md` when present; if either reports `status: fail`, report testing as fail.",
+                "- Read `merged_patch_metadata.md` when present; fail testing if the authoritative patch metadata is missing or incompatible with the repository under test.",
                 "- Treat raw `patch.diff` and `fix_patch.diff` as non-authoritative candidate inputs; do not pass a task based only on raw candidate patches.",
                 "- If no merged repository exists, report that the implementation is not ready for testing unless the current phase explicitly predates PATCH_MERGE.",
                 "- `build_report.md` must describe setup/build outcome or explain why build execution was not possible.",
@@ -450,6 +466,7 @@ class PromptBuilder:
                 ]
             return [
                 "- Review `merged_patch.diff` as the authoritative implementation artifact whenever it exists.",
+                "- Review `merged_patch_metadata.md` as required baseline/apply-target evidence for the authoritative patch.",
                 "- Review `patch_validation.md` as Harness-generated apply-check evidence whenever it exists.",
                 "- Treat raw `patch.diff` and `fix_patch.diff` as background candidates only, not as the delivered implementation.",
                 "- `review_report.md` must state `approved` or `changes_required`.",

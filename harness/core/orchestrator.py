@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -103,6 +104,29 @@ class NonRetryableAgentError(TaskFailedError):
 
 MATERIALIZED_SUCCESS_MARKER = ".harness_materialized_success.json"
 SINGLE_EXECUTOR_FIX_PHASES = {FIXING, REVIEW_FIXING}
+FORBIDDEN_PATCH_TOP_LEVEL_NAMES = {"artifacts", "deliver", "deliveries", "workspaces"}
+FORBIDDEN_PATCH_PATH_PARTS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+}
+FORBIDDEN_PATCH_FILE_NAMES = {
+    ".env",
+    ".npmrc",
+    ".pypirc",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+}
+FORBIDDEN_PATCH_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
 
 
 class Orchestrator:
@@ -126,6 +150,7 @@ class Orchestrator:
         self.logger = get_logger(__name__)
         self._active_task_id: str | None = None
         self._active_workflow_type: str | None = None
+        self._active_task_resume_status: str | None = None
         self.progress_callback = progress_callback
 
     def create_task(self, user_prompt: str, workflow_type: str | None = None) -> str:
@@ -151,6 +176,7 @@ class Orchestrator:
         user_prompt = self._workflow_prompt(task["user_prompt"], workflow_type)
         self._active_task_id = task_id
         self._active_workflow_type = workflow_type
+        self._active_task_resume_status = str(task.get("status") or "")
         self.repository.update_task(task_id, status=RUNNING)
         self._emit(
             ProgressEvent(
@@ -193,6 +219,7 @@ class Orchestrator:
         finally:
             self._active_task_id = None
             self._active_workflow_type = None
+            self._active_task_resume_status = None
 
     def _run_new_project_flow(self, task_id: str, user_prompt: str) -> Path:
         self._run_planning_block(task_id, user_prompt)
@@ -202,12 +229,15 @@ class Orchestrator:
         return self._run_delivery(task_id, user_prompt)
 
     def _run_bugfix_flow(self, task_id: str, user_prompt: str) -> Path:
-        for round_id in range(self.config["limits"]["max_test_fix_rounds"]):
+        max_rounds = int(self.config["limits"]["max_test_fix_rounds"])
+        start_round = self._bugfix_resume_start_round(task_id)
+        for round_id in range(start_round, start_round + max_rounds):
             self.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
             merge_ok = self._run_patch_merge(task_id, round_id, user_prompt)
             if not merge_ok:
                 continue
             self.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
+            self._run_harness_test_gate(task_id, round_id)
             test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
             if self.judge.is_test_pass(test_decision):
                 break
@@ -216,6 +246,26 @@ class Orchestrator:
         self._run_review_loop(task_id, user_prompt)
         self._run_final_judgement(task_id, user_prompt)
         return self._run_delivery(task_id, user_prompt)
+
+    def _bugfix_resume_start_round(self, task_id: str) -> int:
+        if self._active_task_id != task_id or self._active_task_resume_status != FAILED:
+            return 0
+        highest_round = self._highest_bugfix_round_id(task_id)
+        if highest_round is None:
+            return 0
+        max_rounds = int(self.config["limits"]["max_test_fix_rounds"])
+        if highest_round + 1 < max_rounds:
+            return 0
+        return highest_round + 1
+
+    def _highest_bugfix_round_id(self, task_id: str) -> int | None:
+        rounds = [
+            int(phase["round_id"])
+            for phase in self.repository.list_phases(task_id)
+            if phase["phase_type"] in {FIXING, PATCH_MERGE, TESTING, TEST_JUDGEMENT}
+            and phase["round_id"] is not None
+        ]
+        return max(rounds) if rounds else None
 
     def _run_feature_change_flow(self, task_id: str, user_prompt: str) -> Path:
         self._run_planning_block(task_id, user_prompt)
@@ -305,6 +355,7 @@ class Orchestrator:
         for round_id in range(max_rounds):
             if merge_ok:
                 self.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
+                self._run_harness_test_gate(task_id, round_id)
                 test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
                 if self.judge.is_test_pass(test_decision):
                     break
@@ -342,6 +393,7 @@ class Orchestrator:
                     required_outputs_for("tester", REGRESSION_TESTING),
                     user_prompt,
                 )
+                self._run_harness_test_gate(task_id, phase_round_id)
                 test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, phase_round_id, user_prompt)
                 if self.judge.is_test_pass(test_decision):
                     return
@@ -909,8 +961,208 @@ class Orchestrator:
             raise TaskFailedError(f"Judge did not produce decision.json for {phase}")
         payload = parse_decision_file(decision_refs[-1].path)
         normalized = self.judge.normalize(phase, payload)
+        normalized = self._apply_objective_gates_to_judge_decision(task_id, phase, round_id, normalized)
         self.repository.create_judge_decision(task_id, phase_id, phase, normalized)
         return normalized
+
+    def _apply_objective_gates_to_judge_decision(
+        self,
+        task_id: str,
+        phase: str,
+        round_id: int,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        if phase != TEST_JUDGEMENT:
+            return payload
+        gate_status = self._objective_gate_status(task_id, round_id)
+        if gate_status == "pass":
+            test_gate_status = self._test_gate_status(task_id, round_id)
+            if test_gate_status == "pass" or (test_gate_status == "skipped" and not self._require_harness_test_commands()):
+                return payload
+            reason = (
+                "Harness test gate is missing."
+                if test_gate_status is None
+                else f"Harness test gate status is {test_gate_status}."
+            )
+            return {
+                **payload,
+                "decision": "fail",
+                "tests_passed": False,
+                "test_gate_status": test_gate_status or "missing",
+                "reason": f"{reason} LLM judge cannot override missing or failed Harness-run test evidence.",
+            }
+        reason = "Objective gate is missing." if gate_status is None else f"Objective gate status is {gate_status}."
+        return {
+            **payload,
+            "decision": "fail",
+            "tests_passed": False,
+            "objective_gate_status": gate_status or "missing",
+            "reason": f"{reason} LLM judge cannot override objective gate failure.",
+        }
+
+    def _objective_gate_status(self, task_id: str, round_id: int) -> str | None:
+        for artifact in reversed(self.repository.list_artifacts(task_id, "objective_gate.md")):
+            path = Path(artifact["path"])
+            if not path.exists() or not path.is_file():
+                continue
+            content = path.read_text(encoding="utf-8", errors="replace")
+            if self._markdown_field(content, "round_id") != str(round_id):
+                continue
+            status = self._markdown_field(content, "status")
+            return status.lower() if status else None
+        return None
+
+    def _markdown_field(self, content: str, field_name: str) -> str | None:
+        prefix = f"{field_name}:"
+        for line in content.splitlines():
+            if line.startswith(prefix):
+                return line.split(":", 1)[1].strip()
+        return None
+
+    def _run_harness_test_gate(self, task_id: str, round_id: int) -> bool:
+        repo_dir = self._latest_materialized_repo(task_id)
+        commands = self._harness_test_commands(repo_dir)
+        log_dir = self.artifact_manager.artifact_root / task_id / "context" / "test_gate_logs" / f"round_{round_id}"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        results: list[dict[str, Any]] = []
+        status = "skipped"
+        if repo_dir is None:
+            status = "fail"
+            results.append({"command": "n/a", "exit_code": None, "stdout": "", "stderr": "No materialized repo exists."})
+        elif commands:
+            status = "pass"
+            for index, command in enumerate(commands, start=1):
+                stdout_path = log_dir / f"command_{index}.stdout.log"
+                stderr_path = log_dir / f"command_{index}.stderr.log"
+                try:
+                    completed = subprocess.run(
+                        command,
+                        cwd=repo_dir,
+                        text=True,
+                        shell=True,
+                        capture_output=True,
+                        check=False,
+                        timeout=int(self.config.get("testing", {}).get("timeout_seconds", 120)),
+                    )
+                    exit_code: int | str = completed.returncode
+                    stdout = completed.stdout
+                    stderr = completed.stderr
+                except subprocess.TimeoutExpired as exc:
+                    exit_code = "timeout"
+                    stdout = self._timeout_output_to_text(exc.stdout)
+                    stderr = self._timeout_output_to_text(exc.stderr)
+                    stderr = (stderr + "\n" if stderr else "") + f"Command timed out after {exc.timeout}s."
+                stdout_path.write_text(stdout, encoding="utf-8")
+                stderr_path.write_text(stderr, encoding="utf-8")
+                results.append(
+                    {
+                        "command": command,
+                        "exit_code": exit_code,
+                        "stdout": str(stdout_path),
+                        "stderr": str(stderr_path),
+                    }
+                )
+                if exit_code != 0:
+                    status = "fail"
+        elif self._require_harness_test_commands():
+            status = "fail"
+            results.append({"command": "n/a", "exit_code": None, "stdout": "", "stderr": "No Harness test command configured or detected."})
+        report = self._test_gate_report(task_id, round_id, repo_dir, status, results)
+        self.artifact_manager.create_text_artifact(
+            task_id,
+            "test_gate.md",
+            report,
+            role="orchestrator",
+            agent_id="test-gate",
+        )
+        return status == "pass"
+
+    def _timeout_output_to_text(self, value: str | bytes | None) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value
+
+    def _require_harness_test_commands(self) -> bool:
+        testing = self.config.get("testing", {})
+        return bool(testing.get("require_commands", False)) if isinstance(testing, dict) else False
+
+    def _harness_test_commands(self, repo_dir: Path | None) -> list[str]:
+        testing = self.config.get("testing", {})
+        configured = testing.get("commands") if isinstance(testing, dict) else None
+        if isinstance(configured, list) and configured:
+            return [str(command) for command in configured if str(command).strip()]
+        if repo_dir is None:
+            return []
+        if (repo_dir / "tests").exists():
+            return [f"{sys.executable} -m pytest -q"]
+        if self._repo_has_python_files(repo_dir):
+            return [f"{sys.executable} -m compileall -q ."]
+        package_json = repo_dir / "package.json"
+        if package_json.exists() and shutil.which("npm"):
+            try:
+                payload = json.loads(package_json.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return []
+            scripts = payload.get("scripts") if isinstance(payload, dict) else None
+            if isinstance(scripts, dict) and scripts.get("test"):
+                return ["npm test"]
+            if isinstance(scripts, dict) and scripts.get("build"):
+                return ["npm run build"]
+        return []
+
+    def _repo_has_python_files(self, repo_dir: Path) -> bool:
+        for path in repo_dir.rglob("*.py"):
+            if any(part in {".venv", "venv", "__pycache__"} for part in path.parts):
+                continue
+            return True
+        return False
+
+    def _test_gate_report(
+        self,
+        task_id: str,
+        round_id: int,
+        repo_dir: Path | None,
+        status: str,
+        results: list[dict[str, Any]],
+    ) -> str:
+        lines = [
+            "# Harness Test Gate",
+            "",
+            f"status: {status}",
+            f"task_id: {task_id}",
+            f"round_id: {round_id}",
+            f"repo_path: {repo_dir or 'none'}",
+            "",
+            "## Commands",
+            "",
+        ]
+        if not results:
+            lines.append("- none")
+        for result in results:
+            lines.extend(
+                [
+                    f"- command: {result['command']}",
+                    f"  exit_code: {result['exit_code'] if result['exit_code'] is not None else 'n/a'}",
+                    f"  stdout: {result['stdout'] or '-'}",
+                    f"  stderr: {result['stderr'] or '-'}",
+                ]
+            )
+        lines.append("")
+        return "\n".join(lines)
+
+    def _test_gate_status(self, task_id: str, round_id: int) -> str | None:
+        for artifact in reversed(self.repository.list_artifacts(task_id, "test_gate.md")):
+            path = Path(artifact["path"])
+            if not path.exists() or not path.is_file():
+                continue
+            content = path.read_text(encoding="utf-8", errors="replace")
+            if self._markdown_field(content, "round_id") != str(round_id):
+                continue
+            status = self._markdown_field(content, "status")
+            return status.lower() if status else None
+        return None
 
     def _run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:
         self.run_role_phase(
@@ -924,17 +1176,18 @@ class Orchestrator:
         return self._run_patch_validation(task_id, round_id)
 
     def _run_patch_validation(self, task_id: str, round_id: int) -> bool:
-        merged_artifacts = self.repository.list_artifacts(task_id, "merged_patch.diff")
-        if not merged_artifacts:
+        latest = self._latest_merged_patch_for_round(task_id, round_id)
+        if not latest:
             return False
-        latest = merged_artifacts[-1]
         patch_path = Path(latest["path"])
         if not patch_path.exists():
             return False
         source_repo = self._source_repo_for_existing_project_task(task_id)
+        scope_ok, scope_errors, changed_files = self._validate_patch_scope(patch_path)
         report = self._validate_patch_apply_check(patch_path, source_repo)
         status = self._patch_validation_status(report)
         materialize_status = "skipped"
+        diff_check_status = "skipped"
         materialized_repo: Path | None = None
         materialize_report = self._materialized_repo_report(
             task_id=task_id,
@@ -942,22 +1195,42 @@ class Orchestrator:
             patch_path=patch_path,
             source_repo=source_repo,
             status="skipped",
+            diff_check_status=diff_check_status,
             repo_path=None,
             stdout="",
-            stderr=f"Patch validation status was {status}; materialization only runs when status is pass.",
+            stderr=self._materialization_skip_reason(status, scope_ok, scope_errors),
             exit_code=None,
+            diff_check_stdout="",
+            diff_check_stderr="",
+            diff_check_exit_code=None,
         )
-        if status == "pass":
+        if status == "pass" and scope_ok:
             materialized_repo, materialize_report = self._materialize_merged_patch_repo(
                 task_id,
                 round_id,
                 patch_path,
                 source_repo,
+                changed_files,
             )
             materialize_status = self._materialized_repo_status(materialize_report)
+            diff_check_status = self._materialized_repo_field(materialize_report, "diff_check_status") or "unknown"
             if materialized_repo is None:
                 if materialize_status in {"failed", "skipped"}:
                     status = "fail"
+        objective_status = "pass" if scope_ok and status == "pass" and materialize_status == "success" and diff_check_status == "pass" else "fail"
+        objective_report = self._objective_gate_report(
+            task_id=task_id,
+            round_id=round_id,
+            patch_path=patch_path,
+            source_repo=source_repo,
+            status=objective_status,
+            scope_ok=scope_ok,
+            scope_errors=scope_errors,
+            changed_files=changed_files,
+            patch_apply_status=status,
+            materialize_status=materialize_status,
+            diff_check_status=diff_check_status,
+        )
         ref = self.artifact_manager.create_text_artifact(
             task_id,
             "patch_validation.md",
@@ -974,6 +1247,14 @@ class Orchestrator:
             role="orchestrator",
             agent_id="patch-materializer",
         )
+        objective_ref = self.artifact_manager.create_text_artifact(
+            task_id,
+            "objective_gate.md",
+            objective_report,
+            phase_id=latest.get("phase_id"),
+            role="orchestrator",
+            agent_id="objective-gate",
+        )
         self._emit(
             ProgressEvent(
                 "patch_validated",
@@ -982,17 +1263,119 @@ class Orchestrator:
                 role="orchestrator",
                 agent_id="patch-validator",
                 round_id=round_id,
-                status=status.upper(),
-                message=f"Patch validation {status}",
+                status=objective_status.upper(),
+                message=f"Objective patch gate {objective_status}",
                 data={
-                    "artifacts": 2,
+                    "artifacts": 3,
                     "patch_validation": str(ref.path),
                     "materialized_repo_report": str(materialized_ref.path),
+                    "objective_gate": str(objective_ref.path),
                     "materialized_repo": str(materialized_repo) if materialized_repo else "-",
                 },
             )
         )
-        return status == "pass" and materialize_status == "success"
+        return objective_status == "pass"
+
+    def _latest_merged_patch_for_round(self, task_id: str, round_id: int) -> dict[str, Any] | None:
+        patch_merge_phase_ids = {
+            phase["phase_id"]
+            for phase in self.repository.list_phases(task_id)
+            if phase["phase_type"] == PATCH_MERGE and phase["round_id"] == round_id
+        }
+        if not patch_merge_phase_ids:
+            return None
+        candidates = [
+            artifact
+            for artifact in self.repository.list_artifacts(task_id, "merged_patch.diff")
+            if artifact.get("phase_id") in patch_merge_phase_ids
+        ]
+        return candidates[-1] if candidates else None
+
+    def _validate_patch_scope(self, patch_path: Path) -> tuple[bool, list[str], list[Path]]:
+        patch_text = patch_path.read_text(encoding="utf-8", errors="replace")
+        changed_files = self._changed_files_from_unified_diff(patch_text)
+        errors: list[str] = []
+        if not changed_files:
+            errors.append("merged_patch.diff does not contain any changed files")
+        for relative_path in changed_files:
+            errors.extend(self._patch_path_scope_errors(relative_path))
+        return not errors, errors, changed_files
+
+    def _changed_files_from_unified_diff(self, patch_text: str) -> list[Path]:
+        changed: list[Path] = []
+        for line in patch_text.splitlines():
+            if not line.startswith("diff --git "):
+                continue
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            for raw_path in (parts[2], parts[3]):
+                path = self._strip_diff_path(raw_path)
+                if path != Path("/dev/null") and path not in changed:
+                    changed.append(path)
+        return changed
+
+    def _patch_path_scope_errors(self, relative_path: Path) -> list[str]:
+        errors: list[str] = []
+        if not self._is_safe_relative_path(relative_path):
+            return [f"unsafe path: {relative_path}"]
+        parts = set(relative_path.parts)
+        if relative_path.parts and relative_path.parts[0] in FORBIDDEN_PATCH_TOP_LEVEL_NAMES:
+            errors.append(f"forbidden generated top-level path: {relative_path}")
+        forbidden_parts = sorted(parts & FORBIDDEN_PATCH_PATH_PARTS)
+        if forbidden_parts:
+            errors.append(f"forbidden path component(s) {', '.join(forbidden_parts)} in {relative_path}")
+        name = relative_path.name
+        if name in FORBIDDEN_PATCH_FILE_NAMES or name.startswith(".env."):
+            errors.append(f"forbidden sensitive file path: {relative_path}")
+        if relative_path.suffix in FORBIDDEN_PATCH_SUFFIXES:
+            errors.append(f"forbidden sensitive file suffix: {relative_path}")
+        return errors
+
+    def _materialization_skip_reason(self, patch_status: str, scope_ok: bool, scope_errors: list[str]) -> str:
+        if not scope_ok:
+            return "Patch scope gate failed; materialization was not run.\n" + "\n".join(scope_errors)
+        return f"Patch validation status was {patch_status}; materialization only runs when status is pass."
+
+    def _objective_gate_report(
+        self,
+        *,
+        task_id: str,
+        round_id: int,
+        patch_path: Path,
+        source_repo: Path | None,
+        status: str,
+        scope_ok: bool,
+        scope_errors: list[str],
+        changed_files: list[Path],
+        patch_apply_status: str,
+        materialize_status: str,
+        diff_check_status: str,
+    ) -> str:
+        return "\n".join(
+            [
+                "# Objective Gate",
+                "",
+                f"status: {status}",
+                f"task_id: {task_id}",
+                f"round_id: {round_id}",
+                f"patch: {patch_path}",
+                f"source_repo: {source_repo or 'none'}",
+                f"scope_status: {'pass' if scope_ok else 'fail'}",
+                f"patch_apply_status: {patch_apply_status}",
+                f"materialize_status: {materialize_status}",
+                f"diff_check_status: {diff_check_status}",
+                "",
+                "## Changed Files",
+                "",
+                *(f"- {path}" for path in changed_files),
+                "",
+                "## Scope Errors",
+                "",
+                *(f"- {error}" for error in scope_errors),
+                "",
+            ]
+        )
 
     def _validate_patch_apply_check(self, patch_path: Path, source_repo: Path | None) -> str:
         if not shutil.which("git"):
@@ -1082,10 +1465,14 @@ class Orchestrator:
         return "unknown"
 
     def _materialized_repo_status(self, report: str) -> str:
+        return self._materialized_repo_field(report, "status") or "unknown"
+
+    def _materialized_repo_field(self, report: str, field_name: str) -> str | None:
+        prefix = f"{field_name}: "
         for line in report.splitlines():
-            if line.startswith("status: "):
+            if line.startswith(prefix):
                 return line.split(":", 1)[1].strip().lower()
-        return "unknown"
+        return None
 
     def _materialize_merged_patch_repo(
         self,
@@ -1093,6 +1480,7 @@ class Orchestrator:
         round_id: int,
         patch_path: Path,
         source_repo: Path | None,
+        changed_files: list[Path] | None = None,
     ) -> tuple[Path | None, str]:
         if not shutil.which("git"):
             return None, self._materialized_repo_report(
@@ -1101,10 +1489,14 @@ class Orchestrator:
                 patch_path=patch_path,
                 source_repo=source_repo,
                 status="skipped",
+                diff_check_status="skipped",
                 repo_path=None,
                 stdout="",
                 stderr="git executable was not found on PATH.",
                 exit_code=None,
+                diff_check_stdout="",
+                diff_check_stderr="",
+                diff_check_exit_code=None,
             )
         repo_dir = self._materialized_repo_dir(task_id, round_id)
         tmp_repo_dir = repo_dir.parent / f".repo_tmp_{uuid.uuid4().hex}"
@@ -1115,6 +1507,7 @@ class Orchestrator:
             self._copy_source_for_patch_validation(source_repo, tmp_repo_dir)
         else:
             tmp_repo_dir.mkdir(parents=True, exist_ok=True)
+        self._initialize_diff_check_repo(tmp_repo_dir)
         completed = subprocess.run(
             ["git", "apply", "--whitespace=nowarn", str(patch_path)],
             cwd=tmp_repo_dir,
@@ -1131,10 +1524,40 @@ class Orchestrator:
                 patch_path=patch_path,
                 source_repo=source_repo,
                 status="failed",
+                diff_check_status="skipped",
                 repo_path=None,
                 stdout=completed.stdout,
                 stderr=completed.stderr,
                 exit_code=completed.returncode,
+                diff_check_stdout="",
+                diff_check_stderr="",
+                diff_check_exit_code=None,
+            )
+        self._stage_new_files_for_diff_check(tmp_repo_dir, changed_files or [])
+        diff_check = subprocess.run(
+            ["git", "diff", "--check"],
+            cwd=tmp_repo_dir,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if diff_check.returncode != 0:
+            if tmp_repo_dir.exists():
+                shutil.rmtree(tmp_repo_dir)
+            return None, self._materialized_repo_report(
+                task_id=task_id,
+                round_id=round_id,
+                patch_path=patch_path,
+                source_repo=source_repo,
+                status="failed",
+                diff_check_status="fail",
+                repo_path=None,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                exit_code=completed.returncode,
+                diff_check_stdout=diff_check.stdout,
+                diff_check_stderr=diff_check.stderr,
+                diff_check_exit_code=diff_check.returncode,
             )
         self._write_materialized_success_marker(tmp_repo_dir, task_id, round_id, patch_path)
         tmp_repo_dir.rename(repo_dir)
@@ -1144,10 +1567,32 @@ class Orchestrator:
             patch_path=patch_path,
             source_repo=source_repo,
             status="success",
+            diff_check_status="pass",
             repo_path=repo_dir,
             stdout=completed.stdout,
             stderr=completed.stderr,
             exit_code=completed.returncode,
+            diff_check_stdout=diff_check.stdout,
+            diff_check_stderr=diff_check.stderr,
+            diff_check_exit_code=diff_check.returncode,
+        )
+
+    def _initialize_diff_check_repo(self, repo_dir: Path) -> None:
+        if not shutil.which("git"):
+            return
+        subprocess.run(["git", "init", "-q"], cwd=repo_dir, text=True, capture_output=True, check=False)
+        subprocess.run(["git", "add", "-A"], cwd=repo_dir, text=True, capture_output=True, check=False)
+
+    def _stage_new_files_for_diff_check(self, repo_dir: Path, changed_files: list[Path]) -> None:
+        safe_paths = [str(path) for path in changed_files if self._is_safe_relative_path(path)]
+        if not safe_paths:
+            return
+        subprocess.run(
+            ["git", "add", "-N", "--", *safe_paths],
+            cwd=repo_dir,
+            text=True,
+            capture_output=True,
+            check=False,
         )
 
     def _write_materialized_success_marker(self, repo_dir: Path, task_id: str, round_id: int, patch_path: Path) -> None:
@@ -1168,10 +1613,14 @@ class Orchestrator:
         patch_path: Path,
         source_repo: Path | None,
         status: str,
+        diff_check_status: str,
         repo_path: Path | None,
         stdout: str,
         stderr: str,
         exit_code: int | None,
+        diff_check_stdout: str,
+        diff_check_stderr: str,
+        diff_check_exit_code: int | None,
     ) -> str:
         return "\n".join(
             [
@@ -1183,8 +1632,11 @@ class Orchestrator:
                 f"repo_path: {repo_path or 'none'}",
                 f"patch: {patch_path}",
                 f"source_repo: {source_repo or 'none'}",
+                f"diff_check_status: {diff_check_status}",
                 "command: git apply --whitespace=nowarn <merged_patch.diff>",
                 f"exit_code: {exit_code if exit_code is not None else 'n/a'}",
+                "diff_check_command: git diff --check",
+                f"diff_check_exit_code: {diff_check_exit_code if diff_check_exit_code is not None else 'n/a'}",
                 "",
                 "## stdout",
                 "",
@@ -1196,6 +1648,18 @@ class Orchestrator:
                 "",
                 "```text",
                 stderr.strip(),
+                "```",
+                "",
+                "## diff check stdout",
+                "",
+                "```text",
+                diff_check_stdout.strip(),
+                "```",
+                "",
+                "## diff check stderr",
+                "",
+                "```text",
+                diff_check_stderr.strip(),
                 "```",
                 "",
             ]
@@ -1554,8 +2018,16 @@ class Orchestrator:
 
         latest_authoritative: dict[str, dict[str, Any]] = {}
         filtered: list[dict[str, Any]] = []
-        candidate_patch_types = {"patch.diff", "fix_patch.diff"}
-        authoritative_types = {"merged_patch.diff", "merge_report.md", "patch_validation.md", "materialized_repo.md"}
+        candidate_patch_types = {"patch.diff", "fix_patch.diff", "patch_metadata.md"}
+        authoritative_types = {
+            "merged_patch.diff",
+            "merged_patch_metadata.md",
+            "merge_report.md",
+            "patch_validation.md",
+            "materialized_repo.md",
+            "objective_gate.md",
+            "test_gate.md",
+        }
         for artifact in artifacts:
             artifact_type = artifact["artifact_type"]
             phase_row = phases_by_id.get(artifact.get("phase_id") or "")
@@ -1683,6 +2155,7 @@ class Orchestrator:
                     "implementation_plan.md",
                     "changed_files.md",
                     "patch.diff",
+                    "patch_metadata.md",
                     "fix_schedule.md",
                     "fix_patch.diff",
                     "fix_notes.md",
@@ -1694,6 +2167,7 @@ class Orchestrator:
                     "decision.json",
                     "decision_summary.md",
                     "merged_patch.diff",
+                    "merged_patch_metadata.md",
                     "merge_report.md",
                 }
             if phase == FIXING:
@@ -1701,8 +2175,12 @@ class Orchestrator:
                     "implementation_plan.md",
                     "changed_files.md",
                     "merged_patch.diff",
+                    "merged_patch_metadata.md",
                     "patch_validation.md",
                     "materialized_repo.md",
+                    "objective_gate.md",
+                    "test_gate.md",
+                    "patch_metadata.md",
                     "self_check.md",
                     "merge_report.md",
                     "build_report.md",
@@ -1716,8 +2194,12 @@ class Orchestrator:
                     "implementation_plan.md",
                     "changed_files.md",
                     "merged_patch.diff",
+                    "merged_patch_metadata.md",
                     "patch_validation.md",
                     "materialized_repo.md",
+                    "objective_gate.md",
+                    "test_gate.md",
+                    "patch_metadata.md",
                     "self_check.md",
                     "merge_report.md",
                     "build_report.md",
@@ -1733,8 +2215,12 @@ class Orchestrator:
                 "implementation_plan.md",
                 "changed_files.md",
                 "merged_patch.diff",
+                "merged_patch_metadata.md",
                 "patch_validation.md",
                 "materialized_repo.md",
+                "objective_gate.md",
+                "test_gate.md",
+                "patch_metadata.md",
                 "fix_schedule.md",
                 "fix_notes.md",
                 "self_check.md",
@@ -1755,8 +2241,12 @@ class Orchestrator:
                 "implementation_plan.md",
                 "changed_files.md",
                 "merged_patch.diff",
+                "merged_patch_metadata.md",
                 "patch_validation.md",
                 "materialized_repo.md",
+                "objective_gate.md",
+                "test_gate.md",
+                "patch_metadata.md",
                 "fix_schedule.md",
                 "fix_notes.md",
                 "self_check.md",
@@ -1912,11 +2402,15 @@ class Orchestrator:
     def _publish_supporting_artifacts(self, task_id: str, project_dir: Path) -> list[tuple[str, Path]]:
         artifact_types = [
             "merged_patch.diff",
+            "merged_patch_metadata.md",
             "patch_validation.md",
             "materialized_repo.md",
+            "objective_gate.md",
+            "test_gate.md",
             "merge_report.md",
             "patch.diff",
             "fix_patch.diff",
+            "patch_metadata.md",
             "implementation_plan.md",
             "selected_plan.md",
             "changed_files.md",

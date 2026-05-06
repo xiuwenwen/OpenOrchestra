@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from harness.agents.context import AgentRunContext
+from harness.artifacts.schemas import required_outputs_for
 from harness.prompts.builder import PromptBuilder
 
 
@@ -86,7 +87,7 @@ def test_prompt_builder_has_model_driven_patch_merge_contract(tmp_path: Path) ->
         output_dir=tmp_path / "workspace" / "output",
         log_dir=tmp_path / "workspace" / "logs",
         input_artifacts=[],
-        required_outputs=["merged_patch.diff", "merge_report.md", "delivery.md"],
+        required_outputs=required_outputs_for("executor", "PATCH_MERGE"),
         timeout_seconds=30,
         config={"roles": {"executor": {"count": 1}}},
     )
@@ -97,6 +98,39 @@ def test_prompt_builder_has_model_driven_patch_merge_contract(tmp_path: Path) ->
     assert "Do not concatenate blindly" in prompt
     assert "exactly one authoritative `merged_patch.diff`" in prompt
     assert "do not paste a large merged diff as a Write-tool payload" in prompt
+    assert "`patch_metadata.md`" in prompt
+    assert "`merged_patch_metadata.md`" in prompt
+    assert "Do not select a patch based only on filename" in prompt
+    assert "Prior `merged_patch.diff` artifacts are historical evidence" in prompt
+
+
+def test_executor_patch_outputs_require_baseline_metadata(tmp_path: Path) -> None:
+    context = AgentRunContext(
+        task_id="task-1",
+        phase_id="phase-1",
+        phase="FIXING",
+        role="executor",
+        agent_id="executor-1",
+        round_id=2,
+        user_prompt="Fix the failing scheduler test.",
+        role_instruction="Produce a fix patch.",
+        workspace_dir=tmp_path / "workspace",
+        repo_dir=tmp_path / "workspace" / "repo",
+        input_dir=tmp_path / "workspace" / "input",
+        output_dir=tmp_path / "workspace" / "output",
+        log_dir=tmp_path / "workspace" / "logs",
+        input_artifacts=[],
+        required_outputs=required_outputs_for("executor", "FIXING"),
+        timeout_seconds=30,
+        config={},
+    )
+
+    prompt = PromptBuilder().build(context)
+
+    assert "Produce `patch_metadata.md` next to the patch" in prompt
+    assert "`base_source_path`" in prompt
+    assert "For FIXING and REVIEW_FIXING, prefer `patch_scope: incremental_fix`" in prompt
+    assert "historical empty project baseline" in prompt
 
 
 def test_prompt_builder_uses_balanced_planner_when_count_is_one(tmp_path: Path) -> None:

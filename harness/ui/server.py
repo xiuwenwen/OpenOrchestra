@@ -1065,7 +1065,7 @@ function latestRolePhaseRuns(roleRuns, latest) {
 }
 
 function preferredRoleArtifacts(roleRuns) {
-  const priority = ["peer_review.md","selected_plan.md","plan.md","todo_breakdown.md","final_delivery.md","usage_guide.md","response.md","merged_patch.diff","merge_report.md","test_report.md","bug_report.md","review_report.md","decision_summary.md","delivery.md"];
+  const priority = ["peer_review.md","selected_plan.md","plan.md","todo_breakdown.md","final_delivery.md","usage_guide.md","response.md","merged_patch.diff","merged_patch_metadata.md","merge_report.md","patch_metadata.md","test_report.md","bug_report.md","review_report.md","decision_summary.md","delivery.md"];
   return roleRuns.flatMap(run => preferredArtifacts(run).map(artifact => ({agent_id: run.agent_id, artifact})))
     .sort((a, b) => {
       const byPriority = priorityIndex(a.artifact.artifact_type, priority) - priorityIndex(b.artifact.artifact_type, priority);
@@ -1076,7 +1076,7 @@ function preferredRoleArtifacts(roleRuns) {
 }
 
 function preferredArtifacts(run) {
-  const priority = ["peer_review.md","selected_plan.md","plan.md","todo_breakdown.md","final_delivery.md","usage_guide.md","response.md","merged_patch.diff","merge_report.md","test_report.md","bug_report.md","review_report.md","decision_summary.md","delivery.md"];
+  const priority = ["peer_review.md","selected_plan.md","plan.md","todo_breakdown.md","final_delivery.md","usage_guide.md","response.md","merged_patch.diff","merged_patch_metadata.md","merge_report.md","patch_metadata.md","test_report.md","bug_report.md","review_report.md","decision_summary.md","delivery.md"];
   return (run.artifacts || []).slice().sort((a, b) => priorityIndex(a.artifact_type, priority) - priorityIndex(b.artifact_type, priority)).slice(0, 3);
 }
 

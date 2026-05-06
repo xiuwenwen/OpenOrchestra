@@ -101,10 +101,61 @@ class MockAgentAdapter(AgentAdapter):
         if context.role == "judge" and name == "decision_summary.md":
             payload = self._decision_payload(context)
             return f"# Decision Summary\n\nDecision: {payload['decision']}\nReason: {payload['reason']}\n"
+        if context.role == "executor" and name == "patch_metadata.md":
+            return self._patch_metadata(context)
+        if context.role == "executor" and name == "merged_patch_metadata.md":
+            return self._merged_patch_metadata(context)
         if name.endswith(".diff"):
             return "diff --git a/mock.txt b/mock.txt\nnew file mode 100644\n--- /dev/null\n+++ b/mock.txt\n@@ -0,0 +1 @@\n+mock change\n"
         title = name.replace("_", " ").replace(".md", "").title()
         return f"# {title}\n\nMock output for role `{context.role}` in phase `{context.phase}`.\n"
+
+    def _patch_metadata(self, context: AgentRunContext) -> str:
+        patch_artifact = "fix_patch.diff" if context.phase in {"FIXING", "REVIEW_FIXING"} else "patch.diff"
+        patch_scope = "incremental_fix" if patch_artifact == "fix_patch.diff" else "full_project"
+        source_type = context.config.get("repository_source_type") or context.config.get("project_context", {}).get(
+            "repository_source_type", "mock_repo"
+        )
+        source_path = context.config.get("repository_source_path") or context.config.get("project_context", {}).get(
+            "repository_source_path", str(context.repo_dir)
+        )
+        return (
+            "# Patch Metadata\n\n"
+            "status: success\n"
+            f"patch_artifact: {patch_artifact}\n"
+            f"base_source_type: {source_type}\n"
+            f"base_source_path: {source_path}\n"
+            f"base_round: {context.round_id}\n"
+            f"base_task_id: {context.task_id}\n"
+            f"apply_target: {context.repo_dir}\n"
+            f"patch_scope: {patch_scope}\n"
+            "changed_files: mock.txt\n"
+            f"expected_apply_command: git apply --check {patch_artifact}\n"
+            "compatibility_notes: Mock metadata targets the current role repository workspace.\n"
+        )
+
+    def _merged_patch_metadata(self, context: AgentRunContext) -> str:
+        source_type = context.config.get("repository_source_type") or context.config.get("project_context", {}).get(
+            "repository_source_type", "mock_repo"
+        )
+        source_path = context.config.get("repository_source_path") or context.config.get("project_context", {}).get(
+            "repository_source_path", str(context.repo_dir)
+        )
+        return (
+            "# Merged Patch Metadata\n\n"
+            "status: success\n"
+            "patch_artifact: merged_patch.diff\n"
+            f"base_source_type: {source_type}\n"
+            f"base_source_path: {source_path}\n"
+            f"base_round: {context.round_id}\n"
+            f"base_task_id: {context.task_id}\n"
+            f"apply_target: {context.repo_dir}\n"
+            "patch_scope: merged_authoritative\n"
+            "changed_files: mock.txt\n"
+            "selected_candidate_metadata: patch_metadata.md\n"
+            "expected_apply_command: git apply --check merged_patch.diff\n"
+            "compatibility_notes: Mock merged patch metadata matches the current PATCH_MERGE workspace.\n"
+        )
 
     def _decision_payload(self, context: AgentRunContext) -> dict[str, object]:
         if context.phase == PLAN_JUDGEMENT:

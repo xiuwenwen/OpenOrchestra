@@ -1133,9 +1133,11 @@ class InteractiveCLI:
             "success_path.md",
             "artifacts_manifest.md",
             "merged_patch.diff",
+            "merged_patch_metadata.md",
             "merge_report.md",
             "patch.diff",
             "fix_patch.diff",
+            "patch_metadata.md",
             "response.md",
         ):
             path = self._latest_artifact_path(task_id, artifact_type)
@@ -1179,7 +1181,14 @@ class InteractiveCLI:
         latest_repo = self._latest_agent_repo_path(task_id)
         if latest_repo:
             lines.append(f"Historical latest_agent_repo_workspace: {latest_repo}")
-        for artifact_type in ("merged_patch.diff", "merge_report.md", "patch.diff", "fix_patch.diff"):
+        for artifact_type in (
+            "merged_patch.diff",
+            "merged_patch_metadata.md",
+            "merge_report.md",
+            "patch.diff",
+            "fix_patch.diff",
+            "patch_metadata.md",
+        ):
             path = self._latest_artifact_path(task_id, artifact_type)
             if path:
                 lines.append(f"Historical {artifact_type} path: {path}")

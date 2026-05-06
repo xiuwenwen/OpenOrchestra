@@ -68,6 +68,10 @@ artifact_input:
   max_file_bytes: 262144
   max_total_bytes: 1048576
 
+testing:
+  require_commands: true
+  commands: []
+
 policy:
   different_roles_can_run_concurrently: false
   same_role_can_run_concurrently: true

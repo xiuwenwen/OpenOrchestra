@@ -10,11 +10,11 @@ REQUIRED_OUTPUTS: dict[str, dict[str, list[str]] | list[str]] = {
         "PLANNING_REVISION": ["plan.md", "assumptions.md", "risk.md", "todo_breakdown.md"],
     },
     "executor": {
-        "EXECUTION": ["implementation_plan.md", "changed_files.md", "patch.diff", "self_check.md"],
-        "PATCH_MERGE": ["merged_patch.diff", "merge_report.md"],
+        "EXECUTION": ["implementation_plan.md", "changed_files.md", "patch.diff", "patch_metadata.md", "self_check.md"],
+        "PATCH_MERGE": ["merged_patch.diff", "merged_patch_metadata.md", "merge_report.md"],
         "MISC_RESPONSE": ["response.md", "notes.md"],
-        "FIXING": ["fix_schedule.md", "fix_patch.diff", "fix_notes.md", "self_check.md"],
-        "REVIEW_FIXING": ["fix_schedule.md", "fix_patch.diff", "fix_notes.md", "self_check.md"],
+        "FIXING": ["fix_schedule.md", "fix_patch.diff", "patch_metadata.md", "fix_notes.md", "self_check.md"],
+        "REVIEW_FIXING": ["fix_schedule.md", "fix_patch.diff", "patch_metadata.md", "fix_notes.md", "self_check.md"],
     },
     "tester": ["build_report.md", "test_report.md", "bug_report.md"],
     "reviewer": {

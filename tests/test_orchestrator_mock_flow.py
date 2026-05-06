@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import uuid
 import re
 from pathlib import Path
@@ -10,7 +11,7 @@ from harness.artifacts.schemas import required_outputs_for
 import harness.core.orchestrator as orchestrator_module
 from harness.core.orchestrator import Orchestrator
 from harness.core.progress import ProgressEvent
-from harness.core.state_machine import FIXING, PATCH_MERGE, PLAN_JUDGEMENT, PLANNING_DRAFT, REVIEW_FIXING, RUNNING
+from harness.core.state_machine import FAILED, FIXING, PATCH_MERGE, PLAN_JUDGEMENT, PLANNING_DRAFT, REVIEW_FIXING, RUNNING
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 
 
@@ -115,6 +116,32 @@ def test_orchestrator_bugfix_flow_uses_persisted_workflow_and_runs_review(tmp_pa
     assert final_delivery.exists()
 
 
+def test_failed_exhausted_bugfix_continue_appends_new_round_window(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_test_fix_rounds"] = 2
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("fix a failing command", workflow_type=BUGFIX)
+    for round_id in (0, 1):
+        orchestrator.repository.create_phase(task_id, FIXING, "executor", round_id, status="COMPLETED")
+        orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", round_id, status="COMPLETED")
+    orchestrator.repository.update_task(task_id, status=FAILED, current_phase=PATCH_MERGE, current_role="executor")
+    called_rounds: list[int] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        called_rounds.append(round_id)
+        return []
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+    monkeypatch.setattr(orchestrator, "_run_patch_merge", lambda task_id, round_id, user_prompt: False)
+
+    try:
+        orchestrator.run_task(task_id, workflow_type=BUGFIX)
+    except orchestrator_module.TaskFailedError:
+        pass
+
+    assert called_rounds == [2, 3]
+
+
 def test_orchestrator_feature_change_flow_completes(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("add a feature")
@@ -126,6 +153,25 @@ def test_orchestrator_feature_change_flow_completes(tmp_path: Path) -> None:
     assert "EXECUTION" in phases
     assert "REVIEWING" in phases
     assert final_delivery.exists()
+
+
+def test_regression_testing_runs_harness_test_gate_before_judgement(monkeypatch, tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("review fix", workflow_type=BUGFIX)
+    gate_rounds: list[int] = []
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", lambda *args, **kwargs: [])
+
+    def fake_test_gate(task_id: str, round_id: int) -> bool:
+        gate_rounds.append(round_id)
+        return True
+
+    monkeypatch.setattr(orchestrator, "_run_harness_test_gate", fake_test_gate)
+    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: {"decision": "pass", "tests_passed": True})
+
+    orchestrator._run_regression_test_fix_loop(task_id, "review fix", review_round_id=1, merge_ok=True)
+
+    assert gate_rounds == [5]
 
 
 def test_planning_block_retries_until_judge_approves(monkeypatch, tmp_path: Path) -> None:
@@ -607,11 +653,229 @@ def test_patch_validation_uses_project_context_source_repo(tmp_path: Path) -> No
     assert orchestrator._run_patch_validation(task_id, 0)
     validation_report = Path(orchestrator.repository.list_artifacts(task_id, "patch_validation.md")[-1]["path"]).read_text(encoding="utf-8")
     materialized_report = Path(orchestrator.repository.list_artifacts(task_id, "materialized_repo.md")[-1]["path"]).read_text(encoding="utf-8")
+    objective_report = Path(orchestrator.repository.list_artifacts(task_id, "objective_gate.md")[-1]["path"]).read_text(encoding="utf-8")
     materialized_app = orchestrator._latest_materialized_repo(task_id) / "app.py"
 
     assert f"source_repo: {historical_source.resolve()}" in validation_report
     assert f"source_repo: {historical_source.resolve()}" in materialized_report
+    assert "status: pass" in objective_report
+    assert "diff_check_status: pass" in materialized_report
     assert materialized_app.read_text(encoding="utf-8") == "new\n"
+
+
+def test_objective_patch_gate_rejects_sensitive_files(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("do not write secrets", workflow_type=BUGFIX)
+    phase_id = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 0, status="COMPLETED")
+    patch = tmp_path / "merged_patch.diff"
+    patch.write_text(
+        "diff --git a/.env b/.env\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/.env\n"
+        "@@ -0,0 +1 @@\n"
+        "+TOKEN=secret\n",
+        encoding="utf-8",
+    )
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id="sensitive-patch",
+            task_id=task_id,
+            phase_id=phase_id,
+            role="executor",
+            agent_id="executor-1",
+            artifact_type="merged_patch.diff",
+            path=patch,
+            version=1,
+            hash="hash",
+        )
+    )
+
+    assert not orchestrator._run_patch_validation(task_id, 0)
+    objective_report = Path(orchestrator.repository.list_artifacts(task_id, "objective_gate.md")[-1]["path"]).read_text(encoding="utf-8")
+
+    assert "status: fail" in objective_report
+    assert "scope_status: fail" in objective_report
+    assert "forbidden sensitive file path: .env" in objective_report
+
+
+def test_test_judgement_cannot_override_failed_objective_gate(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("judge hard gate", workflow_type=BUGFIX)
+    gate = tmp_path / "objective_gate.md"
+    gate.write_text(
+        "# Objective Gate\n\n"
+        "status: fail\n"
+        f"task_id: {task_id}\n"
+        "round_id: 0\n",
+        encoding="utf-8",
+    )
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id="objective-gate",
+            task_id=task_id,
+            phase_id=None,
+            role="orchestrator",
+            agent_id="objective-gate",
+            artifact_type="objective_gate.md",
+            path=gate,
+            version=1,
+            hash="hash",
+        )
+    )
+
+    decision = orchestrator._apply_objective_gates_to_judge_decision(
+        task_id,
+        "TEST_JUDGEMENT",
+        0,
+        {"decision": "pass", "tests_passed": True, "reason": "LLM says OK"},
+    )
+
+    assert decision["decision"] == "fail"
+    assert decision["tests_passed"] is False
+    assert decision["objective_gate_status"] == "fail"
+
+
+def test_harness_test_gate_runs_detected_pytest(monkeypatch, tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("run tests", workflow_type=BUGFIX)
+    repo = tmp_path / "repo"
+    tests_dir = repo / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    monkeypatch.setattr(orchestrator, "_latest_materialized_repo", lambda task_id: repo)
+
+    assert orchestrator._run_harness_test_gate(task_id, 0)
+    report = Path(orchestrator.repository.list_artifacts(task_id, "test_gate.md")[-1]["path"]).read_text(encoding="utf-8")
+
+    assert "status: pass" in report
+    assert "exit_code: 0" in report
+
+
+def test_harness_test_gate_records_timeout_failure(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["testing"] = {
+        "commands": [f"{sys.executable} -c \"import time; time.sleep(2)\""],
+        "timeout_seconds": 1,
+    }
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("timeout test", workflow_type=BUGFIX)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(orchestrator, "_latest_materialized_repo", lambda task_id: repo)
+
+    assert not orchestrator._run_harness_test_gate(task_id, 0)
+    report = Path(orchestrator.repository.list_artifacts(task_id, "test_gate.md")[-1]["path"]).read_text(encoding="utf-8")
+
+    assert "status: fail" in report
+    assert "exit_code: timeout" in report
+
+
+def test_harness_test_gate_uses_compileall_for_python_repo_without_tests(monkeypatch, tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("compile python", workflow_type=BUGFIX)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    monkeypatch.setattr(orchestrator, "_latest_materialized_repo", lambda task_id: repo)
+
+    assert orchestrator._run_harness_test_gate(task_id, 0)
+    report = Path(orchestrator.repository.list_artifacts(task_id, "test_gate.md")[-1]["path"]).read_text(encoding="utf-8")
+
+    assert "compileall -q ." in report
+    assert "status: pass" in report
+
+
+def test_test_judgement_cannot_override_failed_required_test_gate(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["testing"] = {"require_commands": True, "commands": []}
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("judge test gate", workflow_type=BUGFIX)
+    objective_gate = tmp_path / "objective_gate.md"
+    objective_gate.write_text("# Objective Gate\n\nstatus: pass\nround_id: 0\n", encoding="utf-8")
+    test_gate = tmp_path / "test_gate.md"
+    test_gate.write_text("# Harness Test Gate\n\nstatus: skipped\nround_id: 0\n", encoding="utf-8")
+    for artifact_type, path in (("objective_gate.md", objective_gate), ("test_gate.md", test_gate)):
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=artifact_type,
+                task_id=task_id,
+                phase_id=None,
+                role="orchestrator",
+                agent_id="gate",
+                artifact_type=artifact_type,
+                path=path,
+                version=1,
+                hash="hash",
+            )
+        )
+
+    decision = orchestrator._apply_objective_gates_to_judge_decision(
+        task_id,
+        "TEST_JUDGEMENT",
+        0,
+        {"decision": "pass", "tests_passed": True},
+    )
+
+    assert decision["decision"] == "fail"
+    assert decision["test_gate_status"] == "skipped"
+
+
+def test_patch_validation_selects_merged_patch_from_requested_round(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("fix with multiple rounds", workflow_type=BUGFIX)
+    first_phase = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 0, status="COMPLETED")
+    second_phase = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 1, status="COMPLETED")
+    first_patch = tmp_path / "round0.patch"
+    second_patch = tmp_path / "round1.patch"
+    first_patch.write_text("round0\n", encoding="utf-8")
+    second_patch.write_text("round1\n", encoding="utf-8")
+    for version, phase_id, path in ((1, first_phase, first_patch), (2, second_phase, second_patch)):
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=f"merged-patch-{version}",
+                task_id=task_id,
+                phase_id=phase_id,
+                role="executor",
+                agent_id="executor-1",
+                artifact_type="merged_patch.diff",
+                path=path,
+                version=version,
+                hash="hash",
+            )
+        )
+
+    selected = orchestrator._latest_merged_patch_for_round(task_id, 0)
+
+    assert selected
+    assert Path(selected["path"]) == first_patch
+
+
+def test_materialization_diff_check_catches_new_file_whitespace(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("bad whitespace", workflow_type=BUGFIX)
+    patch = tmp_path / "bad.patch"
+    patch.write_text(
+        "diff --git a/bad.py b/bad.py\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/bad.py\n"
+        "@@ -0,0 +1 @@\n"
+        "+x = 1 \n",
+        encoding="utf-8",
+    )
+
+    repo, report = orchestrator._materialize_merged_patch_repo(
+        task_id,
+        0,
+        patch,
+        source_repo=None,
+        changed_files=[Path("bad.py")],
+    )
+
+    assert repo is None
+    assert "status: failed" in report
+    assert "diff_check_status: fail" in report
 
 
 def test_materialized_source_applies_modified_file_patch(tmp_path: Path) -> None:
@@ -705,6 +969,7 @@ def test_missing_delivery_md_is_output_invalid_not_file_error(monkeypatch, tmp_p
             context.output_dir.mkdir(parents=True, exist_ok=True)
             context.log_dir.mkdir(parents=True, exist_ok=True)
             (context.output_dir / "merged_patch.diff").write_text("diff --git a/a b/a\n", encoding="utf-8")
+            (context.output_dir / "merged_patch_metadata.md").write_text("patch_artifact: merged_patch.diff\n", encoding="utf-8")
             (context.output_dir / "merge_report.md").write_text("merged", encoding="utf-8")
             stdout = context.log_dir / "stdout.log"
             stderr = context.log_dir / "stderr.log"
@@ -929,9 +1194,13 @@ def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_pat
     current_merge_phase_id = orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 2)
     artifact_rows = [
         ("patch.diff", execution_phase_id, "executor", "old-execution.patch"),
+        ("patch_metadata.md", execution_phase_id, "executor", "old-execution-metadata.md"),
         ("fix_patch.diff", old_fix_phase_id, "executor", "old-fix.patch"),
+        ("patch_metadata.md", old_fix_phase_id, "executor", "old-fix-metadata.md"),
         ("merged_patch.diff", previous_merge_phase_id, "executor", "previous-merged.patch"),
+        ("merged_patch_metadata.md", previous_merge_phase_id, "executor", "previous-merged-metadata.md"),
         ("fix_patch.diff", current_fix_phase_id, "executor", "current-fix.patch"),
+        ("patch_metadata.md", current_fix_phase_id, "executor", "current-fix-metadata.md"),
     ]
     for artifact_type, phase_id, role, filename in artifact_rows:
         path = tmp_path / filename
@@ -961,9 +1230,13 @@ def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_pat
     manifest = staged[0].read_text(encoding="utf-8")
 
     assert "current-fix.patch" in manifest
+    assert "current-fix-metadata.md" in manifest
     assert "previous-merged.patch" in manifest
+    assert "previous-merged-metadata.md" in manifest
     assert "old-execution.patch" not in manifest
+    assert "old-execution-metadata.md" not in manifest
     assert "old-fix.patch" not in manifest
+    assert "old-fix-metadata.md" not in manifest
 
 
 def test_invalid_patch_merge_skips_testing_and_enters_fix_round(monkeypatch, tmp_path: Path) -> None:
@@ -973,9 +1246,51 @@ def test_invalid_patch_merge_skips_testing_and_enters_fix_round(monkeypatch, tmp
 
     def fake_patch_validation(task_id: str, round_id: int) -> bool:
         validation_rounds.append(round_id)
-        return round_id > 0
+        if round_id <= 0:
+            return False
+        gate = tmp_path / f"objective_gate_round_{round_id}.md"
+        gate.write_text(
+            "# Objective Gate\n\n"
+            "status: pass\n"
+            f"task_id: {task_id}\n"
+            f"round_id: {round_id}\n",
+            encoding="utf-8",
+        )
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=f"objective-gate-{round_id}",
+                task_id=task_id,
+                phase_id=None,
+                role="orchestrator",
+                agent_id="objective-gate",
+                artifact_type="objective_gate.md",
+                path=gate,
+                version=round_id,
+                hash="hash",
+            )
+        )
+        return True
+
+    def fake_test_gate(task_id: str, round_id: int) -> bool:
+        gate = tmp_path / f"test_gate_round_{round_id}.md"
+        gate.write_text("# Harness Test Gate\n\nstatus: pass\nround_id: {round_id}\n".format(round_id=round_id), encoding="utf-8")
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=f"test-gate-{round_id}",
+                task_id=task_id,
+                phase_id=None,
+                role="orchestrator",
+                agent_id="test-gate",
+                artifact_type="test_gate.md",
+                path=gate,
+                version=round_id,
+                hash="hash",
+            )
+        )
+        return True
 
     monkeypatch.setattr(orchestrator, "_run_patch_validation", fake_patch_validation)
+    monkeypatch.setattr(orchestrator, "_run_harness_test_gate", fake_test_gate)
 
     orchestrator._run_execution_test_loop(task_id, "repair invalid patch")
 
@@ -1039,10 +1354,12 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     assert (final_delivery.parent / "usage_guide.md").exists()
     assert (final_delivery.parent / "patches" / "final.patch").exists()
     assert (final_delivery.parent / "artifacts" / "merged_patch.diff").exists()
+    assert (final_delivery.parent / "artifacts" / "merged_patch_metadata.md").exists()
     assert (final_delivery.parent / "artifacts" / "patch_validation.md").exists()
     assert (final_delivery.parent / "artifacts" / "materialized_repo.md").exists()
     assert (final_delivery.parent / "artifacts" / "merge_report.md").exists()
     assert (final_delivery.parent / "artifacts" / "patch.diff").exists()
+    assert (final_delivery.parent / "artifacts" / "patch_metadata.md").exists()
     assert (final_delivery.parent / "source" / "mock.txt").read_text(encoding="utf-8") == "mock change\n"
     merged_artifacts = orchestrator.repository.list_artifacts(task_id, "merged_patch.diff")
     validation_artifacts = orchestrator.repository.list_artifacts(task_id, "patch_validation.md")
