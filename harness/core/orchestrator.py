@@ -225,18 +225,24 @@ class Orchestrator:
         return self._run_delivery(task_id, user_prompt)
 
     def _run_bugfix_flow(self, task_id: str, user_prompt: str) -> Path:
-        max_rounds = int(self.config["limits"]["max_test_fix_rounds"])
+        max_rounds = self._max_test_fix_rounds()
         start_round = self._bugfix_resume_start_round(task_id)
-        for round_id in range(start_round, start_round + max_rounds):
+        round_id = start_round
+        attempts = 0
+        while max_rounds is None or attempts < max_rounds:
             self.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
             merge_ok = self._run_patch_merge(task_id, round_id, user_prompt)
             if not merge_ok:
+                round_id += 1
+                attempts += 1
                 continue
             self.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
             self._run_harness_test_gate(task_id, round_id)
             test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
             if self.judge.is_test_pass(test_decision):
                 break
+            round_id += 1
+            attempts += 1
         else:
             raise TaskFailedError("Bugfix testing did not pass within max_test_fix_rounds")
         self._run_review_loop(task_id, user_prompt)
@@ -249,7 +255,9 @@ class Orchestrator:
         highest_round = self._highest_bugfix_round_id(task_id)
         if highest_round is None:
             return 0
-        max_rounds = int(self.config["limits"]["max_test_fix_rounds"])
+        max_rounds = self._max_test_fix_rounds()
+        if max_rounds is None:
+            return highest_round + 1
         if highest_round + 1 < max_rounds:
             return 0
         return highest_round + 1
@@ -349,18 +357,26 @@ class Orchestrator:
         return saw_status
 
     def _run_execution_test_loop(self, task_id: str, user_prompt: str) -> None:
-        self.run_role_phase("executor", EXECUTION, 0, required_outputs_for("executor", EXECUTION), user_prompt)
-        merge_ok = self._run_patch_merge(task_id, 0, user_prompt)
-        max_rounds = int(self.config["limits"]["max_test_fix_rounds"])
-        round_id = 0
-        while round_id <= max_rounds:
+        max_rounds = self._max_test_fix_rounds()
+        start_round = self._execution_resume_start_round(task_id)
+        if start_round <= 0:
+            self.run_role_phase("executor", EXECUTION, 0, required_outputs_for("executor", EXECUTION), user_prompt)
+            merge_ok = self._run_patch_merge(task_id, 0, user_prompt)
+            round_id = 0
+            end_round = max_rounds
+        else:
+            round_id = start_round
+            end_round = None if max_rounds is None else start_round + max(1, max_rounds) - 1
+            self.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
+            merge_ok = self._run_patch_merge(task_id, round_id, user_prompt)
+        while end_round is None or round_id <= end_round:
             if merge_ok:
                 self.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
                 self._run_harness_test_gate(task_id, round_id)
                 test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
                 if self.judge.is_test_pass(test_decision):
                     return
-            if round_id >= max_rounds:
+            if end_round is not None and round_id >= end_round:
                 break
             # Use next round_id for fixing effort to signal progression in dashboard
             next_round = round_id + 1
@@ -368,6 +384,39 @@ class Orchestrator:
             merge_ok = self._run_patch_merge(task_id, next_round, user_prompt)
             round_id = next_round
         raise TaskFailedError("Testing did not pass within max_test_fix_rounds")
+
+    def _execution_resume_start_round(self, task_id: str) -> int:
+        if self._active_task_id != task_id or self._active_task_resume_status != FAILED:
+            return 0
+        highest_round = self._highest_execution_test_round_id(task_id)
+        if highest_round is None:
+            return 0
+        max_rounds = self._max_test_fix_rounds()
+        if max_rounds is None:
+            return highest_round + 1
+        if highest_round < max_rounds:
+            return 0
+        return highest_round + 1
+
+    def _max_test_fix_rounds(self) -> int | None:
+        value = self.config.get("limits", {}).get("max_test_fix_rounds", 5)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"", "0", "-1", "none", "no_limit", "nolimit", "infinite", "infinity", "unlimited"}:
+                return None
+            parsed = int(normalized)
+        else:
+            parsed = int(value)
+        return parsed if parsed > 0 else None
+
+    def _highest_execution_test_round_id(self, task_id: str) -> int | None:
+        rounds = [
+            int(phase["round_id"])
+            for phase in self.repository.list_phases(task_id)
+            if phase["phase_type"] in {EXECUTION, FIXING, PATCH_MERGE, TESTING, TEST_JUDGEMENT}
+            and phase["round_id"] is not None
+        ]
+        return max(rounds) if rounds else None
 
     def _run_review_loop(self, task_id: str, user_prompt: str) -> None:
         for round_id in range(self.config["limits"]["max_review_rounds"]):
@@ -385,9 +434,10 @@ class Orchestrator:
             raise TaskFailedError("Review was not approved within max_review_rounds")
 
     def _run_regression_test_fix_loop(self, task_id: str, user_prompt: str, review_round_id: int, merge_ok: bool) -> None:
-        max_rounds = int(self.config["limits"]["max_test_fix_rounds"])
-        for test_round_id in range(max_rounds):
-            phase_round_id = (review_round_id * max_rounds) + test_round_id
+        max_rounds = self._max_test_fix_rounds()
+        test_round_id = 0
+        while max_rounds is None or test_round_id < max_rounds:
+            phase_round_id = (review_round_id + test_round_id) if max_rounds is None else (review_round_id * max_rounds) + test_round_id
             if merge_ok:
                 self.run_role_phase(
                     "tester",
@@ -411,6 +461,7 @@ class Orchestrator:
                 user_prompt,
             )
             merge_ok = self._run_patch_merge(task_id, next_phase_round, user_prompt)
+            test_round_id += 1
         raise TaskFailedError("Regression testing did not pass within max_test_fix_rounds")
 
     def _run_final_judgement(self, task_id: str, user_prompt: str) -> None:

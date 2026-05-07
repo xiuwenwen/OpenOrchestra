@@ -31,7 +31,7 @@ roles:
 limits:
   max_planning_rounds: 3
   planning_peer_review_loops: 3
-  max_test_fix_rounds: 5
+  max_test_fix_rounds: unlimited
   max_review_rounds: 3
   max_agent_retry: 2
 

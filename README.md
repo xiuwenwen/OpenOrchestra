@@ -182,6 +182,7 @@ HARNESS_COMMUNICATOR_COUNT=1
 HARNESS_TIMEOUT_EXECUTOR=3600
 HARNESS_UI_HOST=127.0.0.1
 HARNESS_UI_PORT=8765
+HARNESS_MAX_TEST_FIX_ROUNDS=unlimited
 HARNESS_PLANNING_PEER_REVIEW_LOOPS=3
 HARNESS_HEARTBEAT_INTERVAL_SECONDS=60
 HARNESS_CLAUDE_CONTEXT_WINDOW_TOKENS=200000
@@ -192,6 +193,10 @@ HARNESS_CLAUDE_MAX_TOKENS_EXECUTOR=64000
 Set a role timeout to `0` to disable timeout enforcement for that role. Use positive timeouts for real agent runs so provider hangs do not block forever.
 
 把角色 timeout 设为 `0` 可以关闭该角色的超时限制。真实 Agent 运行建议使用正数超时，避免 provider 卡住后无限等待。
+
+`HARNESS_MAX_TEST_FIX_ROUNDS=unlimited` means test/fix loops keep running until the test judge passes or the task is stopped. A positive integer restores a bounded loop.
+
+`HARNESS_MAX_TEST_FIX_ROUNDS=unlimited` 表示测试/修复循环会一直运行，直到测试裁决通过或任务被停止。设置为正整数可以恢复有界循环。
 
 ## Workflows / 工作流
 

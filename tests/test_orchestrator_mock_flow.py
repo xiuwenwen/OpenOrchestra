@@ -11,7 +11,18 @@ from harness.artifacts.schemas import required_outputs_for
 import harness.core.orchestrator as orchestrator_module
 from harness.core.orchestrator import Orchestrator
 from harness.core.progress import ProgressEvent
-from harness.core.state_machine import FAILED, FIXING, PATCH_MERGE, PLAN_JUDGEMENT, PLANNING_DRAFT, REVIEW_FIXING, RUNNING
+from harness.core.state_machine import (
+    EXECUTION,
+    FAILED,
+    FIXING,
+    PATCH_MERGE,
+    PLAN_JUDGEMENT,
+    PLANNING_DRAFT,
+    REVIEW_FIXING,
+    RUNNING,
+    TESTING,
+    TEST_JUDGEMENT,
+)
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 from harness.patch.gate import materialized_repo_markdown, run_patch_gate
 
@@ -141,6 +152,135 @@ def test_failed_exhausted_bugfix_continue_appends_new_round_window(monkeypatch, 
         pass
 
     assert called_rounds == [2, 3]
+
+
+def test_failed_exhausted_new_project_continue_appends_new_fix_window(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_test_fix_rounds"] = 2
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("build a project", workflow_type=NEW_PROJECT)
+    for round_id in (0, 1, 2):
+        phase_type = EXECUTION if round_id == 0 else FIXING
+        orchestrator.repository.create_phase(task_id, phase_type, "executor", round_id, status="COMPLETED")
+        orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", round_id, status="COMPLETED")
+        orchestrator.repository.create_phase(task_id, TESTING, "tester", round_id, status="COMPLETED")
+        orchestrator.repository.create_phase(task_id, TEST_JUDGEMENT, "judge", round_id, status="COMPLETED")
+    orchestrator.repository.update_task(task_id, status=FAILED, current_phase=TEST_JUDGEMENT, current_role="judge")
+    called: list[tuple[str, int]] = []
+    validation_rounds: list[int] = []
+    orchestrator._active_task_id = task_id
+    orchestrator._active_task_resume_status = FAILED
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        called.append((phase, round_id))
+        return []
+
+    def fake_patch_merge(task_id: str, round_id: int, user_prompt: str) -> bool:
+        validation_rounds.append(round_id)
+        return False
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+    monkeypatch.setattr(orchestrator, "_run_patch_merge", fake_patch_merge)
+
+    try:
+        orchestrator._run_execution_test_loop(task_id, "build a project")
+    except orchestrator_module.TaskFailedError:
+        pass
+
+    assert called == [(FIXING, 3), (FIXING, 4)]
+    assert validation_rounds == [3, 4]
+
+
+def test_unlimited_new_project_test_fix_rounds_continue_until_pass(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_test_fix_rounds"] = "unlimited"
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("build a project", workflow_type=NEW_PROJECT)
+    validation_rounds: list[int] = []
+    tested_rounds: list[int] = []
+
+    def fake_patch_merge(task_id: str, round_id: int, user_prompt: str) -> bool:
+        validation_rounds.append(round_id)
+        return True
+
+    def fake_test_gate(task_id: str, round_id: int) -> bool:
+        tested_rounds.append(round_id)
+        return True
+
+    monkeypatch.setattr(orchestrator, "_run_patch_merge", fake_patch_merge)
+    monkeypatch.setattr(orchestrator, "_run_harness_test_gate", fake_test_gate)
+    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
+    monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: len(tested_rounds) >= 8)
+
+    orchestrator._run_execution_test_loop(task_id, "build a project")
+
+    assert validation_rounds == list(range(8))
+    assert tested_rounds == list(range(8))
+
+
+def test_unlimited_failed_new_project_resume_starts_after_highest_round(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_test_fix_rounds"] = "unlimited"
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("build a project", workflow_type=NEW_PROJECT)
+    for round_id in range(8):
+        phase_type = EXECUTION if round_id == 0 else FIXING
+        orchestrator.repository.create_phase(task_id, phase_type, "executor", round_id, status="COMPLETED")
+        orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", round_id, status="COMPLETED")
+        orchestrator.repository.create_phase(task_id, TESTING, "tester", round_id, status="COMPLETED")
+        orchestrator.repository.create_phase(task_id, TEST_JUDGEMENT, "judge", round_id, status="COMPLETED")
+    orchestrator._active_task_id = task_id
+    orchestrator._active_task_resume_status = FAILED
+    called: list[tuple[str, int]] = []
+    validation_rounds: list[int] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        called.append((phase, round_id))
+        return []
+
+    def fake_patch_merge(task_id: str, round_id: int, user_prompt: str) -> bool:
+        validation_rounds.append(round_id)
+        return True
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+    monkeypatch.setattr(orchestrator, "_run_patch_merge", fake_patch_merge)
+    monkeypatch.setattr(orchestrator, "_run_harness_test_gate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
+    monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: True)
+
+    orchestrator._run_execution_test_loop(task_id, "build a project")
+
+    assert called[:2] == [(FIXING, 8), (TESTING, 8)]
+    assert validation_rounds == [8]
+
+
+def test_unlimited_bugfix_rounds_continue_until_pass(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_test_fix_rounds"] = "unlimited"
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("fix a failing command", workflow_type=BUGFIX)
+    fix_rounds: list[int] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        if phase == FIXING:
+            fix_rounds.append(round_id)
+        return []
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+    monkeypatch.setattr(orchestrator, "_run_patch_merge", lambda *args, **kwargs: True)
+    monkeypatch.setattr(orchestrator, "_run_harness_test_gate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
+    monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: len(fix_rounds) >= 7)
+    monkeypatch.setattr(orchestrator, "_run_review_loop", lambda *args, **kwargs: None)
+    monkeypatch.setattr(orchestrator, "_run_final_judgement", lambda *args, **kwargs: None)
+    delivery = tmp_path / "final_delivery.md"
+    delivery.write_text("ok", encoding="utf-8")
+    monkeypatch.setattr(orchestrator, "_run_delivery", lambda *args, **kwargs: delivery)
+
+    result = orchestrator._run_bugfix_flow(task_id, "fix a failing command")
+
+    assert result == delivery
+    assert fix_rounds == list(range(7))
 
 
 def test_orchestrator_feature_change_flow_completes(tmp_path: Path) -> None:

@@ -575,6 +575,7 @@ def test_user_env_config_overrides_nested_values(tmp_path: Path) -> None:
             "HARNESS_WORKSPACE_ROOT": "/tmp/harness-workspaces",
             "HARNESS_PLANNER_COUNT": "4",
             "HARNESS_TIMEOUT_PLANNER": "0",
+            "HARNESS_MAX_TEST_FIX_ROUNDS": "unlimited",
             "HARNESS_UI_PORT": "9999",
             "HARNESS_CLAUDE_MAX_TOKENS_EXECUTOR": "64000",
             "HARNESS_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY": "false",
@@ -585,6 +586,7 @@ def test_user_env_config_overrides_nested_values(tmp_path: Path) -> None:
     assert config["system"]["workspace_root"] == "/tmp/harness-workspaces"
     assert config["roles"]["planner"]["count"] == 4
     assert config["timeouts"]["planner"] == 0
+    assert config["limits"]["max_test_fix_rounds"] == "unlimited"
     assert config["visualization"]["port"] == 9999
     assert config["claude"]["max_output_tokens"]["executor"] == 64000
     assert config["policy"]["same_role_can_run_concurrently"] is False

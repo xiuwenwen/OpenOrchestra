@@ -107,7 +107,7 @@ ENV_CONFIG_SPECS: dict[str, tuple[tuple[str, ...], type]] = {
     "HARNESS_COMMUNICATOR_COUNT": (("roles", "communicator", "count"), int),
     "HARNESS_MAX_PLANNING_ROUNDS": (("limits", "max_planning_rounds"), int),
     "HARNESS_PLANNING_PEER_REVIEW_LOOPS": (("limits", "planning_peer_review_loops"), int),
-    "HARNESS_MAX_TEST_FIX_ROUNDS": (("limits", "max_test_fix_rounds"), int),
+    "HARNESS_MAX_TEST_FIX_ROUNDS": (("limits", "max_test_fix_rounds"), str),
     "HARNESS_MAX_REVIEW_ROUNDS": (("limits", "max_review_rounds"), int),
     "HARNESS_MAX_AGENT_RETRY": (("limits", "max_agent_retry"), int),
     "HARNESS_TIMEOUT_PLANNER": (("timeouts", "planner"), int),
