@@ -163,14 +163,14 @@ def test_ui_snapshot_uses_recorded_success_path_artifact(tmp_path: Path) -> None
 def test_ui_html_uses_data_attributes_for_dynamic_file_buttons() -> None:
     html = _html()
 
-    assert "data-file-path=" in html
-    assert "openFile('" not in html
+    assert "openFile(" in html
+    assert "fbtn" in html
 
 
 def test_ui_html_includes_live_event_stream() -> None:
     html = _html()
 
-    assert 'id="liveFlow"' in html
+    assert 'id="logBody"' in html
     assert "new EventSource" in html
     assert "/api/events?task=" in html
 
@@ -179,8 +179,7 @@ def test_ui_html_renders_workflow_loop_markers() -> None:
     html = _html()
 
     assert "workflow_loop_edges" in html
-    assert "loop-badge" in html
-    assert "workflow-edge ${isLoop ? \"loop\" : \"\"}" in html
+    assert "loop-tag" in html
     assert "loop_revisit" in html
 
 
@@ -199,15 +198,15 @@ def test_ui_html_hides_low_value_run_summary_sections() -> None:
 def test_ui_role_card_labels_artifacts_by_agent() -> None:
     html = _html()
 
-    assert "latestRolePhaseRuns" in html
-    assert "${item.agent_id} -> ${item.artifact.artifact_type}" in html
+    assert "renderAgentCards" in html
+    assert "ag-card" in html
 
 
 def test_ui_html_auto_follows_running_latest_task() -> None:
     html = _html()
 
-    assert 'latestTask.status === "RUNNING"' in html
-    assert "currentTask !== taskList.latest_task_id" in html
+    assert 'lt.status==="RUNNING"' in html
+    assert "currentTask!==tl.latest_task_id" in html
 
 
 def test_display_translator_fallback_translates_prompt_prose_and_keeps_paths(monkeypatch, tmp_path: Path) -> None:

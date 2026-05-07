@@ -588,980 +588,507 @@ def _html() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenOrchestra Task Console</title>
+  <title>OpenOrchestra</title>
   <style>
-    :root { color-scheme: light; --bg:#f5f6f8; --panel:#ffffff; --panel2:#fbfcfd; --line:#d9dee7; --text:#16202c; --muted:#687386; --accent:#126b63; --accent-soft:#e5f3f0; --warn:#9a5d00; --warn-soft:#fff2d7; --bad:#a23434; --bad-soft:#fde9e9; --good:#247a3d; --good-soft:#e8f5ec; --info:#275b9f; --info-soft:#eaf1fb; }
-    * { box-sizing: border-box; }
-    body { margin:0; overflow-x:hidden; background:var(--bg); color:var(--text); font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-    header { min-height:56px; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:10px 18px; border-bottom:1px solid var(--line); background:#fff; position:sticky; top:0; z-index:2; padding-top:max(10px,env(safe-area-inset-top)); }
-    h1 { font-size:18px; margin:0; font-weight:700; text-wrap:balance; }
-    h2 { font-size:16px; margin:18px 0 10px; font-weight:700; }
-    h3 { font-size:14px; margin:0 0 8px; font-weight:700; min-width:0; overflow-wrap:anywhere; }
-    main { display:grid; grid-template-columns:320px minmax(0,1fr); min-height:calc(100vh - 56px); }
-    aside { border-right:1px solid var(--line); background:#fff; padding:14px; overflow:auto; }
-    section { padding:16px; overflow:auto; min-width:0; }
-    button { border:1px solid var(--line); background:#fff; border-radius:6px; padding:6px 9px; cursor:pointer; color:var(--text); touch-action:manipulation; max-width:100%; overflow-wrap:anywhere; }
-    button:hover { border-color:var(--accent); background:var(--accent-soft); }
-    button:focus-visible, a:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-    button:disabled { cursor:not-allowed; color:var(--muted); background:#f2f4f7; }
-    .top-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
-    .segmented { display:inline-flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; background:#fff; }
-    .segmented button { border:0; border-radius:0; min-width:44px; }
-    .segmented button.active { background:var(--accent); color:#fff; }
-    .task { width:100%; text-align:left; margin:0 0 8px; display:grid; gap:4px; min-width:0; overflow-wrap:anywhere; }
-    .task.active { border-color:var(--accent); box-shadow:inset 3px 0 0 var(--accent); background:var(--accent-soft); }
-    .task-title { display:flex; justify-content:space-between; gap:8px; min-width:0; }
-    .muted { color:var(--muted); min-width:0; overflow-wrap:anywhere; }
-    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; word-break:break-word; }
-    .grid { display:grid; gap:12px; }
-    .overview { grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); margin-bottom:14px; }
-    .roles { margin:12px 0; }
-    .role-flow { display:flex; align-items:stretch; gap:0; overflow-x:auto; padding:2px 2px 10px; }
-    .role-card { width:230px; min-width:230px; text-align:left; display:grid; grid-template-rows:auto auto 1fr; gap:8px; cursor:pointer; position:relative; overflow:hidden; }
-    .role-card:hover { border-color:var(--accent); background:var(--accent-soft); }
-    .role-card.selected { border-color:var(--accent); box-shadow:inset 3px 0 0 var(--accent); background:var(--accent-soft); }
-    .role-topline { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-    .role-title { display:flex; align-items:center; gap:8px; min-width:0; }
-    .role-title h3 { margin:0; overflow-wrap:anywhere; }
-    .role-step { display:inline-grid; place-items:center; width:24px; height:24px; border-radius:999px; background:#eef2f6; color:var(--muted); font-size:12px; font-weight:800; flex:0 0 auto; font-variant-numeric:tabular-nums; }
-    .role-card.RUNNING .role-step { background:var(--warn-soft); color:var(--warn); }
-    .role-card.COMPLETED .role-step { background:var(--good-soft); color:var(--good); }
-    .role-card.FAILED .role-step,.role-card.OUTPUT_INVALID .role-step,.role-card.TIMEOUT .role-step { background:var(--bad-soft); color:var(--bad); }
-    .role-connector { display:flex; align-items:center; justify-content:center; width:44px; min-width:44px; color:var(--muted); position:relative; }
-    .role-connector::before { content:""; width:100%; height:2px; background:var(--line); }
-    .role-connector::after { content:""; position:absolute; right:4px; width:9px; height:9px; border-top:2px solid var(--line); border-right:2px solid var(--line); transform:rotate(45deg); background:var(--bg); }
-    .role-browser { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px; margin:12px 0 18px; }
-    .role-pane { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; }
-    .round-tabs { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 10px; }
-    .round-tabs button.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:700; }
-    .delivery-run { border-top:1px solid var(--line); padding-top:10px; margin-top:10px; }
-    .split { display:grid; grid-template-columns:minmax(360px,1fr) minmax(360px,1fr); gap:14px; align-items:start; }
-    .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; overflow:hidden; overflow-wrap:anywhere; }
-    .metric { font-size:26px; font-weight:750; letter-spacing:0; line-height:1.1; margin-top:4px; font-variant-numeric:tabular-nums; }
-    .status { font-weight:700; }
-    .pill { display:inline-flex; align-items:center; min-height:22px; max-width:100%; border-radius:999px; padding:2px 8px; font-size:12px; font-weight:700; background:#eef2f6; color:var(--muted); overflow-wrap:anywhere; }
-    .pill.RUNNING { background:var(--warn-soft); color:var(--warn); }
-    .pill.COMPLETED { background:var(--good-soft); color:var(--good); }
-    .pill.FAILED,.pill.OUTPUT_INVALID,.pill.TIMEOUT { background:var(--bad-soft); color:var(--bad); }
-    .pill.PENDING { background:#eef2f6; color:var(--muted); }
-    .COMPLETED { color:var(--good); }
-    .FAILED,.OUTPUT_INVALID,.TIMEOUT { color:var(--bad); }
-    .RUNNING { color:var(--warn); }
-    .workflow { display:flex; gap:0; overflow-x:auto; padding:2px 0 8px; align-items:stretch; }
-    .workflow-node { display:flex; align-items:stretch; }
-    .step { width:164px; min-width:164px; border:1px solid var(--line); border-radius:8px; background:#fff; padding:8px; position:relative; overflow:hidden; overflow-wrap:anywhere; }
-    .step strong { display:block; line-height:1.25; overflow-wrap:anywhere; }
-    .step.current { border-color:var(--accent); background:var(--accent-soft); }
-    .step.done { border-color:#b9d7c2; }
-    .step.failed { border-color:#e0b5b5; background:var(--bad-soft); }
-    .step.loop { border-color:var(--info); box-shadow:inset 0 3px 0 var(--info); }
-    .loop-badge { display:inline-flex; align-items:center; min-height:18px; border-radius:999px; padding:1px 6px; font-size:11px; font-weight:750; color:var(--info); background:var(--info-soft); margin-left:4px; }
-    .workflow-edge { width:38px; min-width:38px; position:relative; display:flex; align-items:center; justify-content:center; }
-    .workflow-edge::before { content:""; width:100%; height:2px; background:var(--line); }
-    .workflow-edge::after { content:""; position:absolute; right:4px; width:8px; height:8px; border-top:2px solid var(--line); border-right:2px solid var(--line); transform:rotate(45deg); background:var(--bg); }
-    .workflow-edge.loop::before { background:var(--info); }
-    .workflow-edge.loop::after { border-color:var(--info); }
-    .workflow-edge.loop .loop-arrow { position:absolute; top:4px; left:4px; right:4px; height:18px; border:2px solid var(--info); border-bottom:0; border-radius:12px 12px 0 0; color:var(--info); font-size:11px; text-align:center; line-height:14px; background:var(--bg); }
-    .live-flow { display:grid; gap:8px; max-height:220px; overflow:auto; }
-    .live-event { display:grid; grid-template-columns:84px minmax(0,1fr) auto; gap:10px; align-items:start; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; overflow:hidden; }
-    .live-event.RUNNING { border-color:#efd49a; background:var(--warn-soft); }
-    .live-event.COMPLETED,.live-event.PASS { border-color:#b9d7c2; background:var(--good-soft); }
-    .live-event.FAILED,.live-event.FAIL,.live-event.OUTPUT_INVALID,.live-event.TIMEOUT { border-color:#e0b5b5; background:var(--bad-soft); }
-    .live-main { min-width:0; }
-    .live-meta { color:var(--muted); font-size:12px; margin-top:2px; }
-    .agent-list { display:grid; gap:8px; }
-    .agent-card { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--panel2); min-width:0; overflow:hidden; overflow-wrap:anywhere; }
-    .agent-head { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; min-width:0; }
-    .agent-head > div { min-width:0; }
-    .files { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; min-width:0; }
-    .file-btn { max-width:100%; white-space:normal; text-align:left; line-height:1.25; }
-    .file-btn.primary { border-color:var(--accent); color:var(--accent); font-weight:700; }
-    .viewer { display:grid; grid-template-columns:minmax(0,1fr); gap:10px; }
-    .viewer-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
-    .viewer-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
-    .translate-note { margin-top:6px; color:var(--muted); font-size:12px; }
-    pre { white-space:pre-wrap; word-break:break-word; margin:0; padding:12px; border:1px solid var(--line); border-radius:8px; background:#111820; color:#e8eef7; max-height:54vh; overflow:auto; tab-size:2; }
-    .events { max-height:280px; overflow:auto; }
-    .events div { padding:6px 0; border-bottom:1px solid #edf0f3; }
-    table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-    th,td { border-bottom:1px solid var(--line); padding:8px; text-align:left; vertical-align:top; }
-    th { background:#eef2f5; font-weight:650; }
-    tr:last-child td { border-bottom:0; }
-    .empty { padding:16px; border:1px dashed var(--line); border-radius:8px; color:var(--muted); background:#fff; }
-    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-    @media (max-width: 1040px) { .overview,.split { grid-template-columns:1fr; } }
-    @media (max-width: 840px) {
-      main { grid-template-columns:1fr; }
-      aside { border-right:0; border-bottom:1px solid var(--line); max-height:36vh; }
-      .role-flow { flex-direction:column; overflow-x:visible; padding-right:0; }
-      .role-card { width:100%; min-width:0; }
-      .workflow { flex-direction:column; overflow-x:visible; gap:8px; }
-      .workflow-node { flex-direction:column; }
-      .step { width:100%; min-width:0; }
-      .workflow-edge { width:100%; min-width:0; height:24px; }
-      .workflow-edge::before { width:2px; height:100%; }
-      .workflow-edge::after { right:auto; bottom:2px; transform:rotate(135deg); }
-      .workflow-edge.loop .loop-arrow { top:2px; left:50%; width:42px; right:auto; transform:translateX(-50%); }
-      .role-connector { width:100%; min-width:0; height:26px; }
-      .role-connector::before { width:2px; height:100%; }
-      .role-connector::after { right:auto; bottom:3px; transform:rotate(135deg); background:var(--bg); }
+    :root{--bg:#0d1117;--surface:#161b22;--elevated:#1c2128;--overlay:#2d333b;--border:#30363d;--border-muted:#21262d;--text:#e6edf3;--muted:#7d8590;--subtle:#484f58;--accent:#2f81f7;--accent-soft:rgba(47,129,247,.15);--good:#3fb950;--good-soft:rgba(63,185,80,.15);--bad:#f85149;--bad-soft:rgba(248,81,73,.15);--warn:#d29922;--warn-soft:rgba(210,153,34,.15);--info:#a371f7;--info-soft:rgba(163,113,247,.15);--radius:10px;--font:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    *{box-sizing:border-box;margin:0}
+    body{background:var(--bg);color:var(--text);font:14px/1.5 var(--font);overflow-x:hidden}
+    ::selection{background:var(--accent);color:#fff}
+    ::-webkit-scrollbar{width:6px;height:6px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+    /* === HEADER === */
+    .header{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;border-bottom:1px solid var(--border);background:var(--surface);position:sticky;top:0;z-index:10}
+    .header-left{display:flex;align-items:center;gap:14px;min-width:0}
+    .logo{font-size:15px;font-weight:700;white-space:nowrap;background:linear-gradient(135deg,var(--accent),var(--info));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .header-task{font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:400px}
+    .header-right{display:flex;align-items:center;gap:10px;flex-shrink:0}
+    .seg{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+    .seg button{border:0;background:transparent;color:var(--muted);padding:4px 10px;font-size:12px;cursor:pointer;font-weight:600}
+    .seg button.on{background:var(--accent);color:#fff}
+    .seg button:hover:not(.on){background:var(--overlay)}
+    #heartbeat{font-size:11px;color:var(--subtle);font-family:var(--mono)}
+
+    /* === LAYOUT === */
+    .shell{display:grid;grid-template-columns:260px 1fr;height:calc(100vh - 52px)}
+    .sidebar{border-right:1px solid var(--border);background:var(--surface);overflow-y:auto;padding:12px}
+    .sidebar h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;font-weight:700}
+    .content{overflow-y:auto;display:flex;flex-direction:column;gap:0}
+
+    /* === TASK LIST === */
+    .tsk{width:100%;text-align:left;background:transparent;border:1px solid transparent;border-radius:8px;padding:8px 10px;cursor:pointer;color:var(--text);margin-bottom:4px;transition:all .15s}
+    .tsk:hover{background:var(--elevated);border-color:var(--border)}
+    .tsk.act{background:var(--accent-soft);border-color:var(--accent)}
+    .tsk-top{display:flex;justify-content:space-between;align-items:center;gap:6px}
+    .tsk-id{font-family:var(--mono);font-size:12px;font-weight:600}
+    .tsk-prompt{font-size:12px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+    /* === STATUS PILLS === */
+    .pill{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700;letter-spacing:.02em}
+    .pill::before{content:'';width:6px;height:6px;border-radius:50%;flex-shrink:0}
+    .pill.RUNNING{background:var(--accent-soft);color:var(--accent)}.pill.RUNNING::before{background:var(--accent);animation:blink 1.5s infinite}
+    .pill.COMPLETED{background:var(--good-soft);color:var(--good)}.pill.COMPLETED::before{background:var(--good)}
+    .pill.FAILED,.pill.OUTPUT_INVALID,.pill.TIMEOUT{background:var(--bad-soft);color:var(--bad)}.pill.FAILED::before,.pill.OUTPUT_INVALID::before,.pill.TIMEOUT::before{background:var(--bad)}
+    .pill.PENDING,.pill.CREATED{background:var(--overlay);color:var(--muted)}.pill.PENDING::before,.pill.CREATED::before{background:var(--subtle)}
+    .pill.INFO{background:var(--overlay);color:var(--muted)}.pill.INFO::before{display:none}
+
+    /* === SUMMARY BAR === */
+    .summary{display:flex;align-items:center;gap:16px;padding:14px 24px;border-bottom:1px solid var(--border);background:var(--surface);flex-wrap:wrap}
+    .sum-item{display:flex;align-items:center;gap:6px;font-size:13px}
+    .sum-label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+    .sum-val{font-weight:600;font-family:var(--mono);font-size:13px}
+    .sum-sep{width:1px;height:20px;background:var(--border)}
+    .sum-prompt{color:var(--muted);font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+    /* === PIPELINE === */
+    .pipe-wrap{padding:28px 24px 20px;border-bottom:1px solid var(--border);overflow-x:auto}
+    .pipe{display:flex;align-items:flex-start;gap:0;min-width:min-content}
+    .pipe-node{display:flex;flex-direction:column;align-items:center;width:120px;min-width:120px;cursor:pointer;position:relative}
+    .pipe-node:hover .dot{transform:scale(1.15)}
+    .pipe-node.sel .dot{box-shadow:0 0 0 3px var(--accent-soft)}
+    .dot{width:36px;height:36px;border-radius:50%;border:3px solid var(--border);background:var(--surface);display:flex;align-items:center;justify-content:center;transition:all .2s;position:relative;z-index:1;font-size:14px}
+    .pipe-node.done .dot{border-color:var(--good);background:var(--good-soft);color:var(--good)}
+    .pipe-node.run .dot{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);animation:glow 2s ease-in-out infinite}
+    .pipe-node.fail .dot{border-color:var(--bad);background:var(--bad-soft);color:var(--bad)}
+    .pipe-node.loop .dot{border-color:var(--info);background:var(--info-soft);color:var(--info)}
+    .pipe-label{margin-top:8px;font-size:11px;font-weight:600;text-align:center;color:var(--muted);line-height:1.2;max-width:110px;word-wrap:break-word}
+    .pipe-node.run .pipe-label{color:var(--accent)}
+    .pipe-node.done .pipe-label{color:var(--good)}
+    .pipe-node.fail .pipe-label{color:var(--bad)}
+    .pipe-round{font-size:10px;color:var(--subtle);margin-top:2px;font-family:var(--mono)}
+    .loop-tag{font-size:9px;background:var(--info-soft);color:var(--info);padding:1px 5px;border-radius:99px;font-weight:700;margin-top:3px}
+    .pipe-line{flex:1;height:3px;background:var(--border);margin-top:17px;min-width:16px;position:relative;border-radius:2px}
+    .pipe-line.done{background:var(--good);box-shadow:0 0 6px rgba(63,185,80,.4)}
+    .pipe-line.active{background:linear-gradient(90deg,var(--good),var(--accent));box-shadow:0 0 8px rgba(47,129,247,.3)}
+    .empty-msg{padding:24px;color:var(--muted);font-size:13px;text-align:center}
+
+    /* === ROLE BAR === */
+    .role-bar{display:flex;gap:8px;padding:14px 24px;border-bottom:1px solid var(--border);overflow-x:auto;background:var(--bg)}
+    .role-chip{display:flex;align-items:center;gap:7px;padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;white-space:nowrap;font-size:12px;font-weight:600;transition:all .15s}
+    .role-chip:hover{border-color:var(--accent);background:var(--elevated)}
+    .role-chip.active{border-color:var(--accent);background:var(--accent-soft)}
+    .role-chip .rc-dot{width:8px;height:8px;border-radius:50%;background:var(--subtle);flex-shrink:0}
+    .role-chip.RUNNING .rc-dot{background:var(--accent);animation:blink 1.5s infinite}
+    .role-chip.COMPLETED .rc-dot{background:var(--good)}
+    .role-chip.FAILED .rc-dot{background:var(--bad)}
+    .role-chip .rc-count{font-size:10px;color:var(--muted);font-family:var(--mono)}
+
+    /* === DETAIL PANEL === */
+    .detail{display:grid;grid-template-columns:340px 1fr;border-bottom:1px solid var(--border);max-height:0;overflow:hidden;transition:max-height .3s ease}
+    .detail.open{max-height:70vh;overflow:visible}
+    .detail-left{border-right:1px solid var(--border);padding:16px;overflow-y:auto;max-height:70vh;background:var(--surface)}
+    .detail-right{padding:16px;overflow-y:auto;max-height:70vh;display:flex;flex-direction:column;gap:10px}
+    .detail-title{font-size:13px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between}
+    .detail-close{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer}
+    .detail-close:hover{color:var(--text);border-color:var(--accent)}
+
+    /* Agent cards in detail */
+    .ag-card{border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px;background:var(--elevated);transition:border-color .15s}
+    .ag-card:hover{border-color:var(--accent)}
+    .ag-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+    .ag-name{font-weight:600;font-size:13px}
+    .ag-meta{font-size:11px;color:var(--muted);margin-top:3px}
+    .ag-files{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+
+    /* File buttons */
+    .fbtn{font-size:11px;padding:3px 8px;border-radius:5px;border:1px solid var(--border);background:var(--surface);color:var(--muted);cursor:pointer;font-family:var(--mono);transition:all .12s;white-space:nowrap}
+    .fbtn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+    .fbtn.pri{border-color:var(--accent);color:var(--accent)}
+    .fbtn:disabled{opacity:.4;cursor:not-allowed}
+
+    /* Viewer */
+    .viewer-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px}
+    .viewer-path{font-size:12px;color:var(--muted);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .viewer-note{font-size:11px;color:var(--subtle)}
+    pre{white-space:pre-wrap;word-break:break-word;padding:14px;border:1px solid var(--border);border-radius:8px;background:#010409;color:#c9d1d9;max-height:50vh;overflow:auto;font-size:12px;line-height:1.55;font-family:var(--mono);flex:1;min-height:120px;tab-size:2}
+
+    /* === LOG BAR === */
+    .logbar{border-top:1px solid var(--border);background:var(--surface);margin-top:auto}
+    .logbar-head{display:flex;align-items:center;justify-content:space-between;padding:8px 24px;cursor:pointer;user-select:none}
+    .logbar-head:hover{background:var(--elevated)}
+    .logbar-title{font-size:12px;font-weight:600;color:var(--muted);display:flex;align-items:center;gap:8px}
+    .log-badge{font-size:10px;background:var(--accent-soft);color:var(--accent);padding:1px 6px;border-radius:99px;font-weight:700;font-family:var(--mono)}
+    .logbar-preview{font-size:11px;color:var(--subtle);flex:1;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:16px}
+    .log-body{max-height:0;overflow:hidden;transition:max-height .3s ease}
+    .log-body.open{max-height:300px;overflow-y:auto}
+    .log-item{display:flex;align-items:flex-start;gap:10px;padding:6px 24px;font-size:12px;border-top:1px solid var(--border-muted)}
+    .log-item:hover{background:var(--elevated)}
+    .log-time{color:var(--subtle);font-family:var(--mono);font-size:11px;flex-shrink:0;width:70px}
+    .log-type{font-weight:600;width:110px;flex-shrink:0}
+    .log-msg{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+    /* === ROUND TABS === */
+    .rtabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px}
+    .rtab{font-size:11px;padding:3px 8px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-family:var(--mono)}
+    .rtab:hover{border-color:var(--accent)}
+    .rtab.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:700}
+
+    /* === ANIMATIONS === */
+    @keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(47,129,247,.4)}50%{box-shadow:0 0 0 10px rgba(47,129,247,0)}}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+    /* === RESPONSIVE === */
+    @media(max-width:900px){
+      .shell{grid-template-columns:1fr}
+      .sidebar{display:none}
+      .detail{grid-template-columns:1fr;max-height:none}
+      .detail.open{max-height:none}
+      .detail-left,.detail-right{max-height:none}
+      .pipe-node{width:90px;min-width:90px}
     }
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>OpenOrchestra Task Console</h1>
-      <div class="muted" data-i18n="subtitle">看状态、看过程、看产物</div>
+  <div class="header">
+    <div class="header-left">
+      <span class="logo">OpenOrchestra</span>
+      <span class="header-task" id="headerTask"></span>
     </div>
-    <div class="top-actions">
-      <div class="segmented" aria-label="Language">
-        <button type="button" id="langZh" class="active" onclick="setLanguage('zh')">中</button>
-        <button type="button" id="langEn" onclick="setLanguage('en')">EN</button>
-      </div>
-      <div class="muted mono" id="heartbeat" aria-live="polite">Loading…</div>
+    <div class="header-right">
+      <div class="seg"><button id="langZh" class="on" onclick="setLang('zh')">中</button><button id="langEn" onclick="setLang('en')">EN</button></div>
+      <span id="heartbeat"></span>
     </div>
-  </header>
-  <main>
-    <aside>
+  </div>
+  <div class="shell">
+    <div class="sidebar">
       <h2 data-i18n="taskHistory">任务历史</h2>
       <div id="tasks"></div>
-    </aside>
-    <section aria-live="polite">
-      <div id="summary" class="grid overview"></div>
-      <h2 data-i18n="workflowProgress">流程进度</h2>
-      <div id="workflow" class="workflow"></div>
-      <h2 data-i18n="liveFlow">实时任务流</h2>
-      <div id="liveFlow" class="live-flow"></div>
-      <h2 data-i18n="roleStatus">角色状态</h2>
-      <div id="roles" class="roles role-flow"></div>
-      <h2 data-i18n="roleDeliveries">角色思考与交付</h2>
-      <div class="muted" data-i18n="roleDeliveryHint">选择一个或多个角色，再选择轮次查看该角色的 prompt、stdout、stderr 与交付 md/json。</div>
-      <div id="roleBrowser" class="role-browser"></div>
-      <div class="split">
-        <div>
-          <h2 data-i18n="activeAgents">正在执行</h2>
-          <div id="activeAgents" class="agent-list"></div>
-        </div>
-        <div class="viewer">
+    </div>
+    <div class="content">
+      <div class="summary" id="summary"></div>
+      <div class="pipe-wrap"><div class="pipe" id="pipeline"></div></div>
+      <div class="role-bar" id="roleBar"></div>
+      <div class="detail" id="detail">
+        <div class="detail-left" id="detailLeft"></div>
+        <div class="detail-right" id="detailRight">
           <div class="viewer-head">
-            <div>
-              <h2 data-i18n="visibleOutput">可见输出 & 交付</h2>
-              <div id="fileTitle" class="muted">选择 prompt、stdout、stderr 或 artifact。</div>
-              <div id="translationNote" class="translate-note"></div>
-            </div>
-            <div class="viewer-actions">
-              <button type="button" onclick="clearViewer()" data-i18n="clear">清空</button>
-            </div>
+            <span class="viewer-path" id="viewerPath" data-i18n="selectFile">点击文件按钮查看内容</span>
+            <button class="detail-close" onclick="clearViewer()" data-i18n="clear">清空</button>
           </div>
+          <div class="viewer-note" id="translationNote"></div>
           <pre id="fileText"></pre>
-          <h2 data-i18n="recentEvents">最近事件</h2>
-          <div id="events" class="card events"></div>
         </div>
       </div>
-    </section>
-  </main>
+      <div class="logbar" id="logbar">
+        <div class="logbar-head" onclick="toggleLog()">
+          <span class="logbar-title"><span data-i18n="activityLog">活动日志</span><span class="log-badge" id="logBadge">0</span></span>
+          <span class="logbar-preview" id="logPreview"></span>
+        </div>
+        <div class="log-body" id="logBody"></div>
+      </div>
+    </div>
+  </div>
 <script>
-let currentTask = new URLSearchParams(location.search).get("task");
-let latestData = null;
-let uiLanguage = localStorage.getItem("harness-ui-language") || "zh";
-let selectedRoles = new Set();
-let selectedRoundByRole = {};
-let selectedRolesTaskId = null;
-let currentFile = null;
-let translationSeq = 0;
-let eventSource = null;
-let eventSourceTask = null;
-let lastEventId = 0;
-let refreshTimer = null;
-const translationCache = new Map();
-const roleLabels = {planner:"规划者", executor:"执行者", tester:"测试者", reviewer:"审阅者", judge:"裁决者", communicator:"交付者", orchestrator:"编排器"};
-const roleLabelsEn = {planner:"Planner", executor:"Executor", tester:"Tester", reviewer:"Reviewer", judge:"Judge", communicator:"Communicator", orchestrator:"Orchestrator"};
-const phaseLabels = {
-  PLANNING_DRAFT:"规划草案", PLANNING_PEER_REVIEW:"规划互审", PLANNING_REVISION:"规划修订", PLAN_REVIEW:"方案审阅", PLAN_JUDGEMENT:"计划裁决", EXECUTION:"执行实现", PATCH_MERGE:"合并方案",
-  TESTING:"测试", TEST_JUDGEMENT:"测试裁决", FIXING:"修复", REVIEWING:"审阅", REVIEW_JUDGEMENT:"审阅裁决",
-  REVIEW_FIXING:"审阅修复", REGRESSION_TESTING:"回归测试", FINAL_JUDGEMENT:"最终裁决", DELIVERY:"交付",
-  MISC_RESPONSE:"直接回答", COMPLETED:"完成"
+// JS Part 1: State, API, i18n, core rendering
+let currentTask=new URLSearchParams(location.search).get("task"),latestData=null,uiLanguage=localStorage.getItem("harness-ui-lang")||"zh";
+let selectedPhaseIdx=-1,selectedRole=null,selectedRoundKey=null,currentFile=null,translationSeq=0;
+let eventSource=null,eventSourceTask=null,lastEventId=0,refreshTimer=null,logOpen=false;
+const translationCache=new Map();
+const rl={planner:"规划者",executor:"执行者",tester:"测试者",reviewer:"审阅者",judge:"裁决者",communicator:"交付者",orchestrator:"编排器"};
+const rlEn={planner:"Planner",executor:"Executor",tester:"Tester",reviewer:"Reviewer",judge:"Judge",communicator:"Communicator",orchestrator:"Orchestrator"};
+const pl={PLANNING_DRAFT:"规划草案",PLANNING_PEER_REVIEW:"规划互审",PLANNING_REVISION:"规划修订",PLAN_REVIEW:"方案审阅",PLAN_JUDGEMENT:"计划裁决",EXECUTION:"执行实现",PATCH_MERGE:"合并补丁",TESTING:"测试",TEST_JUDGEMENT:"测试裁决",FIXING:"修复",REVIEWING:"审阅",REVIEW_JUDGEMENT:"审阅裁决",REVIEW_FIXING:"审阅修复",REGRESSION_TESTING:"回归测试",FINAL_JUDGEMENT:"最终裁决",DELIVERY:"交付",MISC_RESPONSE:"直接回答",COMPLETED:"完成"};
+const plEn={PLANNING_DRAFT:"Planning",PLANNING_PEER_REVIEW:"Peer Review",PLANNING_REVISION:"Revision",PLAN_REVIEW:"Plan Review",PLAN_JUDGEMENT:"Plan Judge",EXECUTION:"Execution",PATCH_MERGE:"Patch Merge",TESTING:"Testing",TEST_JUDGEMENT:"Test Judge",FIXING:"Fixing",REVIEWING:"Review",REVIEW_JUDGEMENT:"Review Judge",REVIEW_FIXING:"Review Fix",REGRESSION_TESTING:"Regression",FINAL_JUDGEMENT:"Final Judge",DELIVERY:"Delivery",MISC_RESPONSE:"Response",COMPLETED:"Done"};
+const i18n={
+  zh:{taskHistory:"任务历史",activityLog:"活动日志",selectFile:"点击文件按钮查看内容",clear:"清空",noTasks:"暂无任务",noPhases:"任务启动后显示流程",noRole:"选择角色查看详情",translating:"翻译中…",translatedByModel:"已翻译(模型)",translatedFallback:"已翻译(词表)",original:"原文"},
+  en:{taskHistory:"Task History",activityLog:"Activity Log",selectFile:"Click a file button to view",clear:"Clear",noTasks:"No tasks yet",noPhases:"Pipeline appears after task starts",noRole:"Select a role to view details",translating:"Translating…",translatedByModel:"Translated (model)",translatedFallback:"Translated (glossary)",original:"Original"}
 };
-const phaseLabelsEn = {
-  PLANNING_DRAFT:"Planning Draft", PLANNING_PEER_REVIEW:"Planning Peer Review", PLANNING_REVISION:"Planning Revision", PLAN_REVIEW:"Plan Review", PLAN_JUDGEMENT:"Plan Judgement", EXECUTION:"Execution", PATCH_MERGE:"Patch Merge",
-  TESTING:"Testing", TEST_JUDGEMENT:"Test Judgement", FIXING:"Fixing", REVIEWING:"Reviewing", REVIEW_JUDGEMENT:"Review Judgement",
-  REVIEW_FIXING:"Review Fixing", REGRESSION_TESTING:"Regression Testing", FINAL_JUDGEMENT:"Final Judgement", DELIVERY:"Delivery",
-  MISC_RESPONSE:"Direct Response", COMPLETED:"Completed"
-};
-const i18n = {
-  zh: {
-    subtitle:"看状态、看过程、看产物", taskHistory:"任务历史", workflowProgress:"流程进度", roleStatus:"角色状态",
-    liveFlow:"实时任务流",
-    loop:"循环",
-    roleDeliveries:"角色思考与交付", roleDeliveryHint:"选择一个或多个角色，再选择轮次查看该角色的 prompt、stdout、stderr 与交付 md/json。",
-    activeAgents:"正在执行", visibleOutput:"可见输出 & 交付", recentEvents:"最近事件", clear:"清空",
-    currentTask:"当前任务", running:"正在运行", successPath:"成功路径", taskWorkspace:"工程主目录",
-    noTasks:"还没有任务。启动一次 Harness 任务后，这里会显示历史。", noRunning:"当前没有运行中的 agent。任务进行时，这里会优先显示正在执行的角色、日志和产物入口。",
-    noLiveFlow:"任务启动后，这里会按实时事件显示每一步。",
-    noEvents:"暂无事件。", selectFile:"选择 prompt、stdout、stderr 或 artifact。",
-    noRole:"选择角色卡片后，这里会按角色和轮次显示交付文件。", noRoleOutput:"该角色暂无可查看轮次。",
-    autoTranslated:"中文模式：只翻译 prompt、交付物、stdout/stderr 里的说明性文本；文件路径、命令、代码、JSON 和配置保持原文。切换 EN 查看完整原文。",
-    translating:"正在翻译说明性文本…",
-    translatedByModel:"中文模式：已使用模型翻译说明性文本；文件路径、命令、代码、JSON 和配置保持原文。切换 EN 查看完整原文。",
-    translatedFallback:"中文模式：模型翻译不可用，已使用本地词表兜底。切换 EN 查看完整原文。",
-    original:"英文模式：显示原文。"
-  },
-  en: {
-    subtitle:"Status, process, and artifacts", taskHistory:"Task History", workflowProgress:"Workflow", roleStatus:"Role Status",
-    liveFlow:"Live Task Flow",
-    loop:"Loop",
-    roleDeliveries:"Role Reasoning and Deliveries", roleDeliveryHint:"Select one or more roles, then choose rounds to inspect prompts, stdout, stderr, and md/json deliveries.",
-    activeAgents:"Active Agents", visibleOutput:"Visible Output & Delivery", recentEvents:"Recent Events", clear:"Clear",
-    currentTask:"Current Task", running:"Running", successPath:"Success Path", taskWorkspace:"Project Root",
-    noTasks:"No tasks yet. Start a Harness task and history will appear here.", noRunning:"No running agents. Active role logs and artifacts appear here while a task runs.",
-    noLiveFlow:"Live events appear here as each task step happens.",
-    noEvents:"No events yet.", selectFile:"Select prompt, stdout, stderr, or an artifact.",
-    noRole:"Select role cards to show delivery files by role and round.", noRoleOutput:"No viewable rounds for this role yet.",
-    autoTranslated:"Chinese mode: content is automatically translated for display; switch to EN for the original.",
-    translating:"Translating prose text…",
-    translatedByModel:"Chinese mode: prose text was translated by the model; protected content is preserved.",
-    translatedFallback:"Chinese mode: model translation is unavailable; local glossary fallback is shown.",
-    original:"English mode: showing original content."
-  }
-};
-const workflowOrder = ["PLANNING_DRAFT","PLANNING_PEER_REVIEW","PLANNING_REVISION","PLAN_REVIEW","PLAN_JUDGEMENT","EXECUTION","PATCH_MERGE","TESTING","TEST_JUDGEMENT","FIXING","REVIEWING","REVIEW_JUDGEMENT","REVIEW_FIXING","REGRESSION_TESTING","FINAL_JUDGEMENT","DELIVERY"];
-const roleFlowOrder = ["orchestrator","planner","executor","tester","reviewer","judge","communicator"];
-const dateFormat = new Intl.DateTimeFormat(navigator.language || "zh-CN", {hour:"2-digit", minute:"2-digit", second:"2-digit"});
-const numberFormat = new Intl.NumberFormat(navigator.language || "zh-CN");
+const phaseIcons={PLANNING_DRAFT:"📋",PLANNING_PEER_REVIEW:"👁",PLANNING_REVISION:"✏️",PLAN_REVIEW:"🔍",PLAN_JUDGEMENT:"⚖️",EXECUTION:"⚡",PATCH_MERGE:"🔀",TESTING:"🧪",TEST_JUDGEMENT:"⚖️",FIXING:"🔧",REVIEWING:"🔍",REVIEW_JUDGEMENT:"⚖️",REVIEW_FIXING:"🔧",REGRESSION_TESTING:"🧪",FINAL_JUDGEMENT:"⚖️",DELIVERY:"📦",MISC_RESPONSE:"💬",COMPLETED:"✅"};
+const roleOrder=["orchestrator","planner","executor","tester","reviewer","judge","communicator"];
+const dateFmt=new Intl.DateTimeFormat(navigator.language||"zh-CN",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
 
-async function getJson(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(await r.text());
-  return await r.json();
+function t(k){return(i18n[uiLanguage]&&i18n[uiLanguage][k])||i18n.zh[k]||k}
+function roleLabel(r){return uiLanguage==="en"?(rlEn[r]||r):(rl[r]||r)}
+function labelPhase(p){return(uiLanguage==="en"?plEn[p]:pl[p])||p||"-"}
+function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function short(s,n=60){s=String(s??"").replace(/\s+/g," ");return s.length>n?s.slice(0,n-1)+"…":s}
+function fmtBytes(b){if(b==null)return"";if(b<1024)return b+" B";if(b<1048576)return Math.round(b/1024)+" KB";return(b/1048576).toFixed(1)+" MB"}
+function pill(st){let s=st||"PENDING";return `<span class="pill ${esc(s)}">${esc(s)}</span>`}
+async function getJson(u){const r=await fetch(u);if(!r.ok)throw new Error(await r.text());return r.json()}
+async function postJson(u,p){const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(p)});if(!r.ok)throw new Error(await r.text());return r.json()}
+
+function setLang(l){
+  uiLanguage=l==="en"?"en":"zh";localStorage.setItem("harness-ui-lang",uiLanguage);
+  document.documentElement.lang=uiLanguage==="en"?"en":"zh-CN";
+  document.getElementById("langZh").classList.toggle("on",uiLanguage==="zh");
+  document.getElementById("langEn").classList.toggle("on",uiLanguage==="en");
+  document.querySelectorAll("[data-i18n]").forEach(el=>{el.textContent=t(el.dataset.i18n)});
+  if(latestData)renderSnapshot(latestData);renderFileText();
 }
 
-async function postJson(url, payload) {
-  const r = await fetch(url, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(payload)
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return await r.json();
-}
-
-function t(key) {
-  return (i18n[uiLanguage] && i18n[uiLanguage][key]) || i18n.zh[key] || key;
-}
-
-function roleLabel(role) {
-  return uiLanguage === "en" ? (roleLabelsEn[role] || role) : (roleLabels[role] || role);
-}
-
-function setLanguage(lang) {
-  uiLanguage = lang === "en" ? "en" : "zh";
-  localStorage.setItem("harness-ui-language", uiLanguage);
-  document.documentElement.lang = uiLanguage === "en" ? "en" : "zh-CN";
-  document.getElementById("langZh").classList.toggle("active", uiLanguage === "zh");
-  document.getElementById("langEn").classList.toggle("active", uiLanguage === "en");
-  document.querySelectorAll("[data-i18n]").forEach(el => {
-    el.textContent = t(el.dataset.i18n);
-  });
-  if (latestData) renderSnapshot(latestData);
-  renderFileText();
-}
-
-function persistRoleSelection() {
-  if (!selectedRolesTaskId) return;
-  localStorage.setItem(selectionStorageKey(selectedRolesTaskId, "roles"), JSON.stringify([...selectedRoles]));
-  localStorage.setItem(selectionStorageKey(selectedRolesTaskId, "rounds"), JSON.stringify(selectedRoundByRole));
-}
-
-function selectionStorageKey(taskId, suffix) {
-  return `harness:${taskId}:selected-${suffix}`;
-}
-
-function loadRoleSelection(taskId) {
-  if (selectedRolesTaskId === taskId) return;
-  selectedRolesTaskId = taskId;
-  const storedRoles = localStorage.getItem(selectionStorageKey(taskId, "roles")) || localStorage.getItem("harness-selected-roles") || "[]";
-  const storedRounds = localStorage.getItem(selectionStorageKey(taskId, "rounds")) || localStorage.getItem("harness-selected-rounds") || "{}";
-  selectedRoles = new Set(JSON.parse(storedRoles));
-  selectedRoundByRole = JSON.parse(storedRounds);
-}
-
-function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-document.addEventListener("click", event => {
-  const fileButton = event.target.closest("[data-file-path]");
-  if (fileButton) {
-    event.stopPropagation();
-    openFile(encodeURIComponent(fileButton.dataset.filePath), fileButton.dataset.fileLabel || "artifact");
-    return;
-  }
-  const roundButton = event.target.closest("[data-select-role-round]");
-  if (roundButton) {
-    event.stopPropagation();
-    selectRoleRound(roundButton.dataset.role, roundButton.dataset.roundKey);
-    return;
-  }
-  const roleButton = event.target.closest("[data-toggle-role]");
-  if (roleButton) {
-    event.stopPropagation();
-    toggleRole(roleButton.dataset.toggleRole);
-    return;
-  }
-  const taskButton = event.target.closest("[data-select-task]");
-  if (taskButton) {
-    selectTask(taskButton.dataset.selectTask);
-  }
-});
-
-document.addEventListener("keydown", event => {
-  if (event.key !== "Enter" && event.key !== " ") return;
-  if (event.target.closest("button,a,input,select,textarea")) return;
-  const roleCard = event.target.closest(".role-card[data-toggle-role]");
-  if (!roleCard) return;
-  event.preventDefault();
-  toggleRole(roleCard.dataset.toggleRole);
-});
-
-function short(s, n=72) {
-  s = String(s ?? "").replace(/\s+/g, " ");
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
-}
-
-async function refresh() {
-  try {
-    const taskList = await getJson("/api/tasks");
-    const latestTask = (taskList.tasks || []).find(t => t.task_id === taskList.latest_task_id);
-    if (taskList.latest_task_id && (!currentTask || (latestTask && latestTask.status === "RUNNING" && currentTask !== taskList.latest_task_id))) {
-      if (currentTask !== taskList.latest_task_id) lastEventId = 0;
-      currentTask = taskList.latest_task_id;
-      history.replaceState(null, "", "?task=" + encodeURIComponent(currentTask));
-    }
-    if (!currentTask && taskList.tasks.length) currentTask = taskList.tasks[0].task_id;
-    renderTasks(taskList.tasks);
-    if (currentTask) {
-      connectEventStream(currentTask);
-      latestData = await getJson("/api/tasks/" + encodeURIComponent(currentTask));
-      lastEventId = Math.max(lastEventId, latestEventId(latestData.events || []));
-      renderSnapshot(latestData);
-    }
-    document.getElementById("heartbeat").textContent = "刷新 " + dateFormat.format(new Date());
-  } catch (e) {
-    document.getElementById("heartbeat").textContent = "错误：" + e.message;
-  }
-}
-
-function scheduleRefresh(delay=150) {
-  if (refreshTimer) return;
-  refreshTimer = setTimeout(() => {
-    refreshTimer = null;
-    refresh();
-  }, delay);
-}
-
-function latestEventId(events) {
-  return events.reduce((maxId, event) => Math.max(maxId, Number(event.id || 0)), 0);
-}
-
-function connectEventStream(taskId) {
-  if (!window.EventSource) return;
-  if (eventSource && eventSourceTask === taskId) return;
-  if (eventSource) eventSource.close();
-  eventSourceTask = taskId;
-  eventSource = new EventSource(`/api/events?task=${encodeURIComponent(taskId)}&last_id=${encodeURIComponent(lastEventId)}`);
-  eventSource.addEventListener("progress", event => {
-    const payload = JSON.parse(event.data);
-    lastEventId = Math.max(lastEventId, Number(payload.id || event.lastEventId || 0));
-    if (payload.task_id !== currentTask) return;
-    if (latestData) {
-      const events = latestData.events || [];
-      if (!events.some(item => Number(item.id || 0) === Number(payload.id || 0))) {
-        latestData.events = [...events, payload].slice(-300);
-        renderLiveFlow(latestData.events);
-        renderEvents(latestData.events);
-      }
-    }
+function connectSSE(taskId){
+  if(!window.EventSource)return;if(eventSource&&eventSourceTask===taskId)return;
+  if(eventSource)eventSource.close();eventSourceTask=taskId;
+  eventSource=new EventSource(`/api/events?task=${encodeURIComponent(taskId)}&last_id=${encodeURIComponent(lastEventId)}`);
+  eventSource.addEventListener("progress",ev=>{
+    const p=JSON.parse(ev.data);lastEventId=Math.max(lastEventId,Number(p.id||0));
+    if(p.task_id!==currentTask)return;
+    if(latestData){const evts=latestData.events||[];if(!evts.some(e=>Number(e.id||0)===Number(p.id||0))){latestData.events=[...evts,p].slice(-300);renderLog(latestData.events)}}
     scheduleRefresh(100);
   });
-  eventSource.onerror = () => {
-    scheduleRefresh(1000);
-  };
+  eventSource.onerror=()=>scheduleRefresh(1000);
+}
+function scheduleRefresh(d=150){if(refreshTimer)return;refreshTimer=setTimeout(()=>{refreshTimer=null;refresh()},d)}
+
+async function refresh(){
+  try{
+    const tl=await getJson("/api/tasks");
+    const lt=(tl.tasks||[]).find(t=>t.task_id===tl.latest_task_id);
+    if(tl.latest_task_id&&(!currentTask||(lt&&lt.status==="RUNNING"&&currentTask!==tl.latest_task_id))){
+      if(currentTask!==tl.latest_task_id)lastEventId=0;currentTask=tl.latest_task_id;
+      history.replaceState(null,"","?task="+encodeURIComponent(currentTask));
+    }
+    if(!currentTask&&tl.tasks.length)currentTask=tl.tasks[0].task_id;
+    renderTasks(tl.tasks);
+    if(currentTask){connectSSE(currentTask);latestData=await getJson("/api/tasks/"+encodeURIComponent(currentTask));
+      lastEventId=Math.max(lastEventId,(latestData.events||[]).reduce((m,e)=>Math.max(m,Number(e.id||0)),0));
+      renderSnapshot(latestData);}
+    document.getElementById("heartbeat").textContent=dateFmt.format(new Date());
+  }catch(e){document.getElementById("heartbeat").textContent="Error"}
 }
 
-function renderTasks(tasks) {
-  const root = document.getElementById("tasks");
-  if (!tasks.length) {
-    root.innerHTML = `<div class="empty">${esc(t("noTasks"))}</div>`;
-    return;
-  }
-  root.innerHTML = tasks.map((t, i) => `<button class="task ${t.task_id === currentTask ? 'active' : ''}" data-select-task="${esc(t.task_id)}">
-    <div class="task-title"><strong>${i + 1}. <span class="mono" translate="no">${esc(t.task_id.slice(0,8))}</span></strong> ${statusPill(t.status)}</div>
-    <div class="muted">${esc(labelPhase(t.current_phase || "-"))}</div>
-    <div>${esc(short(t.user_prompt, 74))}</div>
-  </button>`).join("");
+function renderTasks(tasks){
+  const root=document.getElementById("tasks");
+  if(!tasks.length){root.innerHTML=`<div class="empty-msg">${esc(t("noTasks"))}</div>`;return}
+  root.innerHTML=tasks.map((tk,i)=>`<button class="tsk ${tk.task_id===currentTask?"act":""}" onclick="selectTask('${esc(tk.task_id)}')">
+    <div class="tsk-top"><span class="tsk-id">${esc(tk.task_id.slice(0,8))}</span>${pill(tk.status)}</div>
+    <div class="tsk-prompt">${esc(short(tk.user_prompt,50))}</div></button>`).join("");
+}
+function selectTask(id){currentTask=id;lastEventId=0;selectedPhaseIdx=-1;selectedRole=null;selectedRoundKey=null;
+  history.replaceState(null,"","?task="+encodeURIComponent(id));refresh()}
+// JS Part 2: Rendering functions
+function renderSnapshot(data){
+  const task=data.task;if(!task)return;
+  const runs=data.agent_runs||[],running=runs.filter(r=>r.status==="RUNNING");
+  document.getElementById("headerTask").textContent=short(task.user_prompt,50);
+  // Summary bar
+  document.getElementById("summary").innerHTML=`
+    <div class="sum-item"><span class="sum-label">${uiLanguage==="en"?"Task":"任务"}</span><span class="sum-val">${esc(task.task_id.slice(0,8))}</span></div>
+    <div class="sum-sep"></div>
+    <div class="sum-item">${pill(task.status)}</div>
+    <div class="sum-sep"></div>
+    <div class="sum-item"><span class="sum-label">${uiLanguage==="en"?"Workflow":"工作流"}</span><span class="sum-val">${esc(task.workflow_type||"-")}</span></div>
+    <div class="sum-sep"></div>
+    <div class="sum-item"><span class="sum-label">${uiLanguage==="en"?"Phase":"阶段"}</span><span class="sum-val">${esc(labelPhase(task.current_phase||"-"))}</span></div>
+    <div class="sum-sep"></div>
+    <div class="sum-item"><span class="sum-label">${uiLanguage==="en"?"Active":"活跃"}</span><span class="sum-val">${running.length}</span></div>
+    <div class="sum-sep"></div>
+    <div class="sum-prompt">${esc(task.user_prompt)}</div>`;
+  renderPipeline(data.workflow_timeline||data.phases||[],task.current_phase,data.workflow_loop_edges||[]);
+  renderRoleBar(data.roles||{},runs);
+  renderDetail(data);
+  renderLog(data.events||[]);
 }
 
-function selectTask(taskId) {
-  currentTask = taskId;
-  lastEventId = 0;
-  history.replaceState(null, "", "?task=" + encodeURIComponent(taskId));
-  refresh();
+function renderPipeline(phases,curPhase,loopEdges){
+  const timeline=buildTimeline(phases,curPhase);
+  const root=document.getElementById("pipeline");
+  if(!timeline.length){root.innerHTML=`<div class="empty-msg">${esc(t("noPhases"))}</div>`;return}
+  const loopIdx=new Set((loopEdges||[]).map(e=>Number(e.to_index)));
+  let html="";
+  timeline.forEach((item,i)=>{
+    const st=item.status||(item.phase_type===curPhase?"RUNNING":"PENDING");
+    const isCur=item.phase_type===curPhase&&st!=="COMPLETED";
+    const isLoop=Boolean(item.loop_revisit)||loopIdx.has(Number(item.timeline_index??i));
+    let cls=st==="COMPLETED"?"done":st==="FAILED"?"fail":isCur?"run":"";
+    if(isLoop&&cls!=="run")cls+=" loop";
+    const sel=i===selectedPhaseIdx?"sel":"";
+    const icon=phaseIcons[item.phase_type]||"○";
+    html+=`<div class="pipe-node ${cls} ${sel}" onclick="selectPipeNode(${i})" title="${esc(labelPhase(item.phase_type))}">
+      <div class="dot">${st==="COMPLETED"?"✓":st==="FAILED"?"✕":icon}</div>
+      <div class="pipe-label">${esc(labelPhase(item.phase_type))}</div>
+      <div class="pipe-round">R${esc(item.round_id??"0")}</div>
+      ${isLoop?`<div class="loop-tag">${uiLanguage==="en"?"loop":"循环"}${Number(item.phase_occurrence||1)>1?" #"+item.phase_occurrence:""}</div>`:""}
+    </div>`;
+    if(i<timeline.length-1){
+      const nextSt=timeline[i+1].status||(timeline[i+1].phase_type===curPhase?"RUNNING":"PENDING");
+      const lineCls=st==="COMPLETED"?(nextSt==="COMPLETED"?"done":"active"):"";
+      html+=`<div class="pipe-line ${lineCls}"></div>`;
+    }
+  });
+  root.innerHTML=html;
+  // auto-scroll to current
+  const cur=root.querySelector(".pipe-node.run")||root.querySelector(".pipe-node.sel");
+  if(cur)cur.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"});
 }
 
-function renderSnapshot(data) {
-  const task = data.task;
-  if (!task) return;
-  loadRoleSelection(task.task_id);
-  const runs = data.agent_runs || [];
-  const running = runs.filter(r => r.status === "RUNNING");
-  ensureDefaultSelectedRoles(data);
-  document.getElementById("summary").innerHTML = `
-    <div class="card">
-      <h3>${esc(t("currentTask"))}</h3>
-      <div class="mono" translate="no">${esc(task.task_id)}</div>
-      <div style="margin-top:8px">${statusPill(task.status)} <span class="muted">${esc(task.workflow_type || "-")} · ${esc(labelPhase(task.current_phase || "-"))}</span></div>
-      <div style="margin-top:8px">${esc(task.user_prompt)}</div>
-    </div>
-    <div class="card"><h3>${esc(t("running"))}</h3><div class="metric">${numberFormat.format(running.length)}</div><div class="muted">${running.length ? (uiLanguage === "en" ? "Roles are working" : "有角色在工作") : (uiLanguage === "en" ? "No active agents" : "当前无运行 agent")}</div></div>
-    <div class="card"><h3>${esc(t("taskWorkspace"))}</h3><div class="mono">${esc(data.task_workspace || "-")}</div></div>
-    <div class="card"><h3>${esc(t("successPath"))}</h3><div class="mono">${data.success_path ? esc(data.success_path) : "-"}</div></div>`;
-  renderWorkflow(data.workflow_timeline || data.phases || [], task.current_phase, data.workflow_loop_edges || []);
-  renderLiveFlow(data.events || []);
-  renderRoleFlow(data.roles || {}, runs);
-  renderRoleBrowser(data);
-  renderActiveAgents(running);
-  renderEvents(data.events || []);
+function buildTimeline(phases,curPhase){
+  const wfOrder=["PLANNING_DRAFT","PLANNING_PEER_REVIEW","PLANNING_REVISION","PLAN_REVIEW","PLAN_JUDGEMENT","EXECUTION","PATCH_MERGE","TESTING","TEST_JUDGEMENT","FIXING","REVIEWING","REVIEW_JUDGEMENT","REVIEW_FIXING","REGRESSION_TESTING","FINAL_JUDGEMENT","DELIVERY"];
+  const existing=(phases||[]).map((p,i)=>({...p,phase_type:p.phase_type||p,timeline_index:p.timeline_index??i}));
+  if(existing.length)return existing;
+  const ci=wfOrder.indexOf(curPhase||"");
+  if(ci<0)return curPhase?[{phase_type:curPhase,status:"RUNNING",round_id:0}]:[];
+  return wfOrder.slice(0,ci+1).map((p,i)=>({phase_type:p,status:p===curPhase?"RUNNING":"PENDING",round_id:0,timeline_index:i}));
 }
 
-function renderWorkflow(phases, currentPhase, loopEdges = []) {
-  const timeline = workflowTimeline(phases, currentPhase);
-  if (!timeline.length) {
-    document.getElementById("workflow").innerHTML = `<div class="empty">任务启动后会显示阶段流程。</div>`;
-    return;
-  }
-  const loopToIndexes = new Set((loopEdges || []).map(edge => Number(edge.to_index)));
-  document.getElementById("workflow").innerHTML = timeline.map((item, index) => {
-    const status = item.status || (item.phase_type === currentPhase ? "RUNNING" : "PENDING");
-    const isCurrent = item.phase_type === currentPhase && status !== "COMPLETED";
-    const isLoop = Boolean(item.loop_revisit) || loopToIndexes.has(Number(item.timeline_index ?? index));
-    const cls = status === "COMPLETED" ? "done" : status === "FAILED" ? "failed" : isCurrent ? "current" : "";
-    const connector = index < timeline.length - 1 ? workflowConnector(timeline[index + 1]) : "";
-    return `<div class="workflow-node">
-      <div class="step ${cls} ${isLoop ? "loop" : ""}">
-        <strong>${esc(labelPhase(item.phase_type))}</strong>${isLoop ? `<span class="loop-badge">${esc(t("loop"))}</span>` : ""}
-        <div>${statusPill(status)}</div>
-        <div class="muted">round ${esc(item.round_id ?? "-")}${Number(item.phase_occurrence || 1) > 1 ? ` · #${esc(item.phase_occurrence)}` : ""}</div>
-      </div>
-      ${connector}
+function selectPipeNode(idx){
+  if(selectedPhaseIdx===idx){selectedPhaseIdx=-1}else{selectedPhaseIdx=idx}
+  selectedRole=null;selectedRoundKey=null;
+  if(latestData)renderSnapshot(latestData);
+}
+
+function renderRoleBar(roles,runs){
+  const items=roleOrder.filter(r=>roles[r]).map(r=>roles[r]);
+  const extras=Object.values(roles).filter(r=>!roleOrder.includes(r.role));
+  const all=[...items,...extras];
+  document.getElementById("roleBar").innerHTML=all.map(r=>{
+    const st=esc(r.status||"PENDING");
+    const active=selectedRole===r.role?"active":"";
+    return `<div class="role-chip ${st} ${active}" onclick="selectRoleChip('${esc(r.role)}')">
+      <span class="rc-dot"></span>
+      <span>${esc(roleLabel(r.role))}</span>
+      <span class="rc-count">${r.agent_count||0}a/${r.artifact_count||0}f</span>
     </div>`;
   }).join("");
 }
 
-function workflowTimeline(phases, currentPhase) {
-  const existing = (phases || []).map((phase, index) => ({
-    ...phase,
-    phase_type: phase.phase_type || phase,
-    timeline_index: phase.timeline_index ?? index
-  }));
-  if (existing.length) return existing;
-  const currentIndex = workflowOrder.indexOf(currentPhase || "");
-  if (currentIndex < 0) return currentPhase ? [{phase_type: currentPhase, status:"RUNNING", round_id:"-"}] : [];
-  return workflowOrder.slice(0, currentIndex + 1).map((phase, index) => ({
-    phase_type: phase,
-    status: phase === currentPhase ? "RUNNING" : "PENDING",
-    round_id: "-",
-    timeline_index: index
-  }));
+function selectRoleChip(role){
+  if(selectedRole===role){selectedRole=null}else{selectedRole=role;selectedPhaseIdx=-1;selectedRoundKey=null}
+  if(latestData)renderSnapshot(latestData);
 }
 
-function workflowConnector(nextItem) {
-  const isLoop = Boolean(nextItem?.loop_revisit);
-  return `<div class="workflow-edge ${isLoop ? "loop" : ""}" aria-label="${isLoop ? esc(t("loop")) : ""}">${isLoop ? `<span class="loop-arrow">↩</span>` : ""}</div>`;
-}
-
-function renderLiveFlow(events) {
-  const root = document.getElementById("liveFlow");
-  const visible = (events || []).filter(event => isFlowEvent(event)).slice(-80).reverse();
-  if (!visible.length) {
-    root.innerHTML = `<div class="empty">${esc(t("noLiveFlow"))}</div>`;
-    return;
+function renderDetail(data){
+  const panel=document.getElementById("detail");
+  const runs=data.agent_runs||[];
+  const roundsByRole=data.role_rounds||{};
+  // Determine what to show
+  let detailRuns=[],title="",showPanel=false;
+  if(selectedPhaseIdx>=0){
+    const timeline=buildTimeline(data.workflow_timeline||data.phases||[],data.task?.current_phase);
+    const phase=timeline[selectedPhaseIdx];
+    if(phase){
+      title=labelPhase(phase.phase_type)+" · R"+( phase.round_id??0);
+      detailRuns=runs.filter(r=>r.phase_id===phase.phase_id||(r.phase_type===phase.phase_type&&Number(r.phase_round_id||0)===Number(phase.round_id||0)));
+      showPanel=true;
+    }
+  }else if(selectedRole&&roundsByRole[selectedRole]){
+    const rounds=roundsByRole[selectedRole];
+    if(rounds.length){
+      const selKey=selectedRoundKey||roundK(rounds[rounds.length-1]);
+      const sel=rounds.find(r=>roundK(r)===selKey)||rounds[rounds.length-1];
+      selectedRoundKey=roundK(sel);
+      title=roleLabel(selectedRole);
+      // Round tabs + runs
+      const tabs=rounds.map(r=>{const k=roundK(r);return`<button class="rtab ${k===selectedRoundKey?"on":""}" onclick="selectRound('${esc(selectedRole)}','${esc(k)}')">${uiLanguage==="en"?"R":"轮"}${r.round_id} · ${esc(labelPhase(r.phase_type))}</button>`}).join("");
+      detailRuns=sel.runs||[];
+      document.getElementById("detailLeft").innerHTML=`<div class="detail-title"><span>${esc(title)}</span><button class="detail-close" onclick="closeDetail()">✕</button></div><div class="rtabs">${tabs}</div>${renderAgentCards(detailRuns)}`;
+      panel.classList.add("open");return;
+    }
+  }else{
+    // Show running agents if any
+    const running=runs.filter(r=>r.status==="RUNNING");
+    if(running.length){title=uiLanguage==="en"?"Active Agents":"活跃 Agent";detailRuns=running;showPanel=true}
   }
-  root.innerHTML = visible.map(event => liveEventCard(event)).join("");
+  if(showPanel&&detailRuns.length){
+    document.getElementById("detailLeft").innerHTML=`<div class="detail-title"><span>${esc(title)}</span><button class="detail-close" onclick="closeDetail()">✕</button></div>${renderAgentCards(detailRuns)}`;
+    panel.classList.add("open");
+  }else if(selectedPhaseIdx>=0||selectedRole){
+    document.getElementById("detailLeft").innerHTML=`<div class="detail-title"><span>${esc(title)}</span><button class="detail-close" onclick="closeDetail()">✕</button></div><div class="empty-msg">${esc(t("noRole"))}</div>`;
+    panel.classList.add("open");
+  }else{panel.classList.remove("open")}
 }
 
-function isFlowEvent(event) {
-  return /^(task_|phase_|agent_|patch_|test_|delivery_|judge_)/.test(String(event.event_type || ""));
-}
+function selectRound(role,key){selectedRoundKey=key;if(latestData)renderSnapshot(latestData)}
+function closeDetail(){selectedPhaseIdx=-1;selectedRole=null;selectedRoundKey=null;document.getElementById("detail").classList.remove("open")}
+function roundK(item){return`${item.round_id}:${item.phase_type}`}
 
-function liveEventCard(event) {
-  const status = String(event.status || "");
-  const phase = labelPhase(event.phase || "");
-  const role = event.role ? roleLabel(event.role) : "";
-  const agent = event.agent_id || "";
-  const round = event.round_id === null || event.round_id === undefined ? "" : `round ${event.round_id}`;
-  const attempt = event.attempt === null || event.attempt === undefined ? "" : `try ${Number(event.attempt) + 1}`;
-  const meta = [phase, role, agent, round, attempt].filter(Boolean).join(" · ");
-  return `<div class="live-event ${esc(status)}">
-    <div class="muted mono">${esc(dateFormat.format(new Date(Number(event.ts || 0) * 1000)))}</div>
-    <div class="live-main">
-      <strong>${esc(flowEventLabel(event.event_type))}</strong>
-      <div class="live-meta">${esc(meta)}</div>
-      ${event.message ? `<div>${esc(event.message)}</div>` : ""}
-    </div>
-    ${statusPill(status || "INFO")}
-  </div>`;
-}
-
-function flowEventLabel(eventType) {
-  const labels = {
-    task_created:"任务创建", task_started:"任务启动", task_completed:"任务完成", task_failed:"任务失败",
-    phase_started:"阶段开始", phase_completed:"阶段完成", phase_skipped:"阶段跳过",
-    agent_started:"Agent 开始", agent_heartbeat:"Agent 运行中", agent_completed:"Agent 完成", agent_failed:"Agent 失败", agent_retryable_failure:"Agent 可重试失败",
-    patch_validated:"补丁门禁", test_gate:"测试门禁", delivery_published:"交付发布", judge_decision:"裁决完成"
-  };
-  const labelsEn = {
-    task_created:"Task Created", task_started:"Task Started", task_completed:"Task Completed", task_failed:"Task Failed",
-    phase_started:"Phase Started", phase_completed:"Phase Completed", phase_skipped:"Phase Skipped",
-    agent_started:"Agent Started", agent_heartbeat:"Agent Running", agent_completed:"Agent Completed", agent_failed:"Agent Failed", agent_retryable_failure:"Agent Retryable Failure",
-    patch_validated:"Patch Gate", test_gate:"Test Gate", delivery_published:"Delivery Published", judge_decision:"Judge Decision"
-  };
-  return (uiLanguage === "en" ? labelsEn[eventType] : labels[eventType]) || eventType || "-";
-}
-
-function orderedRoles(roles) {
-  const byName = roles || {};
-  const ordered = roleFlowOrder.filter(role => byName[role]).map(role => byName[role]);
-  const extras = Object.values(byName).filter(role => !roleFlowOrder.includes(role.role));
-  return [...ordered, ...extras];
-}
-
-function renderRoleFlow(roles, runs) {
-  const items = orderedRoles(roles);
-  document.getElementById("roles").innerHTML = items.map((role, index) => {
-    const card = roleCard(role, runs, index + 1);
-    if (index >= items.length - 1) return card;
-    return `${card}<div class="role-connector" aria-hidden="true"></div>`;
+function renderAgentCards(runs){
+  if(!runs.length)return`<div class="empty-msg">${esc(t("noRole"))}</div>`;
+  return runs.map(r=>{
+    const arts=(r.artifacts||[]).filter(a=>a.exists);
+    const deliveryTypes=["delivery.md","final_delivery.md","usage_guide.md","response.md","plan.md","decision_summary.md","review_report.md","test_report.md","bug_report.md","self_check.md","merge_report.md"];
+    const priArts=arts.filter(a=>deliveryTypes.includes(a.artifact_type));
+    const otherArts=arts.filter(a=>!deliveryTypes.includes(a.artifact_type));
+    return`<div class="ag-card">
+      <div class="ag-head"><span class="ag-name">${esc(roleLabel(r.role))} / ${esc(r.agent_id)}</span>${pill(r.status)}</div>
+      <div class="ag-meta">${esc(labelPhase(r.phase_type||"-"))} · R${esc(r.phase_round_id??"-")} · try ${Number(r.retry_count)+1}</div>
+      <div class="ag-files">
+        ${fBtn(r.prompt_path,"prompt",false)}${fBtn(r.stdout_path,"stdout",true)}${fBtn(r.stderr_path,"stderr",false)}${fBtn(r.diagnostics_path,"diag",false)}
+        ${priArts.map(a=>aBtn(a,true)).join("")}${otherArts.map(a=>aBtn(a,false)).join("")}
+      </div></div>`;
   }).join("");
 }
 
-function roleCard(role, runs, stepNumber) {
-  const roleRuns = runs.filter(r => r.role === role.role);
-  const latest = roleRuns[roleRuns.length - 1];
-  const quickRuns = latest ? latestRolePhaseRuns(roleRuns, latest) : [];
-  const quick = latest ? [
-    fileButton(latest.stdout_path, "stdout", true),
-    fileButton(latest.stderr_path, "stderr", false),
-    fileButton(latest.diagnostics_path, "diagnostics", false),
-    ...preferredRoleArtifacts(quickRuns).map(item => artifactButton(item.artifact, true, `${item.agent_id} -> ${item.artifact.artifact_type}`))
-  ].join("") : "";
-  const selected = selectedRoles.has(role.role);
-  const statusClass = esc(role.status || "PENDING");
-  return `<div role="button" tabindex="0" class="card role-card ${statusClass} ${selected ? "selected" : ""}" data-toggle-role="${esc(role.role)}" aria-label="${esc(roleLabel(role.role))}">
-    <div class="role-topline">
-      <div class="role-title"><span class="role-step">${numberFormat.format(stepNumber)}</span><h3>${esc(roleLabel(role.role))}</h3></div>
-      ${statusPill(role.status)}
-    </div>
-    <div class="muted">${esc(labelPhase(role.phase || "-"))} · ${numberFormat.format(role.agent_count || 0)} agent · ${numberFormat.format(role.artifact_count || 0)} artifact</div>
-    <div class="files">${quick || `<span class="muted">${uiLanguage === "en" ? "Waiting for this role." : "等待该角色产出。"}</span>`}</div>
-  </div>`;
+function fBtn(info,label,pri){
+  if(!info||!info.exists)return`<button class="fbtn" disabled>${esc(label)}</button>`;
+  return`<button class="fbtn ${pri?"pri":""}" onclick="openFile('${esc(encodeURIComponent(info.path))}','${esc(label)}')">${esc(label)}</button>`;
+}
+function aBtn(a,pri){
+  if(!a.exists)return"";
+  return`<button class="fbtn ${pri?"pri":""}" onclick="openFile('${esc(encodeURIComponent(a.path))}','${esc(short(a.artifact_type,30))}')">${esc(short(a.artifact_type,20))}</button>`;
 }
 
-function toggleRole(role) {
-  if (selectedRoles.has(role)) selectedRoles.delete(role);
-  else selectedRoles.add(role);
-  persistRoleSelection();
-  if (latestData) {
-    renderRoleFlow(latestData.roles || {}, latestData.agent_runs || []);
-    renderRoleBrowser(latestData);
-  }
+// File viewer
+async function openFile(ep,label){
+  const data=await getJson("/api/file?path="+ep+"&max_chars=200000");
+  currentFile={label,...data};renderFileText();
+  document.getElementById("detail").classList.add("open");
+}
+function clearViewer(){currentFile=null;document.getElementById("viewerPath").textContent=t("selectFile");document.getElementById("fileText").textContent="";document.getElementById("translationNote").textContent=""}
+function renderFileText(){
+  if(!currentFile){document.getElementById("viewerPath").textContent=t("selectFile");document.getElementById("translationNote").textContent="";return}
+  const sfx=currentFile.truncated_from_start?(uiLanguage==="en"?" (tail)":"(尾部)"):"";
+  document.getElementById("viewerPath").textContent=currentFile.label+" · "+currentFile.path+sfx;
+  const src=currentFile.text||"";
+  if(uiLanguage!=="zh"){document.getElementById("fileText").textContent=src;document.getElementById("translationNote").textContent=t("original");return}
+  const ck=currentFile.path+":"+currentFile.size+":"+src.length;
+  const cached=translationCache.get(ck);
+  if(cached){document.getElementById("fileText").textContent=cached.text;document.getElementById("translationNote").textContent=cached.mode==="model"?t("translatedByModel"):t("translatedFallback");return}
+  const fb=translateMd(src);document.getElementById("fileText").textContent=fb;document.getElementById("translationNote").textContent=t("translating");
+  const seq=++translationSeq,path=currentFile.path;
+  postJson("/api/translate",{text:src,path}).then(d=>{
+    if(!currentFile||currentFile.path!==path||uiLanguage!=="zh"||seq!==translationSeq)return;
+    const tr=d.text||fb,mode=d.mode||"fallback";translationCache.set(ck,{text:tr,mode});
+    document.getElementById("fileText").textContent=tr;document.getElementById("translationNote").textContent=mode==="model"?t("translatedByModel"):t("translatedFallback");
+  }).catch(()=>{if(!currentFile||currentFile.path!==path||uiLanguage!=="zh"||seq!==translationSeq)return;
+    translationCache.set(ck,{text:fb,mode:"fallback"});document.getElementById("fileText").textContent=fb;document.getElementById("translationNote").textContent=t("translatedFallback")});
 }
 
-function ensureDefaultSelectedRoles(data) {
-  const rounds = data.role_rounds || {};
-  const availableRoles = Object.keys(rounds).filter(role => rounds[role] && rounds[role].length);
-  const validSelected = [...selectedRoles].filter(role => availableRoles.includes(role));
-  if (validSelected.length !== selectedRoles.size) {
-    selectedRoles = new Set(validSelected);
-  }
-  if (selectedRoles.size) return;
-  if (rounds.planner && rounds.planner.length) selectedRoles.add("planner");
-  else {
-    const first = availableRoles[0];
-    if (first) selectedRoles.add(first);
-  }
-  persistRoleSelection();
+// Activity Log
+function toggleLog(){logOpen=!logOpen;document.getElementById("logBody").classList.toggle("open",logOpen)}
+function renderLog(events){
+  const flow=(events||[]).filter(e=>/^(task_|phase_|agent_|patch_|test_|delivery_|judge_)/.test(String(e.event_type||""))).slice(-60);
+  document.getElementById("logBadge").textContent=String(flow.length);
+  if(flow.length){const last=flow[flow.length-1];document.getElementById("logPreview").textContent=`${flowLabel(last.event_type)} · ${labelPhase(last.phase||"")} · ${last.role?roleLabel(last.role):""}`}
+  document.getElementById("logBody").innerHTML=flow.slice().reverse().map(e=>{
+    const st=String(e.status||"");
+    return`<div class="log-item"><span class="log-time">${esc(dateFmt.format(new Date(Number(e.ts||0)*1000)))}</span><span class="log-type ${esc(st)}">${esc(flowLabel(e.event_type))}</span><span class="log-msg">${esc(labelPhase(e.phase||""))} ${e.role?esc(roleLabel(e.role)):""} ${esc(e.agent_id||"")} ${esc(e.message||"")}</span></div>`;
+  }).join("");
+}
+function flowLabel(et){
+  const zh={task_created:"任务创建",task_started:"任务启动",task_completed:"任务完成",task_failed:"任务失败",phase_started:"阶段开始",phase_completed:"阶段完成",phase_skipped:"阶段跳过",agent_started:"Agent启动",agent_heartbeat:"Agent运行",agent_completed:"Agent完成",agent_failed:"Agent失败",agent_retryable_failure:"Agent重试",patch_validated:"补丁门禁",test_gate:"测试门禁",delivery_published:"交付发布",judge_decision:"裁决"};
+  const en={task_created:"Task Created",task_started:"Task Started",task_completed:"Task Done",task_failed:"Task Failed",phase_started:"Phase Start",phase_completed:"Phase Done",phase_skipped:"Phase Skip",agent_started:"Agent Start",agent_heartbeat:"Agent Run",agent_completed:"Agent Done",agent_failed:"Agent Fail",agent_retryable_failure:"Agent Retry",patch_validated:"Patch Gate",test_gate:"Test Gate",delivery_published:"Delivery",judge_decision:"Judge"};
+  return(uiLanguage==="en"?en[et]:zh[et])||et||"-";
 }
 
-function renderRoleBrowser(data) {
-  const root = document.getElementById("roleBrowser");
-  const roundsByRole = data.role_rounds || {};
-  const roles = [...selectedRoles].filter(role => roundsByRole[role] && roundsByRole[role].length);
-  if (!roles.length) {
-    root.innerHTML = `<div class="empty">${esc(t("noRole"))}</div>`;
-    return;
-  }
-  root.innerHTML = roles.map(role => rolePane(role, roundsByRole[role])).join("");
+// Translation (client-side glossary fallback)
+function translateMd(text){
+  if(!text)return text;let inF=false;
+  return text.split("\n").map(l=>{if(/^\s*```/.test(l)){inF=!inF;return l}if(inF||preserveLine(l))return l;return transLine(l)}).join("\n");
 }
-
-function rolePane(role, rounds) {
-  if (!rounds.length) {
-    return `<div class="role-pane"><h3>${esc(roleLabel(role))}</h3><div class="empty">${esc(t("noRoleOutput"))}</div></div>`;
-  }
-  const selectedKey = selectedRoundByRole[role] || roundKey(rounds[rounds.length - 1]);
-  const selected = rounds.find(item => roundKey(item) === selectedKey) || rounds[rounds.length - 1];
-  selectedRoundByRole[role] = roundKey(selected);
-  persistRoleSelection();
-  return `<div class="role-pane">
-    <div class="agent-head"><h3>${esc(roleLabel(role))}</h3><button type="button" data-toggle-role="${esc(role)}">${uiLanguage === "en" ? "Hide" : "隐藏"}</button></div>
-    <div class="round-tabs">${rounds.map(item => {
-      const key = roundKey(item);
-      const active = key === selectedRoundByRole[role];
-      return `<button type="button" class="${active ? "active" : ""}" data-select-role-round="1" data-role="${esc(role)}" data-round-key="${esc(key)}">round ${esc(item.round_id)} · ${esc(labelPhase(item.phase_type))}</button>`;
-    }).join("")}</div>
-    ${selected.runs.map(run => roleRunDelivery(run)).join("")}
-  </div>`;
-}
-
-function roleRunDelivery(run) {
-  const deliveryArtifacts = (run.artifacts || []).filter(a => isDeliveryArtifact(a.artifact_type));
-  const otherArtifacts = (run.artifacts || []).filter(a => !isDeliveryArtifact(a.artifact_type));
-  return `<div class="delivery-run">
-    <div class="agent-head">
-      <strong><span translate="no">${esc(run.agent_id)}</span></strong>
-      ${statusPill(run.status)}
-    </div>
-    <div class="muted">${esc(labelPhase(run.phase_type || "-"))} · try ${Number(run.retry_count) + 1}</div>
-    <div class="files">
-      ${fileButton(run.prompt_path, "prompt", false)}
-      ${fileButton(run.stdout_path, "stdout", true)}
-      ${fileButton(run.stderr_path, "stderr", false)}
-      ${fileButton(run.diagnostics_path, "diagnostics", false)}
-      ${deliveryArtifacts.map(a => artifactButton(a, true)).join("")}
-      ${otherArtifacts.map(a => artifactButton(a, false)).join("")}
-    </div>
-  </div>`;
-}
-
-function selectRoleRound(role, key) {
-  selectedRoundByRole[role] = key;
-  persistRoleSelection();
-  if (latestData) renderRoleBrowser(latestData);
-}
-
-function roundKey(item) {
-  return `${item.round_id}:${item.phase_type}`;
-}
-
-function isDeliveryArtifact(name) {
-  return ["delivery.md","final_delivery.md","usage_guide.md","response.md","plan.md","decision_summary.md","review_report.md","test_report.md","bug_report.md","self_check.md"].includes(name);
-}
-
-function renderActiveAgents(running) {
-  const root = document.getElementById("activeAgents");
-  if (!running.length) {
-    root.innerHTML = `<div class="empty">${esc(t("noRunning"))}</div>`;
-    return;
-  }
-  root.innerHTML = running.map(run => agentCard(run, true)).join("");
-}
-
-function agentCard(run, compact) {
-  return `<div class="agent-card">
-    <div class="agent-head">
-      <div>
-        <strong>${esc(roleLabel(run.role))} / <span translate="no">${esc(run.agent_id)}</span></strong>
-        <div class="muted">${esc(labelPhase(run.phase_type || "-"))} · round ${esc(run.phase_round_id ?? "-")} · try ${Number(run.retry_count) + 1}</div>
-      </div>
-      ${statusPill(run.status)}
-    </div>
-    <div class="files">
-      ${fileButton(run.prompt_path, "prompt", false)}
-      ${fileButton(run.stdout_path, "stdout", true)}
-      ${fileButton(run.stderr_path, "stderr", false)}
-      ${(run.artifacts || []).map(a => artifactButton(a, false)).join("")}
-    </div>
-    ${compact ? "" : `<div class="muted mono" style="margin-top:8px" translate="no">${esc(run.log_dir)}</div>`}
-  </div>`;
-}
-
-function fileButton(info, label, primary) {
-  if (!info || !info.exists) return `<button type="button" disabled>${esc(label)}</button>`;
-  const size = info.size === null || info.size === undefined ? "" : ` ${formatBytes(info.size)}`;
-  const display = fileLabel(label);
-  return `<button type="button" class="file-btn ${primary ? "primary" : ""}" data-file-path="${esc(info.path)}" data-file-label="${esc(display)}">${esc(display)}${size}</button>`;
-}
-
-function artifactButton(a, primary, label) {
-  if (!a.exists) return "";
-  const display = label || a.artifact_type;
-  return `<button type="button" class="file-btn ${primary ? "primary" : ""}" data-file-path="${esc(a.path)}" data-file-label="${esc(display)}">${esc(short(display, 36))}</button>`;
-}
-
-function latestRolePhaseRuns(roleRuns, latest) {
-  return roleRuns.filter(run => run.phase_type === latest.phase_type && Number(run.phase_round_id || 0) === Number(latest.phase_round_id || 0));
-}
-
-function preferredRoleArtifacts(roleRuns) {
-  const priority = ["peer_review.md","selected_plan.md","plan.md","todo_breakdown.md","final_delivery.md","usage_guide.md","response.md","merged_patch.diff","merged_patch_metadata.md","merge_report.md","patch_metadata.md","test_report.md","bug_report.md","review_report.md","decision_summary.md","delivery.md"];
-  return roleRuns.flatMap(run => preferredArtifacts(run).map(artifact => ({agent_id: run.agent_id, artifact})))
-    .sort((a, b) => {
-      const byPriority = priorityIndex(a.artifact.artifact_type, priority) - priorityIndex(b.artifact.artifact_type, priority);
-      if (byPriority !== 0) return byPriority;
-      return String(a.agent_id).localeCompare(String(b.agent_id));
-    })
-    .slice(0, 6);
-}
-
-function preferredArtifacts(run) {
-  const priority = ["peer_review.md","selected_plan.md","plan.md","todo_breakdown.md","final_delivery.md","usage_guide.md","response.md","merged_patch.diff","merged_patch_metadata.md","merge_report.md","patch_metadata.md","test_report.md","bug_report.md","review_report.md","decision_summary.md","delivery.md"];
-  return (run.artifacts || []).slice().sort((a, b) => priorityIndex(a.artifact_type, priority) - priorityIndex(b.artifact_type, priority)).slice(0, 3);
-}
-
-function priorityIndex(name, priority) {
-  const index = priority.indexOf(name);
-  return index === -1 ? 999 : index;
-}
-
-function fileLabel(label) {
-  if (uiLanguage === "en") return label === "prompt" ? "full prompt" : label;
-  if (label === "prompt") return "完整提示词";
-  if (label === "stdout") return "标准输出";
-  if (label === "stderr") return "错误输出";
-  if (label === "diagnostics") return "请求诊断";
-  return label;
-}
-
-async function openFile(encodedPath, label) {
-  const data = await getJson("/api/file?path=" + encodedPath + "&max_chars=200000");
-  currentFile = {label, ...data};
-  renderFileText();
-}
-
-function clearViewer() {
-  currentFile = null;
-  document.getElementById("fileTitle").textContent = t("selectFile");
-  document.getElementById("fileText").textContent = "";
-  document.getElementById("translationNote").textContent = "";
-}
-
-function renderFileText() {
-  if (!currentFile) {
-    document.getElementById("fileTitle").textContent = t("selectFile");
-    document.getElementById("translationNote").textContent = "";
-    return;
-  }
-  const suffix = currentFile.truncated_from_start ? (uiLanguage === "en" ? " (showing tail)" : "（显示尾部）") : "";
-  document.getElementById("fileTitle").textContent = currentFile.label + " · " + currentFile.path + suffix;
-  const source = currentFile.text || "";
-  if (uiLanguage !== "zh") {
-    document.getElementById("fileText").textContent = source;
-    document.getElementById("translationNote").textContent = t("original");
-    return;
-  }
-  const cacheKey = currentFile.path + ":" + currentFile.size + ":" + source.length;
-  const cached = translationCache.get(cacheKey);
-  if (cached) {
-    document.getElementById("fileText").textContent = cached.text;
-    document.getElementById("translationNote").textContent = cached.mode === "model" ? t("translatedByModel") : t("translatedFallback");
-    return;
-  }
-  const fallback = translateMarkdownToChinese(source);
-  document.getElementById("fileText").textContent = fallback;
-  document.getElementById("translationNote").textContent = t("translating");
-  const seq = ++translationSeq;
-  const path = currentFile.path;
-  postJson("/api/translate", {text: source, path}).then(data => {
-    if (!currentFile || currentFile.path !== path || uiLanguage !== "zh" || seq !== translationSeq) return;
-    const translated = data.text || fallback;
-    const mode = data.mode || "fallback";
-    translationCache.set(cacheKey, {text: translated, mode});
-    document.getElementById("fileText").textContent = translated;
-    document.getElementById("translationNote").textContent = mode === "model" ? t("translatedByModel") : t("translatedFallback");
-  }).catch(() => {
-    if (!currentFile || currentFile.path !== path || uiLanguage !== "zh" || seq !== translationSeq) return;
-    translationCache.set(cacheKey, {text: fallback, mode: "fallback"});
-    document.getElementById("fileText").textContent = fallback;
-    document.getElementById("translationNote").textContent = t("translatedFallback");
-  });
-}
-
-function translateMarkdownToChinese(text) {
-  if (!text) return text;
-  let inFence = false;
-  return text.split("\n").map(line => {
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence;
-      return line;
-    }
-    if (inFence || shouldPreserveLine(line)) return line;
-    return translateProseLine(line);
-  }).join("\n");
-}
-
-function shouldPreserveLine(line) {
-  const trimmed = line.trim();
-  if (!trimmed) return true;
-  if (hasMostlyChinese(trimmed)) return true;
-  if (/^(diff --git|index |--- |\+\+\+ |@@ |[+-]{3,})/.test(trimmed)) return true;
-  if (/^[+-]\s/.test(trimmed) && /[`$./\\]|^\+\s*(import|from|def|class|const|let|var|function)\b/.test(trimmed)) return true;
-  if (/^(curl|python3?|pip|npm|pnpm|yarn|bun|uv|pytest|git|docker|make|cargo|go|node|claude|codex|source|cd|mkdir|cp|mv|rm|cat|sed|rg|grep|ls|open)\b/.test(trimmed)) return true;
-  if (/^\$ /.test(trimmed)) return true;
-  if (/^(https?:\/\/|file:\/\/)/.test(trimmed)) return true;
-  if (/^(\/|~\/|\.\.?\/)[^\s]*$/.test(trimmed)) return true;
-  if (/^[A-Za-z]:[\\/]/.test(trimmed)) return true;
-  if (/^[-*]\s+(`[^`]+`|\/|~\/|\.\.?\/|https?:\/\/)/.test(trimmed)) return true;
-  if (/^\s*[{[\]}],?\s*$/.test(line)) return true;
-  if (/^\s*"[^"]+"\s*:\s*("[^"]*"|\d+|true|false|null|[{[]),?\s*$/.test(line)) return true;
-  if (/^\s*[A-Z0-9_]+\s*=/.test(line)) return true;
-  if (/^\s*[-*]\s+[A-Za-z0-9_.\/~-]+\.(md|py|js|ts|tsx|json|yaml|yml|txt|log|diff|patch|html|css|sh)\b/.test(line)) return true;
+function preserveLine(l){
+  const t=l.trim();if(!t)return true;
+  if(hasCN(t))return true;
+  if(/^(diff --git|index |--- |\+\+\+ |@@ |[+-]{3,})/.test(t))return true;
+  if(/^[+-]\s/.test(t)&&/[`$./\\]|^\+\s*(import|from|def|class|const|let|var|function)\b/.test(t))return true;
+  if(/^(curl|python3?|pip|npm|pytest|git|docker|make|node|claude|codex|cd|mkdir|cp|mv|rm|cat|ls)\b/.test(t))return true;
+  if(/^\$ /.test(t)||/^(https?:\/\/|file:\/\/)/.test(t))return true;
+  if(/^(\/|~\/|\.\.\?\/)[^\s]*$/.test(t))return true;
+  if(/^\s*[{[\]}],?\s*$/.test(l)||/^\s*"[^"]+"\s*:\s*("[^"]*"|\d+|true|false|null|[{[]),?\s*$/.test(l))return true;
+  if(/^\s*[A-Z0-9_]+\s*=/.test(l))return true;
   return false;
 }
-
-function translateProseLine(line) {
-  const placeholders = [];
-  let protectedLine = line.replace(/`[^`]*`|https?:\/\/\S+|(?:\/|~\/|\.\.?\/)[^\s),;]+|[A-Za-z0-9_.-]+\.(?:md|py|js|ts|tsx|json|yaml|yml|txt|log|diff|patch|html|css|sh)\b/g, token => {
-    const marker = `__KEEP_${placeholders.length}__`;
-    placeholders.push(token);
-    return marker;
-  });
-  protectedLine = applyTranslationGlossary(protectedLine);
-  return protectedLine.replace(/__KEEP_(\d+)__/g, (_, index) => placeholders[Number(index)] ?? "");
+function transLine(l){
+  const ph=[];let p=l.replace(/`[^`]*`|https?:\/\/\S+|(?:\/|~\/|\.\.?\/)[^\s),;]+|[A-Za-z0-9_.-]+\.(?:md|py|js|json|yaml|txt|log|diff|html|css|sh)\b/g,tok=>{const m=`__K${ph.length}__`;ph.push(tok);return m});
+  p=glossary(p);return p.replace(/__K(\d+)__/g,(_,i)=>ph[Number(i)]??"");
 }
-
-function applyTranslationGlossary(text) {
-  let out = text;
-  const replacements = [
-    [/^(\s*#{1,6}\s*)Success Path\b/g, "$1成功路径"],
-    [/^(\s*#{1,6}\s*)Delivery Artifact Manifest\b/g, "$1交付产物清单"],
-    [/^(\s*#{1,6}\s*)Final Delivery\b/g, "$1最终交付"],
-    [/^(\s*#{1,6}\s*)Usage Guide\b/g, "$1使用指南"],
-    [/^(\s*#{1,6}\s*)Published Files\b/g, "$1已发布文件"],
-    [/^(\s*#{1,6}\s*)Supporting Artifacts\b/g, "$1支撑产物"],
-    [/^(\s*#{1,6}\s*)Materialized Source Files\b/g, "$1已物化源码文件"],
-    [/^(\s*#{1,6}\s*)Status\b/g, "$1状态"],
-    [/^(\s*#{1,6}\s*)Summary\b/g, "$1摘要"],
-    [/^(\s*#{1,6}\s*)Validation\b/g, "$1验证"],
-    [/^(\s*#{1,6}\s*)Risks\b/g, "$1风险"],
-    [/^(\s*#{1,6}\s*)Next Steps\b/g, "$1下一步"],
-    [/^(\s*#{1,6}\s*)Prerequisites\b/g, "$1前置条件"],
-    [/^(\s*[-*]\s*)Use the collected artifacts for this task\./gi, "$1使用为此任务收集的产物。"],
-    [/^(\s*[-*]\s*)Confirm every role delivery reports status success\./gi, "$1确认每个角色的交付都报告状态为成功。"],
-    [/^(\s*[-*]\s*)Confirm final judge approval exists\./gi, "$1确认存在最终 judge 批准。"],
-    [/^(\s*\d+\.\s*)Open final delivery for the outcome summary\./gi, "$1打开最终交付查看结果摘要。"],
-    [/^(\s*\d+\.\s*)Review implementation, test, review, and judge artifacts for supporting evidence\./gi, "$1查看实现、测试、审阅和裁决产物作为支撑证据。"],
-    [/^(\s*\d+\.\s*)Apply or inspect the patch artifact produced by the executor\./gi, "$1应用或检查 executor 产出的补丁产物。"],
-    [/\bYou are the ([a-z]+) role for a Harness-managed coding task\./gi, "你是 Harness 管理的编码任务中的 $1 角色。"],
-    [/\bProduce ([^.]+) only\./gi, "只产出 $1。"],
-    [/\bDo not modify source files\./gi, "不要修改源码文件。"],
-    [/\bDo not create implementation changes\./gi, "不要创建实现变更。"],
-    [/\bDo not invent details not supported by artifacts or update global Harness state\./gi, "不要编造产物不支持的细节，也不要更新全局 Harness 状态。"],
-    [/\bSummarize the accepted outcome, final status, produced artifacts, validation evidence, known risks, and recommended next steps/gi, "总结已接受结果、最终状态、已产生产物、验证证据、已知风险和建议下一步"],
-    [/\bExplain how to use the delivered result/gi, "说明如何使用交付结果"],
-    [/\bincluding prerequisites, setup, run commands, configuration, verification, common failure modes, and artifact locations/gi, "包括前置条件、设置、运行命令、配置、验证、常见失败模式和产物位置"],
-    [/\bTask\b/g, "任务"],
-    [/\bRole\b/g, "角色"],
-    [/\bPhase\b/g, "阶段"],
-    [/\bAgent\b/g, "Agent"],
-    [/\bAttempt\b/g, "尝试"],
-    [/\bRound\b/g, "轮次"],
-    [/\bUser request\b/gi, "用户请求"],
-    [/\bRequired outputs\b/gi, "必需输出"],
-    [/\bInput artifacts\b/gi, "输入产物"],
-    [/\bOutput directory\b/gi, "输出目录"],
-    [/\bWorkspace directory\b/gi, "工作区目录"],
-    [/\bRepository directory\b/gi, "仓库目录"],
-    [/\bImplementation\b/gi, "实现"],
-    [/\bTesting\b/gi, "测试"],
-    [/\bReview\b/gi, "审阅"],
-    [/\bJudge\b/gi, "裁决"],
-    [/\bCommunicator\b/gi, "交付者"],
-    [/\bPlanner\b/gi, "规划者"],
-    [/\bExecutor\b/gi, "执行者"],
-    [/\bTester\b/gi, "测试者"],
-    [/\bReviewer\b/gi, "审阅者"],
-    [/\baccepted outcome\b/gi, "已接受结果"],
-    [/\bfinal status\b/gi, "最终状态"],
-    [/\bproduced artifacts\b/gi, "已产生产物"],
-    [/\bvalidation evidence\b/gi, "验证证据"],
-    [/\bknown risks\b/gi, "已知风险"],
-    [/\brecommended next steps\b/gi, "建议下一步"],
-    [/\bprerequisites\b/gi, "前置条件"],
-    [/\bsetup\b/gi, "设置"],
-    [/\brun commands\b/gi, "运行命令"],
-    [/\bconfiguration\b/gi, "配置"],
-    [/\bverification\b/gi, "验证"],
-    [/\bcommon failure modes\b/gi, "常见失败模式"],
-    [/\bartifact locations\b/gi, "产物位置"],
-    [/\bcompleted\b/gi, "已完成"],
-    [/\bcomplete\b/gi, "完整"],
-    [/\bsuccess\b/gi, "成功"],
-    [/\bfailed\b/gi, "失败"],
-    [/\bpartial\b/gi, "部分完成"],
-    [/\bnone\b/gi, "无"],
-  ];
-  for (const [pattern, value] of replacements) out = out.replace(pattern, value);
-  out = out.replace(/\b([a-z_]+):/gi, (match, key) => {
-    const labels = {
-      status: "状态",
-      role: "角色",
-      phase: "阶段",
-      agent_id: "Agent ID",
-      task_id: "任务 ID",
-      summary: "摘要",
-      known_risks: "已知风险",
-      success_path: "成功路径",
-      final_delivery: "最终交付",
-      usage_guide: "使用指南",
-      artifacts_manifest: "产物清单",
-      source_final_delivery: "源最终交付",
-      published_final_delivery: "已发布最终交付",
-    };
-    return labels[key.toLowerCase()] ? `${labels[key.toLowerCase()]}:` : match;
-  });
-  return out;
+function glossary(t){
+  const r=[[/\bTask\b/g,"任务"],[/\bRole\b/g,"角色"],[/\bPhase\b/g,"阶段"],[/\bRound\b/g,"轮次"],[/\bImplementation\b/gi,"实现"],[/\bTesting\b/gi,"测试"],[/\bReview\b/gi,"审阅"],[/\bcompleted\b/gi,"已完成"],[/\bsuccess\b/gi,"成功"],[/\bfailed\b/gi,"失败"],[/\bnone\b/gi,"无"]];
+  let o=t;for(const[p,v]of r)o=o.replace(p,v);return o;
 }
+function hasCN(t){const c=(t.slice(0,2000).match(/[\u4e00-\u9fff]/g)||[]).length;const l=(t.slice(0,2000).match(/[A-Za-z]/g)||[]).length;return c>0&&c>=l*.25}
 
-function hasMostlyChinese(text) {
-  const sample = text.slice(0, 4000);
-  const chinese = (sample.match(/[\u4e00-\u9fff]/g) || []).length;
-  const letters = (sample.match(/[A-Za-z]/g) || []).length;
-  return chinese > 0 && chinese >= letters * 0.25;
-}
-
-function renderEvents(events) {
-  const root = document.getElementById("events");
-  if (!events.length) {
-    root.innerHTML = `<div class="muted">${esc(t("noEvents"))}</div>`;
-    return;
-  }
-  root.innerHTML = events.slice(-80).reverse().map(e => `<div>
-    <strong>${esc(e.event_type)}</strong> ${esc(labelPhase(e.phase || ""))} ${esc(e.role ? roleLabel(e.role) : "")} ${esc(e.agent_id || "")}
-    <span class="${esc(e.status)}">${esc(e.status || "")}</span>
-    <div class="muted">${esc(e.message || "")}</div>
-  </div>`).join("");
-}
-
-function statusPill(status) {
-  const text = status || "PENDING";
-  return `<span class="pill ${esc(text)}">${esc(text)}</span>`;
-}
-
-function labelPhase(phase) {
-  return (uiLanguage === "en" ? phaseLabelsEn[phase] : phaseLabels[phase]) || phase || "-";
-}
-
-function formatBytes(bytes) {
-  if (bytes === null || bytes === undefined) return "";
-  if (bytes < 1024) return `${numberFormat.format(bytes)} B`;
-  if (bytes < 1024 * 1024) return `${numberFormat.format(Math.round(bytes / 1024))} KB`;
-  return `${numberFormat.format((bytes / 1024 / 1024).toFixed(1))} MB`;
-}
-
-setLanguage(uiLanguage);
-clearViewer();
-refresh();
-setInterval(refresh, 5000);
-</script>
-</body>
-</html>"""
+// Init
+setLang(uiLanguage);clearViewer();refresh();setInterval(refresh,5000);
+</script></body></html>
+"""

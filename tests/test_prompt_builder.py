@@ -256,3 +256,5 @@ def test_prompt_builder_injects_communicator_publish_metadata(tmp_path: Path) ->
     assert "## Harness Metadata" in prompt
     assert f"- expected_success_path: {tmp_path / 'deliver' / 'weather-task'}" in prompt
     assert "The expected success path is precomputed before publishing" in prompt
+    assert "`## Actual Usage` section written for the end user" in prompt
+    assert "enter project directory, install dependencies when needed, run the program or tests" in prompt

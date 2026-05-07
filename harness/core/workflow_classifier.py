@@ -71,6 +71,8 @@ class WorkflowClassifier:
         try:
             workflow_type = self._parse_workflow_type(raw_output)
         except WorkflowClassificationError as exc:
+            if "did not contain JSON" in str(exc) and raw_output.strip() and self._looks_like_safety_refusal(raw_output):
+                return MISC, run_dir, raw_output.strip()
             if "did not contain JSON" in str(exc) and raw_output.strip() and self._can_use_raw_misc_answer(user_prompt):
                 return MISC, run_dir, raw_output.strip()
             raise
@@ -159,6 +161,24 @@ class WorkflowClassifier:
             "项目",
         )
         return not any(marker in text for marker in project_markers)
+
+    def _looks_like_safety_refusal(self, raw_output: str) -> bool:
+        text = raw_output.lower()
+        refusal_markers = (
+            "i can't help with this request",
+            "i cannot help with this request",
+            "i can't assist with",
+            "i cannot assist with",
+            "can't help create",
+            "cannot help create",
+            "enable sms bombing",
+            "sms bombing",
+            "abuse infrastructure",
+            "violate terms of service",
+            "computer misuse",
+            "unauthorized automation",
+        )
+        return any(marker in text for marker in refusal_markers)
 
     def _classification_prompt(self, user_prompt: str) -> str:
         return "\n".join(

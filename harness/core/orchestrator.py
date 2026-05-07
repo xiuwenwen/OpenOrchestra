@@ -1771,6 +1771,16 @@ class Orchestrator:
             if not source.exists():
                 continue
             source_size = source.stat().st_size
+            staging_mode = self._artifact_staging_mode(role, phase, artifact, source)
+            if staging_mode == "path_only":
+                self._append_path_only_artifact_manifest(
+                    manifest_lines,
+                    index,
+                    artifact,
+                    source,
+                    "large artifact indexed by path only to avoid repeating full content in model context",
+                )
+                continue
             if staged_file_count >= limits["max_files"]:
                 self._append_skipped_artifact_manifest(manifest_lines, index, artifact, source, "max_files exceeded")
                 continue
@@ -1786,7 +1796,7 @@ class Orchestrator:
             copied_bytes, truncated = self._copy_artifact_with_budget(
                 source,
                 destination,
-                max_file_bytes=limits["max_file_bytes"],
+                max_file_bytes=self._artifact_max_file_bytes(limits["max_file_bytes"], staging_mode),
                 remaining_total_bytes=remaining_total_bytes,
             )
             staged_total_bytes += copied_bytes
@@ -1818,9 +1828,7 @@ class Orchestrator:
         phase: str,
         round_id: int | None,
     ) -> list[dict[str, Any]]:
-        if role != "executor" or phase != PATCH_MERGE or round_id is None:
-            return artifacts
-
+        patch_merge_phase = role == "executor" and phase == PATCH_MERGE and round_id is not None
         latest_authoritative: dict[str, dict[str, Any]] = {}
         filtered: list[dict[str, Any]] = []
         candidate_patch_types = {"patch.diff", "fix_patch.diff", "patch_metadata.md"}
@@ -1840,11 +1848,13 @@ class Orchestrator:
             artifact_phase = phase_row["phase_type"] if phase_row else None
 
             if artifact_type in candidate_patch_types:
-                if artifact_round == round_id and artifact_phase in {EXECUTION, FIXING, REVIEW_FIXING}:
+                if patch_merge_phase and artifact_round == round_id and artifact_phase in {EXECUTION, FIXING, REVIEW_FIXING}:
                     filtered.append(artifact)
                 continue
             if artifact_type in authoritative_types:
-                if artifact_round is not None and artifact_round < round_id:
+                if patch_merge_phase and artifact_round is not None and artifact_round < round_id:
+                    latest_authoritative[artifact_type] = artifact
+                elif not patch_merge_phase:
                     latest_authoritative[artifact_type] = artifact
                 continue
             filtered.append(artifact)
@@ -1921,6 +1931,47 @@ class Orchestrator:
                 "",
             ]
         )
+
+    def _append_path_only_artifact_manifest(
+        self,
+        manifest_lines: list[str],
+        index: int,
+        artifact: dict[str, Any],
+        source: Path,
+        reason: str,
+    ) -> None:
+        manifest_lines.extend(
+            [
+                f"## {index}. {artifact['artifact_type']} v{artifact['version']}",
+                f"- local_path: path_only",
+                f"- full_content_staged: false",
+                f"- reason: {reason}",
+                f"- source_path: {source}",
+                f"- role: {artifact['role'] or 'unknown'}",
+                f"- agent_id: {artifact['agent_id'] or 'unknown'}",
+                f"- phase_id: {artifact['phase_id']}",
+                f"- source_bytes: {source.stat().st_size}",
+                "",
+            ]
+        )
+
+    def _artifact_staging_mode(self, role: str, phase: str, artifact: dict[str, Any], source: Path) -> str:
+        if artifact["artifact_type"] != "merged_patch.diff":
+            return "copy"
+        if source.stat().st_size < 64_000:
+            return "copy"
+        if role in {"tester", "judge", "communicator"}:
+            return "path_only"
+        if role == "reviewer":
+            return "truncated"
+        if role == "executor" and phase in {FIXING, REVIEW_FIXING}:
+            return "truncated"
+        return "copy"
+
+    def _artifact_max_file_bytes(self, configured_max_file_bytes: int, staging_mode: str) -> int:
+        if staging_mode == "truncated":
+            return min(configured_max_file_bytes, 16_384)
+        return configured_max_file_bytes
 
     def _artifact_visible_to(self, role: str, phase: str, artifact: dict[str, Any]) -> bool:
         artifact_type = artifact["artifact_type"]
@@ -2109,6 +2160,7 @@ class Orchestrator:
             shutil.copy2(usage_guide, project_dir / "usage_guide.md")
         copied_artifacts = self._publish_supporting_artifacts(task_id, project_dir)
         source_files = self._publish_materialized_source(task_id, project_dir)
+        dependency_files = self._publish_dependency_installer(project_dir)
         success_path = self._write_success_path(task_id, project_dir, destination, usage_guide)
         manifest = project_dir / "artifacts_manifest.md"
         lines = [
@@ -2130,6 +2182,8 @@ class Orchestrator:
             lines.append(f"- patches/final.patch: {project_dir / 'patches' / 'final.patch'}")
         if source_files:
             lines.append(f"- source/: {project_dir / 'source'}")
+        for dependency_file in dependency_files:
+            lines.append(f"- {dependency_file.relative_to(project_dir)}: {dependency_file}")
         if copied_artifacts:
             lines.extend(["", "## Supporting Artifacts", ""])
             for artifact_type, path in copied_artifacts:
@@ -2150,6 +2204,8 @@ class Orchestrator:
         manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
         self._record_published_artifact(task_id, "success_path.md", success_path)
         self._record_published_artifact(task_id, "artifacts_manifest.md", manifest)
+        for dependency_file in dependency_files:
+            self._record_published_artifact(task_id, dependency_file.name, dependency_file)
         return destination
 
     def delivery_success_path(self, task_id: str) -> Path | None:
@@ -2277,6 +2333,76 @@ class Orchestrator:
             destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
             written.append(destination)
         return written
+
+    def _publish_dependency_installer(self, project_dir: Path) -> list[Path]:
+        source_dir = project_dir / "source" if (project_dir / "source").is_dir() else project_dir
+        if not source_dir.exists():
+            return []
+        written: list[Path] = []
+        dependency_file = next(
+            (path for path in (source_dir / "requirements.txt", source_dir / "request.txt") if path.exists()),
+            None,
+        )
+        install_command = ""
+        if (source_dir / "pyproject.toml").exists():
+            install_command = '.venv/bin/python -m pip install -e ".[dev]"'
+        if dependency_file is None:
+            inferred_dependencies = self._infer_delivery_python_dependencies(source_dir, project_dir)
+            if inferred_dependencies:
+                dependency_file = source_dir / "requirements.txt"
+                dependency_file.write_text("\n".join(inferred_dependencies) + "\n", encoding="utf-8")
+                written.append(dependency_file)
+        if not install_command and dependency_file is not None:
+            install_command = f".venv/bin/python -m pip install -r {dependency_file.name}"
+        if not install_command:
+            return []
+        installer = source_dir / "install_dependencies.sh"
+        installer.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env bash",
+                    "set -euo pipefail",
+                    'cd "$(dirname "$0")"',
+                    'PYTHON_BIN="${PYTHON_BIN:-python3}"',
+                    'if [ ! -d ".venv" ]; then',
+                    '  "$PYTHON_BIN" -m venv .venv',
+                    "fi",
+                    ".venv/bin/python -m pip install --upgrade pip",
+                    install_command,
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        installer.chmod(0o755)
+        written.append(installer)
+        return written
+
+    def _infer_delivery_python_dependencies(self, source_dir: Path, project_dir: Path) -> list[str]:
+        if not any(source_dir.rglob("*.py")):
+            return []
+        text_parts: list[str] = []
+        for path in (
+            project_dir / "usage_guide.md",
+            project_dir / "final_delivery.md",
+            source_dir / "README.md",
+            source_dir / "readme.md",
+        ):
+            if path.exists() and path.is_file():
+                text_parts.append(path.read_text(encoding="utf-8", errors="replace").lower())
+        text = "\n".join(text_parts)
+        dependencies: list[str] = []
+        has_pytest_signal = (
+            (source_dir / "tests").exists()
+            or "python -m pytest" in text
+            or "python3 -m pytest" in text
+            or re.search(r"(^|\s)pytest(\s|$)", text) is not None
+        )
+        if has_pytest_signal:
+            dependencies.append("pytest")
+        if "--cov" in text or "pytest-cov" in text:
+            dependencies.append("pytest-cov")
+        return dependencies
 
     def _copy_ignore_for_publish(self, directory: str, names: list[str]) -> set[str]:
         return {

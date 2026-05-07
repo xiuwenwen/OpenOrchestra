@@ -6,6 +6,8 @@ import sys
 import threading
 from pathlib import Path
 
+from harness.ui.terminal import TerminalStatusLine
+
 
 class SubprocessRunner:
     def __init__(self, stream_output: bool = False, stream_prefix: str = ""):
@@ -80,8 +82,7 @@ class SubprocessRunner:
                 handle.write(chunk)
                 handle.flush()
                 if self.stream_output:
-                    live_handle.write(f"{self.stream_prefix}{chunk}")
-                    live_handle.flush()
+                    TerminalStatusLine.write_live(f"{self.stream_prefix}{chunk}", live_handle)
         finally:
             stream.close()
 

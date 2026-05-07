@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import io
+import sys
 from pathlib import Path
 
 import harness.main as main_module
 from harness.agents.result import ArtifactRef
 from harness.core.progress import ProgressEvent
 from harness.main import ConsoleProgressReporter, InteractiveCLI
+
+
+class _TtyBuffer(io.StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 def _config(tmp_path: Path) -> dict:
@@ -166,6 +173,7 @@ def test_delivery_handoff_prefers_source_dir_and_requirements(tmp_path: Path) ->
     source_dir = delivery_dir / "source"
     source_dir.mkdir(parents=True)
     (source_dir / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+    (source_dir / "app.py").write_text("print('ok')\n", encoding="utf-8")
     final_delivery = delivery_dir / "final_delivery.md"
     final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
     usage_guide = delivery_dir / "usage_guide.md"
@@ -174,11 +182,110 @@ def test_delivery_handoff_prefers_source_dir_and_requirements(tmp_path: Path) ->
     lines = main_module.format_delivery_handoff(final_delivery, usage_guide)
 
     assert lines[0] == f"project_dir: {source_dir}"
-    assert lines[1] == f"run_command: cd {source_dir} && python app.py"
+    assert lines[1] == f"run_command: cd {source_dir} && python3 app.py"
     assert lines[2] == (
         f"dependency_install: cd {source_dir} && "
         "python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt"
     )
+
+
+def test_delivery_handoff_prefers_one_command_installer(tmp_path: Path) -> None:
+    delivery_dir = tmp_path / "deliver" / "project-12345678"
+    source_dir = delivery_dir / "source"
+    source_dir.mkdir(parents=True)
+    (source_dir / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+    (source_dir / "install_dependencies.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (source_dir / "tests").mkdir()
+    final_delivery = delivery_dir / "final_delivery.md"
+    final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
+    usage_guide = delivery_dir / "usage_guide.md"
+    usage_guide.write_text("```bash\npython3 -m pytest tests/\n```\n", encoding="utf-8")
+
+    lines = main_module.format_delivery_handoff(final_delivery, usage_guide)
+
+    assert lines[1] == f"run_command: cd {source_dir} && .venv/bin/python -m pytest tests/"
+    assert lines[2] == f"dependency_install: cd {source_dir} && bash install_dependencies.sh"
+
+
+def test_delivery_handoff_skips_non_executable_doc_command_and_infers_python_entrypoint(tmp_path: Path) -> None:
+    delivery_dir = tmp_path / "deliver" / "project-12345678"
+    source_dir = delivery_dir / "source"
+    source_dir.mkdir(parents=True)
+    (source_dir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    final_delivery = delivery_dir / "final_delivery.md"
+    final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
+    usage_guide = delivery_dir / "usage_guide.md"
+    usage_guide.write_text("```bash\npython missing.py\n```\n", encoding="utf-8")
+
+    lines = main_module.format_delivery_handoff(final_delivery, usage_guide)
+
+    assert lines[1] == f"run_command: cd {source_dir} && python3 main.py"
+
+
+def test_delivery_handoff_infers_npm_script_when_available(monkeypatch, tmp_path: Path) -> None:
+    delivery_dir = tmp_path / "deliver" / "project-12345678"
+    source_dir = delivery_dir / "source"
+    source_dir.mkdir(parents=True)
+    (source_dir / "package.json").write_text('{"scripts":{"start":"vite --host 127.0.0.1"}}', encoding="utf-8")
+    final_delivery = delivery_dir / "final_delivery.md"
+    final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
+    monkeypatch.setattr(main_module.shutil, "which", lambda command: f"/usr/bin/{command}" if command == "npm" else None)
+
+    lines = main_module.format_delivery_handoff(final_delivery)
+
+    assert lines[1] == f"run_command: cd {source_dir} && npm run start"
+
+
+def test_delivery_handoff_uses_venv_python_for_script_commands_with_installer(tmp_path: Path) -> None:
+    delivery_dir = tmp_path / "deliver" / "project-12345678"
+    source_dir = delivery_dir / "source"
+    source_dir.mkdir(parents=True)
+    (source_dir / "install_dependencies.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (source_dir / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    final_delivery = delivery_dir / "final_delivery.md"
+    final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
+    usage_guide = delivery_dir / "usage_guide.md"
+    usage_guide.write_text("```bash\npython3 app.py\n```\n", encoding="utf-8")
+
+    lines = main_module.format_delivery_handoff(final_delivery, usage_guide)
+
+    assert lines[1] == f"run_command: cd {source_dir} && .venv/bin/python app.py"
+
+
+def test_format_total_elapsed_uses_task_timestamps() -> None:
+    line = main_module.format_total_elapsed(
+        {
+            "created_at": "2026-05-07T10:00:00+00:00",
+            "updated_at": "2026-05-07T11:02:03+00:00",
+        }
+    )
+
+    assert line == "total_elapsed: 1h 2m 3s"
+
+
+def test_dashboard_tty_task_completed_does_not_duplicate_handoff(monkeypatch, tmp_path: Path) -> None:
+    delivery_dir = tmp_path / "deliver" / "project-12345678"
+    delivery_dir.mkdir(parents=True)
+    final_delivery = delivery_dir / "final_delivery.md"
+    final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
+    output = _TtyBuffer()
+    monkeypatch.setattr(sys, "stdout", output)
+    reporter = main_module.DashboardProgressReporter()
+
+    reporter(
+        ProgressEvent(
+            "task_completed",
+            task_id="task-1",
+            phase="COMPLETED",
+            status="COMPLETED",
+            data={"result_path": str(final_delivery), "result_type": "final_delivery"},
+        )
+    )
+
+    rendered = output.getvalue()
+    assert "\x1b[2J" not in rendered
+    assert "project_dir:" not in rendered
+    assert "[ok] COMPLETED COMPLETED" in rendered
 
 
 def test_run_once_prints_user_handoff_not_internal_delivery_paths(tmp_path: Path, capsys) -> None:
@@ -190,6 +297,7 @@ def test_run_once_prints_user_handoff_not_internal_delivery_paths(tmp_path: Path
     assert "project_dir:" in output
     assert "run_command:" in output
     assert "dependency_install:" in output
+    assert "total_elapsed:" in output
     assert "final_delivery:" not in output
     assert "success_path:" not in output
     assert "usage_guide:" not in output
@@ -733,6 +841,29 @@ def test_dashboard_tracks_individual_agent_rows() -> None:
     assert reporter.state.agents["planner:planner-1"].artifacts == 5
     assert reporter.state.agents["planner:planner-2"].status == "OUTPUT_INVALID"
     assert reporter.state.agents["planner:planner-2"].attempt == 2
+
+
+def test_dashboard_role_summary_does_not_show_individual_agent_identity() -> None:
+    reporter = main_module.DashboardProgressReporter()
+    reporter.enabled = False
+
+    reporter._apply(
+        ProgressEvent(
+            "agent_started",
+            task_id="task",
+            phase="PLANNING_DRAFT",
+            role="planner",
+            agent_id="planner-2",
+            round_id=0,
+            attempt=0,
+            status="RUNNING",
+        )
+    )
+
+    assert reporter.state.roles["planner"].agent_id == "-"
+    assert reporter.state.roles["planner"].attempt is None
+    assert reporter.state.agents["planner:planner-2"].agent_id == "planner-2"
+    assert reporter.state.agents["planner:planner-2"].attempt == 1
 
 
 def test_dashboard_resets_role_and_agent_state_for_new_task() -> None:

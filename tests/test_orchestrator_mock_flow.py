@@ -1395,6 +1395,41 @@ def test_tester_sees_authoritative_merged_patch_not_raw_candidate_patches(tmp_pa
     assert not re.search(r"## \d+\. fix_patch\.diff\b", manifest)
 
 
+def test_tester_stages_latest_authoritative_patch_as_path_only_for_large_diffs(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("test latest large patch only")
+    first_merge_phase_id = orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 0)
+    second_merge_phase_id = orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 1)
+    old_patch = tmp_path / "old_merged.patch"
+    old_patch.write_text("old\n" * 20_000, encoding="utf-8")
+    latest_patch = tmp_path / "latest_merged.patch"
+    latest_patch.write_text("latest\n" * 20_000, encoding="utf-8")
+    for version, phase_id, path in ((1, first_merge_phase_id, old_patch), (2, second_merge_phase_id, latest_patch)):
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id=phase_id,
+                role="executor",
+                agent_id="executor-1",
+                artifact_type="merged_patch.diff",
+                path=path,
+                version=version,
+                hash="hash",
+            )
+        )
+
+    staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input", "tester", "TESTING")
+    manifest = staged[0].read_text(encoding="utf-8")
+
+    assert len(staged) == 1
+    assert "merged_patch.diff v2" in manifest
+    assert "latest_merged.patch" in manifest
+    assert "old_merged.patch" not in manifest
+    assert "full_content_staged: false" in manifest
+    assert "path_only" in manifest
+
+
 def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_patch_only(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("merge current patch only")
@@ -1586,6 +1621,36 @@ def test_staged_input_artifacts_respect_size_budget(tmp_path: Path) -> None:
     assert staged[1].stat().st_size < large_report.stat().st_size
 
 
+def test_reviewer_receives_large_merged_patch_truncated_not_full(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["artifact_input"] = {"max_files": 5, "max_file_bytes": 262144, "max_total_bytes": 262144}
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("review large patch")
+    merge_phase_id = orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 0)
+    patch = tmp_path / "merged.patch"
+    patch.write_text("diff line\n" * 20_000, encoding="utf-8")
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=merge_phase_id,
+            role="executor",
+            agent_id="executor-1",
+            artifact_type="merged_patch.diff",
+            path=patch,
+            version=1,
+            hash="hash",
+        )
+    )
+
+    staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input", "reviewer", "REVIEWING")
+    manifest = staged[0].read_text(encoding="utf-8")
+
+    assert len(staged) == 2
+    assert "truncated: true" in manifest
+    assert staged[1].stat().st_size <= 16_384
+
+
 def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> None:
     config = _config(tmp_path)
     config["system"]["deliver_root"] = str(tmp_path / "deliver")
@@ -1654,6 +1719,47 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
         / "repo"
     )
     assert (tester_repo / "mock.txt").read_text(encoding="utf-8") == "mock change\n"
+
+
+def test_delivery_dependency_installer_infers_pytest_dependencies(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    project_dir = tmp_path / "deliver" / "project-12345678"
+    source_dir = project_dir / "source"
+    (source_dir / "tests").mkdir(parents=True)
+    (source_dir / "tests" / "test_app.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    (source_dir / "src").mkdir()
+    (source_dir / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    (project_dir / "usage_guide.md").write_text(
+        "```bash\npython3 -m pytest --cov=src tests/\n```\n",
+        encoding="utf-8",
+    )
+
+    written = orchestrator._publish_dependency_installer(project_dir)
+
+    requirements = source_dir / "requirements.txt"
+    installer = source_dir / "install_dependencies.sh"
+    assert requirements in written
+    assert installer in written
+    assert requirements.read_text(encoding="utf-8") == "pytest\npytest-cov\n"
+    assert "pip install -r requirements.txt" in installer.read_text(encoding="utf-8")
+    assert installer.stat().st_mode & 0o111
+
+
+def test_delivery_dependency_installer_prefers_pyproject_dev_install(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    project_dir = tmp_path / "deliver" / "project-12345678"
+    source_dir = project_dir / "source"
+    source_dir.mkdir(parents=True)
+    (source_dir / "pyproject.toml").write_text(
+        "[project]\nname = \"demo\"\n[project.optional-dependencies]\ndev = [\"pytest\"]\n",
+        encoding="utf-8",
+    )
+
+    written = orchestrator._publish_dependency_installer(project_dir)
+
+    installer = source_dir / "install_dependencies.sh"
+    assert written == [installer]
+    assert 'pip install -e ".[dev]"' in installer.read_text(encoding="utf-8")
 
 
 def test_delivery_project_name_uses_ascii_safe_slug(tmp_path: Path) -> None:

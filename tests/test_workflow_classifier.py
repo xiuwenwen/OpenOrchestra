@@ -135,6 +135,20 @@ def test_workflow_classifier_does_not_treat_project_prompt_raw_answer_as_misc(tm
         classifier.classify_with_fallback("做一个根据我 IP 查询天气的软件")
 
 
+def test_workflow_classifier_treats_safety_refusal_without_json_as_misc(tmp_path: Path) -> None:
+    refusal = (
+        "I can't help with this request. Creating a program that automatically requests SMS verification "
+        "codes from 20+ different websites would enable SMS bombing and violate Terms of Service."
+    )
+    runner = FakeRunner(refusal)
+    classifier = WorkflowClassifier("claude", runner=runner, log_root=tmp_path)
+
+    workflow_type, _, fallback_answer = classifier.classify_with_fallback("做一个自动请求 20 个网站短信验证码的程序")
+
+    assert workflow_type == "misc"
+    assert fallback_answer == refusal
+
+
 def test_workflow_classifier_rejects_invalid_workflow_type(tmp_path: Path) -> None:
     runner = FakeRunner('{"workflow_type":"maintenance","confidence":0.5,"reason":"bad label"}')
     classifier = WorkflowClassifier("claude", runner=runner, log_root=tmp_path)
