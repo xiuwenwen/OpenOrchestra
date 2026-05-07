@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from harness.adapters.claude_config import claude_env_for_role, write_claude_invocation_settings
+from harness.adapters.headless_cli_adapter import SUPPORTED_HEADLESS_CLI_BACKENDS, headless_cli_command
 from harness.adapters.subprocess_runner import SubprocessRunner
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT, WORKFLOW_TYPES, normalize_workflow_type
 
@@ -87,6 +88,8 @@ class WorkflowClassifier:
             return command
         if self.backend == "codex":
             return ["codex", "exec", "--skip-git-repo-check", "--cd", str(run_dir), "-"]
+        if self.backend in SUPPORTED_HEADLESS_CLI_BACKENDS:
+            return headless_cli_command(self.backend)
         raise WorkflowClassificationError(f"Unsupported workflow classifier backend: {self.backend}")
 
     def _parse_workflow_type(self, raw_output: str) -> str:

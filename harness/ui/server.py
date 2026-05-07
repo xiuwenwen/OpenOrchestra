@@ -299,9 +299,10 @@ class DisplayTranslator:
 
     def _translation_backend(self) -> str | None:
         backend = str(self.config.get("agent_backend", {}).get("default", "") or "")
-        if backend in {"claude", "codex"} and shutil.which(backend):
+        candidates = ("claude", "codex", "gemini", "qwen")
+        if backend in candidates and shutil.which(backend):
             return backend
-        for candidate in ("claude", "codex"):
+        for candidate in candidates:
             if shutil.which(candidate):
                 return candidate
         return None
@@ -367,7 +368,7 @@ class DisplayTranslator:
             return True
         if re.match(r"^[+-]\s", trimmed) and re.search(r"[`$./\\]|^\+\s*(import|from|def|class|const|let|var|function)\b", trimmed):
             return True
-        if re.match(r"^(curl|python3?|pip|npm|pnpm|yarn|bun|uv|pytest|git|docker|make|cargo|go|node|claude|codex|source|cd|mkdir|cp|mv|rm|cat|sed|rg|grep|ls|open)\b", trimmed):
+        if re.match(r"^(curl|python3?|pip|npm|pnpm|yarn|bun|uv|pytest|git|docker|make|cargo|go|node|claude|codex|gemini|qwen|source|cd|mkdir|cp|mv|rm|cat|sed|rg|grep|ls|open)\b", trimmed):
             return True
         if re.match(r"^\$ ", trimmed):
             return True
@@ -590,7 +591,8 @@ def _html() -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpenOrchestra</title>
   <style>
-    :root{--bg:#0d1117;--surface:#161b22;--elevated:#1c2128;--overlay:#2d333b;--border:#30363d;--border-muted:#21262d;--text:#e6edf3;--muted:#7d8590;--subtle:#484f58;--accent:#2f81f7;--accent-soft:rgba(47,129,247,.15);--good:#3fb950;--good-soft:rgba(63,185,80,.15);--bad:#f85149;--bad-soft:rgba(248,81,73,.15);--warn:#d29922;--warn-soft:rgba(210,153,34,.15);--info:#a371f7;--info-soft:rgba(163,113,247,.15);--radius:10px;--font:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    :root{--bg:#000000;--surface:#09090b;--elevated:#121214;--overlay:#1e1e24;--border:rgba(255,255,255,0.1);--border-muted:rgba(255,255,255,0.05);--text:#ededed;--muted:#a1a1aa;--subtle:#71717a;--accent:#6366f1;--accent-soft:rgba(99,102,241,.15);--good:#10b981;--good-soft:rgba(16,185,129,.15);--bad:#ef4444;--bad-soft:rgba(239,68,68,.15);--warn:#f59e0b;--warn-soft:rgba(245,158,11,.15);--info:#8b5cf6;--info-soft:rgba(139,92,246,.15);--radius:10px;--font:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
     *{box-sizing:border-box;margin:0}
     body{background:var(--bg);color:var(--text);font:14px/1.5 var(--font);overflow-x:hidden}
     ::selection{background:var(--accent);color:#fff}
@@ -599,7 +601,7 @@ def _html() -> str:
     ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 
     /* === HEADER === */
-    .header{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;border-bottom:1px solid var(--border);background:var(--surface);position:sticky;top:0;z-index:10}
+    .header{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;border-bottom:1px solid var(--border);background:rgba(9,9,11,0.7);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);position:sticky;top:0;z-index:10}
     .header-left{display:flex;align-items:center;gap:14px;min-width:0}
     .logo{font-size:15px;font-weight:700;white-space:nowrap;background:linear-gradient(135deg,var(--accent),var(--info));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
     .header-task{font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:400px}
@@ -783,7 +785,7 @@ def _html() -> str:
 // JS Part 1: State, API, i18n, core rendering
 let currentTask=new URLSearchParams(location.search).get("task"),latestData=null,uiLanguage=localStorage.getItem("harness-ui-lang")||"zh";
 let selectedPhaseIdx=-1,selectedRole=null,selectedRoundKey=null,currentFile=null,translationSeq=0;
-let eventSource=null,eventSourceTask=null,lastEventId=0,refreshTimer=null,logOpen=false;
+let eventSource=null,eventSourceTask=null,lastEventId=0,refreshTimer=null,logOpen=false,fileRefreshTimer=null;
 const translationCache=new Map();
 const rl={planner:"规划者",executor:"执行者",tester:"测试者",reviewer:"审阅者",judge:"裁决者",communicator:"交付者",orchestrator:"编排器"};
 const rlEn={planner:"Planner",executor:"Executor",tester:"Tester",reviewer:"Reviewer",judge:"Judge",communicator:"Communicator",orchestrator:"Orchestrator"};
@@ -913,7 +915,7 @@ function renderPipeline(phases,curPhase,loopEdges){
 }
 
 function buildTimeline(phases,curPhase){
-  const wfOrder=["PLANNING_DRAFT","PLANNING_PEER_REVIEW","PLANNING_REVISION","PLAN_REVIEW","PLAN_JUDGEMENT","EXECUTION","PATCH_MERGE","TESTING","TEST_JUDGEMENT","FIXING","REVIEWING","REVIEW_JUDGEMENT","REVIEW_FIXING","REGRESSION_TESTING","FINAL_JUDGEMENT","DELIVERY"];
+  const wfOrder=["PLANNING_DRAFT","PLANNING_PEER_REVIEW","PLANNING_REVISION","PLAN_REVIEW","EXECUTION","PATCH_MERGE","TESTING","TEST_JUDGEMENT","FIXING","REVIEWING","REVIEW_JUDGEMENT","REVIEW_FIXING","REGRESSION_TESTING","FINAL_JUDGEMENT","DELIVERY"];
   const existing=(phases||[]).map((p,i)=>({...p,phase_type:p.phase_type||p,timeline_index:p.timeline_index??i}));
   if(existing.length)return existing;
   const ci=wfOrder.indexOf(curPhase||"");
@@ -1021,15 +1023,36 @@ function aBtn(a,pri){
 // File viewer
 async function openFile(ep,label){
   const data=await getJson("/api/file?path="+ep+"&max_chars=200000");
-  currentFile={label,...data};renderFileText();
+  currentFile={label,encodedPath:ep,live:isLiveLogLabel(label),...data};renderFileText();
+  scheduleFileRefresh();
   document.getElementById("detail").classList.add("open");
 }
-function clearViewer(){currentFile=null;document.getElementById("viewerPath").textContent=t("selectFile");document.getElementById("fileText").textContent="";document.getElementById("translationNote").textContent=""}
+function clearViewer(){currentFile=null;stopFileRefresh();document.getElementById("viewerPath").textContent=t("selectFile");document.getElementById("fileText").textContent="";document.getElementById("translationNote").textContent=""}
+function isLiveLogLabel(label){return["stdout","stderr","diag"].includes(String(label||"").toLowerCase())}
+function stopFileRefresh(){if(fileRefreshTimer){clearTimeout(fileRefreshTimer);fileRefreshTimer=null}}
+function scheduleFileRefresh(){
+  stopFileRefresh();
+  if(!currentFile||!currentFile.live)return;
+  fileRefreshTimer=setTimeout(refreshCurrentFile,1000);
+}
+async function refreshCurrentFile(){
+  fileRefreshTimer=null;
+  if(!currentFile||!currentFile.live||!currentFile.encodedPath)return;
+  const previousPath=currentFile.path, previousLabel=currentFile.label, previousEncodedPath=currentFile.encodedPath;
+  try{
+    const data=await getJson("/api/file?path="+previousEncodedPath+"&max_chars=200000");
+    if(!currentFile||currentFile.path!==previousPath)return;
+    currentFile={label:previousLabel,encodedPath:previousEncodedPath,live:true,...data};
+    renderFileText();
+  }catch(e){}
+  scheduleFileRefresh();
+}
 function renderFileText(){
   if(!currentFile){document.getElementById("viewerPath").textContent=t("selectFile");document.getElementById("translationNote").textContent="";return}
   const sfx=currentFile.truncated_from_start?(uiLanguage==="en"?" (tail)":"(尾部)"):"";
   document.getElementById("viewerPath").textContent=currentFile.label+" · "+currentFile.path+sfx;
   const src=currentFile.text||"";
+  if(currentFile.live){document.getElementById("fileText").textContent=src;document.getElementById("translationNote").textContent=uiLanguage==="en"?"Live log":"实时日志";return}
   if(uiLanguage!=="zh"){document.getElementById("fileText").textContent=src;document.getElementById("translationNote").textContent=t("original");return}
   const ck=currentFile.path+":"+currentFile.size+":"+src.length;
   const cached=translationCache.get(ck);
@@ -1071,7 +1094,7 @@ function preserveLine(l){
   if(hasCN(t))return true;
   if(/^(diff --git|index |--- |\+\+\+ |@@ |[+-]{3,})/.test(t))return true;
   if(/^[+-]\s/.test(t)&&/[`$./\\]|^\+\s*(import|from|def|class|const|let|var|function)\b/.test(t))return true;
-  if(/^(curl|python3?|pip|npm|pytest|git|docker|make|node|claude|codex|cd|mkdir|cp|mv|rm|cat|ls)\b/.test(t))return true;
+  if(/^(curl|python3?|pip|npm|pytest|git|docker|make|node|claude|codex|gemini|qwen|cd|mkdir|cp|mv|rm|cat|ls)\b/.test(t))return true;
   if(/^\$ /.test(t)||/^(https?:\/\/|file:\/\/)/.test(t))return true;
   if(/^(\/|~\/|\.\.\?\/)[^\s]*$/.test(t))return true;
   if(/^\s*[{[\]}],?\s*$/.test(l)||/^\s*"[^"]+"\s*:\s*("[^"]*"|\d+|true|false|null|[{[]),?\s*$/.test(l))return true;

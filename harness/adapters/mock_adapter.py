@@ -71,7 +71,7 @@ class MockAgentAdapter(AgentAdapter):
         if context.role == "reviewer" and name == "review_report.md":
             return "artifact_result_code: 0\n\n# Review Report\n\nreview_decision_code: 0\nNo changes required.\n"
         if context.role == "reviewer" and name == "selected_plan.md":
-            return "artifact_result_code: 0\n\n# Selected Plan\n\nUse the mock planner proposal as the single execution plan.\n"
+            return "artifact_result_code: 0\n\n# Selected Plan\n\nUse the merged mock planner proposal as the single execution plan.\n"
         if context.role == "planner" and name == "peer_review.md":
             return "artifact_result_code: 0\n\n# Peer Review\n\npeer_review_code: 1\nMock peer review requests one bounded revision loop.\n"
         if context.role == "communicator" and name == "final_delivery.md":
@@ -174,7 +174,7 @@ class MockAgentAdapter(AgentAdapter):
 
     def _decision_payload(self, context: AgentRunContext) -> dict[str, object]:
         if context.phase == PLAN_JUDGEMENT:
-            return {"decision": "approved", "selected_plan": "mock-plan", "evidence": {}, "reason": "Mock plan is acceptable."}
+            return {"decision": "approved", "evidence": {}, "reason": "Mock plan is acceptable."}
         if context.phase == TEST_JUDGEMENT:
             return {"decision": "pass", "tests_passed": True, "evidence": {}, "reason": "Mock tests passed."}
         if context.phase == REVIEW_JUDGEMENT:

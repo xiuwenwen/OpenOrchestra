@@ -14,6 +14,7 @@ from harness.adapters.claude_config import (
     estimate_prompt_tokens,
 )
 from harness.adapters.codex_cli_adapter import CodexCLIAdapter
+from harness.adapters.headless_cli_adapter import HeadlessCLIAdapter
 from harness.agents.context import AgentRunContext
 
 
@@ -321,6 +322,66 @@ def test_codex_adapter_fails_preflight_without_invoking_runner_for_oversized_pro
     diagnostics_text = diagnostics.read_text(encoding="utf-8")
     assert "- backend: `codex`" in diagnostics_text
     assert "preflight_context_budget_error: `true`" in diagnostics_text
+
+
+def test_gemini_adapter_uses_headless_prompt_and_includes_workspace_dirs(tmp_path: Path) -> None:
+    runner = FakeRunner()
+
+    HeadlessCLIAdapter("gemini", runner=runner).run(_context(tmp_path, config={}))
+
+    assert runner.command is not None
+    assert runner.command[:3] == ["gemini", "--prompt", ""]
+    assert "--output-format" in runner.command
+    assert "--skip-trust" in runner.command
+    assert "--include-directories" in runner.command
+    assert "--approval-mode" in runner.command
+    assert "yolo" in runner.command
+    assert runner.input_text is not None
+
+
+def test_qwen_adapter_uses_headless_prompt_and_configured_approval_mode(tmp_path: Path) -> None:
+    runner = FakeRunner()
+
+    HeadlessCLIAdapter("qwen", runner=runner).run(
+        _context(
+            tmp_path,
+            config={
+                "qwen": {
+                    "approval_mode": "auto-edit",
+                    "auth_type": "openai",
+                    "openai_base_url": "https://api.example.test/v1",
+                }
+            },
+        )
+    )
+
+    assert runner.command is not None
+    assert runner.command[:3] == ["qwen", "--prompt", ""]
+    assert "--bare" in runner.command
+    assert "--auth-type" in runner.command
+    assert "openai" in runner.command
+    assert "--openai-base-url" in runner.command
+    assert "https://api.example.test/v1" in runner.command
+    assert "--approval-mode" in runner.command
+    assert "auto-edit" in runner.command
+    assert runner.input_text is not None
+
+
+def test_headless_adapter_normalizes_approval_mode_for_cli_flavors(tmp_path: Path) -> None:
+    gemini_runner = FakeRunner()
+    qwen_runner = FakeRunner()
+
+    HeadlessCLIAdapter("gemini", runner=gemini_runner).run(
+        _context(tmp_path / "gemini", config={"gemini": {"approval_mode": "auto-edit"}})
+    )
+    HeadlessCLIAdapter("qwen", runner=qwen_runner).run(
+        _context(tmp_path / "qwen", config={"qwen": {"approval_mode": "auto_edit"}})
+    )
+
+    assert gemini_runner.command is not None
+    assert "auto_edit" in gemini_runner.command
+    assert qwen_runner.command is not None
+    assert "auto-edit" in qwen_runner.command
 
 
 def test_claude_adapter_uses_role_specific_max_output_tokens(tmp_path: Path) -> None:

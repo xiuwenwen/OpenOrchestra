@@ -14,6 +14,7 @@ from typing import Any
 from harness.adapters.base import AgentAdapter
 from harness.adapters.claude_code_adapter import ClaudeCodeAdapter, REQUEST_SIZE_ERROR_PATTERNS
 from harness.adapters.codex_cli_adapter import CodexCLIAdapter
+from harness.adapters.headless_cli_adapter import HeadlessCLIAdapter
 from harness.adapters.mock_adapter import MockAgentAdapter
 from harness.agents.context import AgentRunContext
 from harness.agents.result import AgentRunResult, ArtifactRef
@@ -36,8 +37,8 @@ from harness.core.state_machine import (
     FIXING,
     MISC_RESPONSE,
     PATCH_MERGE,
-    PLAN_JUDGEMENT,
     PLAN_REVIEW,
+    PLAN_JUDGEMENT,
     PLANNING_DRAFT,
     PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
@@ -296,25 +297,39 @@ class Orchestrator:
         planner_count = int(self.config["roles"]["planner"]["count"])
         loop_count = self._planning_peer_review_loop_count()
         effective_loop_count = loop_count if planner_count > 1 else 1
+        next_round_id = 0
+        review_fix_mode = False
         for approval_round in range(int(self.config["limits"]["max_planning_rounds"])):
-            final_round_id = approval_round * effective_loop_count
-            for loop_round in range(effective_loop_count):
-                round_id = (approval_round * effective_loop_count) + loop_round
-                final_round_id = round_id
-                phase = PLANNING_DRAFT if round_id == 0 else PLANNING_REVISION
-                self.run_role_phase("planner", phase, round_id, required_outputs_for("planner", phase), user_prompt)
-                if planner_count <= 1:
-                    break
-                peer_results = self.run_role_phase(
+            final_round_id = next_round_id
+            if review_fix_mode:
+                self.run_role_phase(
                     "planner",
-                    PLANNING_PEER_REVIEW,
-                    round_id,
-                    required_outputs_for("planner", PLANNING_PEER_REVIEW),
+                    PLANNING_REVISION,
+                    final_round_id,
+                    required_outputs_for("planner", PLANNING_REVISION),
                     user_prompt,
                 )
-                if self._peer_reviews_satisfied(peer_results):
-                    break
-            self.run_role_phase(
+            else:
+                for loop_round in range(effective_loop_count):
+                    round_id = next_round_id
+                    final_round_id = round_id
+                    phase = PLANNING_DRAFT if round_id == 0 else PLANNING_REVISION
+                    self.run_role_phase("planner", phase, round_id, required_outputs_for("planner", phase), user_prompt)
+                    if planner_count <= 1:
+                        break
+                    peer_results = self.run_role_phase(
+                        "planner",
+                        PLANNING_PEER_REVIEW,
+                        round_id,
+                        required_outputs_for("planner", PLANNING_PEER_REVIEW),
+                        user_prompt,
+                    )
+                    if self._peer_reviews_satisfied(peer_results):
+                        break
+                    next_round_id = round_id + 1
+            # Intentional: planning does not use a judge phase. PLAN_REVIEW merges
+            # peer-reviewed planner outputs into one authoritative executor plan.
+            review_results = self.run_role_phase(
                 "reviewer",
                 PLAN_REVIEW,
                 final_round_id,
@@ -322,10 +337,11 @@ class Orchestrator:
                 user_prompt,
                 agent_count_override=1,
             )
-            plan_decision = self._run_judge_phase(task_id, PLAN_JUDGEMENT, final_round_id, user_prompt)
-            if self.judge.is_plan_approved(plan_decision):
+            if self._plan_review_approved(review_results):
                 return
-        raise TaskFailedError("Planning was not approved after peer-review loops")
+            review_fix_mode = True
+            next_round_id = final_round_id + 1
+        raise TaskFailedError("Planning merge review was not approved after peer-review loops")
 
     def _planning_peer_review_loop_count(self) -> int:
         configured = self.config.get("limits", {}).get(
@@ -355,6 +371,16 @@ class Orchestrator:
                 if "peer_review_status: satisfied" in text or "status: satisfied" in text:
                     saw_status = True
         return saw_status
+
+    def _plan_review_approved(self, results: list[AgentRunResult]) -> bool:
+        for result in results:
+            for artifact in result.artifacts:
+                if artifact.artifact_type != "review_report.md" or not artifact.path.exists():
+                    continue
+                text = artifact.path.read_text(encoding="utf-8", errors="replace").lower()
+                if re.search(r"(?m)^\s*review_decision_code\s*:\s*0\s*$", text):
+                    return True
+        return False
 
     def _run_execution_test_loop(self, task_id: str, user_prompt: str) -> None:
         max_rounds = self._max_test_fix_rounds()
@@ -1478,6 +1504,8 @@ class Orchestrator:
             return CodexCLIAdapter()
         if backend == "claude":
             return ClaudeCodeAdapter()
+        if backend in {"gemini", "qwen"}:
+            return HeadlessCLIAdapter(backend)
         raise ValueError(f"Unsupported agent backend: {backend}")
 
     def _source_repo_for_workspace(self) -> Path | None:
@@ -1841,6 +1869,19 @@ class Orchestrator:
             "objective_gate.md",
             "test_gate.md",
         }
+        latest_planning_round = max(
+            (
+                int(phases_by_id[artifact["phase_id"]]["round_id"])
+                for artifact in artifacts
+                if artifact.get("phase_id") in phases_by_id
+                and (artifact.get("role") or "") == "planner"
+                and phases_by_id[artifact["phase_id"]]["phase_type"]
+                in {PLANNING_DRAFT, PLANNING_REVISION, PLANNING_PEER_REVIEW}
+                and phases_by_id[artifact["phase_id"]].get("round_id") is not None
+            ),
+            default=None,
+        )
+        rejected_plan_review_round = self._latest_rejected_plan_review_round(artifacts, phases_by_id, round_id)
         for artifact in artifacts:
             artifact_type = artifact["artifact_type"]
             artifact_role = artifact["role"] or ""
@@ -1848,9 +1889,25 @@ class Orchestrator:
             artifact_round = int(phase_row["round_id"]) if phase_row and phase_row.get("round_id") is not None else None
             artifact_phase = phase_row["phase_type"] if phase_row else None
 
+            if role == "planner" and phase == PLANNING_REVISION and rejected_plan_review_round is not None:
+                if artifact_type == "project_context.md":
+                    filtered.append(artifact)
+                elif (
+                    artifact_role == "reviewer"
+                    and artifact_phase == PLAN_REVIEW
+                    and artifact_round == rejected_plan_review_round
+                    and artifact_type == "review_report.md"
+                ):
+                    filtered.append(artifact)
+                continue
+
             if phase in {PLAN_REVIEW, PLAN_JUDGEMENT} and artifact_role in {"planner", "reviewer"}:
                 if round_id is not None and artifact_round != round_id:
                     continue
+            if role == "executor" and phase == EXECUTION:
+                if artifact_role == "reviewer" and artifact_phase == PLAN_REVIEW and latest_planning_round is not None:
+                    if artifact_round != latest_planning_round:
+                        continue
 
             if artifact_type in candidate_patch_types:
                 if patch_merge_phase and artifact_round == round_id and artifact_phase in {EXECUTION, FIXING, REVIEW_FIXING}:
@@ -1866,6 +1923,33 @@ class Orchestrator:
 
         filtered.extend(latest_authoritative.values())
         return filtered
+
+    def _latest_rejected_plan_review_round(
+        self,
+        artifacts: list[dict[str, Any]],
+        phases_by_id: dict[str, dict[str, Any]],
+        current_round_id: int | None,
+    ) -> int | None:
+        latest_round: int | None = None
+        for artifact in artifacts:
+            if (artifact.get("role") or "") != "reviewer" or artifact.get("artifact_type") != "review_report.md":
+                continue
+            phase_row = phases_by_id.get(artifact.get("phase_id") or "")
+            if not phase_row or phase_row.get("phase_type") != PLAN_REVIEW or phase_row.get("round_id") is None:
+                continue
+            artifact_round = int(phase_row["round_id"])
+            if current_round_id is not None and artifact_round >= current_round_id:
+                continue
+            path = Path(str(artifact.get("path") or ""))
+            if not path.exists() or not self._review_report_requests_changes(path):
+                continue
+            if latest_round is None or artifact_round > latest_round:
+                latest_round = artifact_round
+        return latest_round
+
+    def _review_report_requests_changes(self, path: Path) -> bool:
+        text = path.read_text(encoding="utf-8", errors="replace").lower()
+        return bool(re.search(r"(?m)^\s*review_decision_code\s*:\s*(1|-1)\s*$", text))
 
     def _artifact_input_limits(self) -> dict[str, int]:
         configured = self.config.get("artifact_input", {})
@@ -1984,6 +2068,8 @@ class Orchestrator:
         if artifact_type == "project_context.md":
             return True
         if role == "planner":
+            if phase == PLANNING_REVISION and artifact_role == "reviewer" and artifact_type == "review_report.md":
+                return True
             return artifact_role in {"planner", "judge"} and artifact_type in {
                 "plan.md",
                 "assumptions.md",
@@ -1995,11 +2081,9 @@ class Orchestrator:
             }
         if role == "executor":
             if phase == EXECUTION:
-                return artifact_role in {"reviewer", "judge"} and artifact_type in {
+                return artifact_role == "reviewer" and artifact_type in {
                     "selected_plan.md",
                     "review_report.md",
-                    "decision.json",
-                    "decision_summary.md",
                 }
             if phase == PATCH_MERGE:
                 return artifact_role in {"planner", "executor", "tester", "reviewer", "judge", "orchestrator"} and artifact_type in {
@@ -2084,14 +2168,12 @@ class Orchestrator:
             }
         if role == "reviewer":
             if phase == PLAN_REVIEW:
-                return artifact_role in {"planner", "judge"} and artifact_type in {
+                return artifact_role in {"planner"} and artifact_type in {
                     "plan.md",
                     "assumptions.md",
                     "risk.md",
                     "todo_breakdown.md",
                     "peer_review.md",
-                    "decision.json",
-                    "decision_summary.md",
                 }
             return artifact_role in {"executor", "tester", "judge", "orchestrator"} and artifact_type in {
                 "implementation_plan.md",
@@ -2115,14 +2197,12 @@ class Orchestrator:
             }
         if role == "judge":
             if phase == PLAN_JUDGEMENT:
-                return artifact_role in {"planner", "reviewer"} and artifact_type in {
-                    "selected_plan.md",
+                return artifact_role == "planner" and artifact_type in {
                     "plan.md",
                     "assumptions.md",
                     "risk.md",
                     "todo_breakdown.md",
                     "peer_review.md",
-                    "review_report.md",
                 }
             if phase == TEST_JUDGEMENT:
                 return (
@@ -2273,7 +2353,6 @@ class Orchestrator:
             "fix_patch.diff",
             "patch_metadata.md",
             "implementation_plan.md",
-            "selected_plan.md",
             "changed_files.md",
             "self_check.md",
             "fix_schedule.md",

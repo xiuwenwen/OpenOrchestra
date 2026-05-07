@@ -451,8 +451,10 @@ class PromptBuilder:
                 ]
             if context.phase == "PLANNING_REVISION":
                 return [
-                    "- This is a planner revision phase after peer review.",
+                    "- This is a planner revision phase after peer review or planning merge-review feedback.",
                     "- `plan.md`, `assumptions.md`, `risk.md`, and `todo_breakdown.md` must each start with `artifact_result_code: 0` when complete.",
+                    "- If a reviewer `review_report.md` from PLAN_REVIEW is present with `review_decision_code: 1` or `review_decision_code: -1`, treat it as the authoritative revision request and revise only against that feedback.",
+                    "- When revising from PLAN_REVIEW feedback, do not re-litigate old planner proposals or peer reviews unless the reviewer explicitly references them.",
                     "- Read all available `peer_review.md` artifacts, especially comments directed at your previous plan.",
                     "- Revise `plan.md`, `assumptions.md`, `risk.md`, and `todo_breakdown.md` based on feedback you accept.",
                     "- When you reject feedback, state the rejected feedback and rationale in `plan.md` or `risk.md` instead of silently ignoring it.",
@@ -468,15 +470,15 @@ class PromptBuilder:
         if context.role == "reviewer":
             if context.phase == "PLAN_REVIEW":
                 return [
-                    "- This is a planning review phase after planner peer-review loops.",
+                    "- This is the planning merge-review phase after planner peer-review loops.",
                     "- `review_report.md` and `selected_plan.md` must each start with `artifact_result_code: 0` when complete.",
-                    "- Review all planner `plan.md`, `assumptions.md`, `risk.md`, `todo_breakdown.md`, and `peer_review.md` artifacts against the user's request.",
-                    "- `review_report.md` must select the best planner proposal by `agent_id` and explain why it should guide executor agents.",
-                    "- If no single proposal is sufficient, choose the best base proposal and list required adjustments.",
-                    "- `selected_plan.md` must consolidate the chosen proposal into the single authoritative plan for executor agents.",
+                    "- Merge the current-round planner `plan.md`, `assumptions.md`, `risk.md`, `todo_breakdown.md`, and `peer_review.md` artifacts into one authoritative executor plan.",
+                    "- Do not merely pick one planner proposal when other proposals contain useful compatible details; preserve the strongest compatible requirements, risks, acceptance criteria, and test commands.",
+                    "- If planner proposals conflict materially or peer review still contains blocking objections, write `review_decision_code: 1` and explain the required planning revision instead of inventing a compromise.",
+                    "- `selected_plan.md` is the single authoritative plan for executor agents.",
                     "- `selected_plan.md` must include files, steps, acceptance criteria, test commands, dependencies, and risks using the planner todo schema.",
-                    "- `review_report.md` must include one machine-readable line: `review_decision_code: 0` when the selected proposal is actionable enough for execution, `review_decision_code: 1` when changes are required, or `review_decision_code: -1` for blocking rejection.",
-                    "- `review_decision_code` is the review verdict. It must not be copied into the `delivery.md` return code.",
+                    "- `review_report.md` must summarize which planner artifacts were merged, any discarded conflicting points, and include one machine-readable line: `review_decision_code: 0` when the merged plan is actionable enough for execution, `review_decision_code: 1` when changes are required, or `review_decision_code: -1` for blocking rejection.",
+                    "- `review_decision_code` is the merge-review verdict. It must not be copied into the `delivery.md` return code.",
                 ]
             return [
                 "- `review_report.md` must start with `artifact_result_code: 0` when complete.",

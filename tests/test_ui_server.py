@@ -175,6 +175,15 @@ def test_ui_html_includes_live_event_stream() -> None:
     assert "/api/events?task=" in html
 
 
+def test_ui_html_auto_refreshes_open_live_logs() -> None:
+    html = _html()
+
+    assert "refreshCurrentFile" in html
+    assert "scheduleFileRefresh" in html
+    assert "isLiveLogLabel" in html
+    assert "实时日志" in html
+
+
 def test_ui_html_renders_workflow_loop_markers() -> None:
     html = _html()
 

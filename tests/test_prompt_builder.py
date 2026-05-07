@@ -186,6 +186,23 @@ def test_prompt_builder_has_planner_peer_review_contract(tmp_path: Path) -> None
     assert "peer_review_code: 1" in prompt
 
 
+def test_prompt_builder_planner_revision_prioritizes_plan_review_feedback(tmp_path: Path) -> None:
+    context = make_context(tmp_path, role="planner", agent_id="planner-1", role_count=2)
+    context = AgentRunContext(
+        **{
+            **context.__dict__,
+            "phase": "PLANNING_REVISION",
+            "required_outputs": ["plan.md", "assumptions.md", "risk.md", "todo_breakdown.md", "delivery.md"],
+        }
+    )
+
+    prompt = PromptBuilder().build(context)
+
+    assert "review_report.md" in prompt
+    assert "authoritative revision request" in prompt
+    assert "do not re-litigate old planner proposals" in prompt
+
+
 def test_prompt_builder_defines_delivery_return_code_as_role_return_value(tmp_path: Path) -> None:
     context = make_context(tmp_path, role="judge", agent_id="judge-1", role_count=1)
     context = AgentRunContext(
@@ -210,20 +227,22 @@ def test_prompt_builder_defines_delivery_return_code_as_role_return_value(tmp_pa
     assert "If you choose `decision: fail` because tests failed, write `return_code: 0` in `delivery.md`" in prompt
 
 
-def test_prompt_builder_has_plan_review_selection_contract(tmp_path: Path) -> None:
+def test_prompt_builder_has_plan_review_merge_contract(tmp_path: Path) -> None:
     context = make_context(tmp_path, role="reviewer", agent_id="reviewer-1", role_count=1)
     context = AgentRunContext(
         **{
             **context.__dict__,
             "phase": "PLAN_REVIEW",
-            "required_outputs": ["review_report.md", "delivery.md"],
+            "required_outputs": ["review_report.md", "selected_plan.md", "delivery.md"],
         }
     )
 
     prompt = PromptBuilder().build(context)
 
-    assert "planning review phase" in prompt
-    assert "select the best planner proposal by `agent_id`" in prompt
+    assert "planning merge-review phase" in prompt
+    assert "Merge the current-round planner" in prompt
+    assert "`selected_plan.md` is the single authoritative plan" in prompt
+    assert "Do not merely pick one planner proposal" in prompt
 
 
 def test_prompt_builder_injects_communicator_publish_metadata(tmp_path: Path) -> None:

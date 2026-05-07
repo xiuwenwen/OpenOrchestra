@@ -560,6 +560,13 @@ def test_backend_completion_items_are_live_candidates(tmp_path: Path) -> None:
     assert items[0].start_position == -2
 
 
+def test_backend_completion_includes_gemini_and_qwen(tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+
+    assert [item.text for item in cli.completion_items("/use g")] == ["gemini"]
+    assert [item.text for item in cli.completion_items("/use q")] == ["qwen"]
+
+
 def test_resume_completion_items_include_task_information(tmp_path: Path) -> None:
     cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
     task_id = cli.orchestrator.create_task("Build a weather app with IP lookup")

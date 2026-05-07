@@ -53,6 +53,7 @@ from harness.ui.server import HarnessWebServer, UiEventStore
 from harness.ui.terminal import TerminalStatusLine
 
 USER_ENV_PATH = Path.home() / ".myharness.env"
+REAL_BACKENDS = ("codex", "claude", "gemini", "qwen")
 
 
 def display_width(text: str) -> int:
@@ -489,9 +490,9 @@ def main() -> int:
     parser.add_argument("--config", default="config/config.yaml", help="Path to config.yaml")
     parser.add_argument(
         "--backend",
-        choices=["auto", "codex", "claude"],
+        choices=["auto", *REAL_BACKENDS],
         default=None,
-        help="Real agent backend to use. auto prefers codex, then claude.",
+        help="Real agent backend to use. auto prefers codex, then claude, gemini, qwen.",
     )
     parser.add_argument(
         "--serial-agents",
@@ -778,10 +779,10 @@ def _use_project_virtualenv_python(command: str) -> str:
 
 def resolve_real_backend(requested: str) -> str:
     if requested == "auto":
-        for candidate in ("codex", "claude"):
+        for candidate in REAL_BACKENDS:
             if shutil.which(candidate):
                 return candidate
-        raise RuntimeError("No real agent CLI found. Install `codex` or `claude`, then run again.")
+        raise RuntimeError("No real agent CLI found. Install one of: codex, claude, gemini, qwen.")
     if not shutil.which(requested):
         raise RuntimeError(f"Requested backend `{requested}` was not found on PATH.")
     return requested
@@ -1034,11 +1035,11 @@ class InteractiveCLI:
         command = self._resolve_command(parts[0].lower())
         current = parts[-1]
         if command == "/use" and len(parts) == 2:
-            if current in {"claude", "codex"}:
+            if current in REAL_BACKENDS:
                 return []
             return [
                 Completion(backend, start_position=-len(current), display=backend, display_meta="agent backend")
-                for backend in ("claude", "codex")
+                for backend in REAL_BACKENDS
                 if backend.startswith(current)
             ]
         if command == "/resume" and len(parts) == 2:
@@ -1095,7 +1096,7 @@ class InteractiveCLI:
             print(f"current backend: {self.backend}")
         elif command in {"/use", "/backend-use", "/switch"}:
             if not args:
-                print("usage: /use claude|codex")
+                print("usage: /use codex|claude|gemini|qwen")
                 return
             self._switch_backend(args[0])
         elif command in {"/history", "/tasks"}:
@@ -1151,7 +1152,7 @@ class InteractiveCLI:
                 [
                     "Commands:",
                     "  /backend                 Show current backend",
-                    "  /use claude|codex        Switch underlying agent backend",
+                    "  /use codex|claude|gemini|qwen",
                     "  /history [n]             List recent tasks",
                     "  /continue                Continue/retry the active historical task; bare 'continue' also works",
                     "  /resume <n|task_id>      Use a historical task as context for following prompts",

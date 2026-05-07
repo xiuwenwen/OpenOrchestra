@@ -65,6 +65,18 @@ def test_workflow_classifier_parses_fenced_json(tmp_path: Path) -> None:
     assert str(runner.cwd) in runner.command
 
 
+def test_workflow_classifier_supports_gemini_headless_cli(tmp_path: Path) -> None:
+    runner = FakeRunner('{"workflow_type":"misc","confidence":0.8,"reason":"question"}')
+    classifier = WorkflowClassifier("gemini", runner=runner, log_root=tmp_path)
+
+    workflow_type, _ = classifier.classify("what is this?")
+
+    assert workflow_type == "misc"
+    assert runner.command is not None
+    assert runner.command[:3] == ["gemini", "--prompt", ""]
+    assert "--output-format" in runner.command
+
+
 def test_workflow_classifier_supports_misc(tmp_path: Path) -> None:
     runner = FakeRunner('{"workflow_type":"misc","confidence":0.86,"reason":"informational question"}')
     classifier = WorkflowClassifier("claude", runner=runner, log_root=tmp_path)

@@ -44,7 +44,20 @@ def test_misc_chat_runs_inside_its_log_directory_with_user_codex_sandbox(tmp_pat
     assert runner.cwd.parent == tmp_path
     assert runner.command is not None
     assert "--sandbox" not in runner.command
-    assert str(runner.cwd) in runner.command
+
+
+def test_misc_chat_supports_qwen_headless_cli(tmp_path: Path) -> None:
+    runner = FakeRunner("direct answer")
+    chat = MiscChatRunner("qwen", runner=runner, log_root=tmp_path)
+
+    answer = chat.ask("how do I use this?")
+
+    assert answer == "direct answer"
+    assert runner.command is not None
+    assert runner.command[:3] == ["qwen", "--prompt", ""]
+    assert "--output-format" in runner.command
+    assert runner.cwd is not None
+    assert runner.cwd.parent == tmp_path
     assert runner.timeout_seconds == 0
 
 

@@ -1,8 +1,8 @@
 # OpenOrchestra
 
-OpenOrchestra 是一个面向成熟编码 Agent 的本地编排器。它协调 Codex CLI、Claude Code 等 Agent 完成规划、执行、测试、审查、裁决和交付。
+OpenOrchestra 是一个面向成熟编码 Agent 的本地编排器。它协调 Codex CLI、Claude Code、Gemini CLI、Qwen CLI 等 Agent 完成规划、执行、测试、审查、裁决和交付。
 
-OpenOrchestra is a local orchestration harness for mature coding agents such as Codex CLI and Claude Code. It coordinates planning, execution, testing, review, judgement, and delivery.
+OpenOrchestra is a local orchestration harness for mature coding agents such as Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. It coordinates planning, execution, testing, review, judgement, and delivery.
 
 OpenOrchestra 不内置文件编辑、Shell、测试等工具。Agent 在隔离工作区里使用自己的工具完成读写和命令执行；OpenOrchestra 负责阶段流转、重试、超时、日志、artifact 校验、patch gate、judge gate 和最终交付。
 
@@ -12,7 +12,7 @@ OpenOrchestra does not implement internal file, shell, edit, or test tools. Agen
 
 - 任务、阶段、Agent run、artifact 和 judge decision 使用 SQLite 记录。
 - Isolated `workspaces/`, versioned `artifacts/`, and published `deliver/` outputs.
-- 支持 `codex`、`claude` 和测试用 `mock` backend。
+- 支持 `codex`、`claude`、`gemini`、`qwen` 和测试用 `mock` backend。
 - Web UI 默认启动，展示实时任务流、流程循环、角色状态、stdout/stderr 和交付文件。
 - PATCH_MERGE 产物经过 hard gate：unified diff 格式、scope、`git apply --check`、`git diff --check`、敏感路径和异常大小检查。
 - Judge 使用结构化证据，不直接相信自然语言测试结论。
@@ -51,6 +51,8 @@ Make sure at least one real backend is installed and authenticated:
 
 - Claude Code: `claude` must be available in `PATH`.
 - Codex CLI: `codex` must be available in `PATH`.
+- Gemini CLI: `gemini` must be available in `PATH`.
+- Qwen CLI: `qwen` must be available in `PATH`; non-interactive runs may require `qwen.auth_type`.
 
 ### 3. Run / 运行
 
@@ -85,6 +87,8 @@ Run a one-shot task:
 ```bash
 ./orchestra --backend claude "做一个根据 IP 查询天气的小工具"
 ./orchestra --backend codex "fix the failing login test"
+./orchestra --backend gemini "解释一下这个项目怎么运行"
+./orchestra --backend qwen "review this repository"
 ```
 
 Choose a workflow explicitly:
@@ -142,6 +146,8 @@ artifacts/
 /backend                 Show current backend / 查看当前 backend
 /use claude              Switch all roles to Claude Code / 切换到 Claude Code
 /use codex               Switch all roles to Codex CLI / 切换到 Codex CLI
+/use gemini              Switch all roles to Gemini CLI / 切换到 Gemini CLI
+/use qwen                Switch all roles to Qwen CLI / 切换到 Qwen CLI
 /history [n]             List recent tasks / 查看历史任务
 /resume <n|task_id>      Select a historical task as context / 选择历史任务作为上下文
 /continue                Continue or retry the selected task / 继续或重试选中任务
@@ -190,6 +196,16 @@ HARNESS_CLAUDE_CONTEXT_WINDOW_BUFFER_TOKENS=2048
 HARNESS_CLAUDE_MAX_TOKENS_EXECUTOR=64000
 ```
 
+For Qwen Code, configure a supported auth provider in `config/config.yaml` when the CLI requires it:
+
+Qwen Code 如需非交互认证，请在 `config/config.yaml` 里配置可用认证方式：
+
+```yaml
+qwen:
+  auth_type: "openai"
+  openai_base_url: "https://api.example.com/v1"
+```
+
 Set a role timeout to `0` to disable timeout enforcement for that role. Use positive timeouts for real agent runs so provider hangs do not block forever.
 
 把角色 timeout 设为 `0` 可以关闭该角色的超时限制。真实 Agent 运行建议使用正数超时，避免 provider 卡住后无限等待。
@@ -206,15 +222,14 @@ OpenOrchestra 支持四类工作流。
 
 ### `new_project`
 
-用于从零创建项目。流程包含规划互审、执行、patch merge、测试、审查、最终裁决和交付。
+用于从零创建项目。流程包含规划互审、方案合并审阅、执行、patch merge、测试、审查、最终裁决和交付。
 
-Used to create a project from scratch. The flow includes planning peer review, execution, patch merge, testing, review, final judgement, and delivery.
+Used to create a project from scratch. The flow includes planning peer review, plan merge review, execution, patch merge, testing, review, final judgement, and delivery.
 
 ```text
 PLANNING_DRAFT
 PLANNING_PEER_REVIEW / PLANNING_REVISION loop
 PLAN_REVIEW
-PLAN_JUDGEMENT
 EXECUTION
 PATCH_MERGE
 TESTING / TEST_JUDGEMENT / FIXING loop
