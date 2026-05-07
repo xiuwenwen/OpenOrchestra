@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import math
 import re
+from pathlib import Path
 from typing import Any
 
 
@@ -55,6 +57,18 @@ def claude_env_for_role(config: dict[str, Any] | None, role: str, prompt: str | 
     if prompt is not None:
         max_output_tokens = claude_dynamic_max_output_tokens(config or {}, role, prompt, max_output_tokens)
     return {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(max_output_tokens)}
+
+
+def write_claude_invocation_settings(run_dir: Path, env_overrides: dict[str, str]) -> Path | None:
+    """Write per-invocation Claude settings so user-level settings cannot override Harness limits."""
+    if not env_overrides:
+        return None
+    settings_path = (run_dir / "claude_invocation_settings.json").expanduser().resolve()
+    settings_path.write_text(
+        json.dumps({"env": env_overrides}, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return settings_path
 
 
 def claude_max_output_tokens(config: dict[str, Any], role: str) -> int | None:

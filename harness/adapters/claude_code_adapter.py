@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.adapters.base import AgentAdapter
-from harness.adapters.claude_config import ClaudeContextBudgetError, claude_env_for_role
+from harness.adapters.claude_config import ClaudeContextBudgetError, claude_env_for_role, write_claude_invocation_settings
 from harness.adapters.subprocess_runner import SubprocessRunner
 from harness.agents.context import AgentRunContext
 from harness.agents.result import AgentRunResult
@@ -39,9 +39,6 @@ class ClaudeCodeAdapter(AgentAdapter):
         (context.log_dir / "prompt.md").write_text(prompt, encoding="utf-8")
         stdout_path = context.log_dir / "stdout.log"
         stderr_path = context.log_dir / "stderr.log"
-        command = self.command + self._extra_args(context)
-        redacted_command = list(command)
-        (context.log_dir / "command.txt").write_text(" ".join(redacted_command), encoding="utf-8")
         try:
             env_overrides = self._env(context, prompt)
         except ClaudeContextBudgetError as exc:
@@ -60,6 +57,10 @@ class ClaudeCodeAdapter(AgentAdapter):
                 stdout_path=stdout_path,
                 stderr_path=stderr_path,
             )
+        settings_path = write_claude_invocation_settings(context.log_dir, env_overrides)
+        command = self.command + self._extra_args(context, settings_path)
+        redacted_command = list(command)
+        (context.log_dir / "command.txt").write_text(" ".join(redacted_command), encoding="utf-8")
         (context.log_dir / "env_overrides.txt").write_text(
             "\n".join(f"{key}={value}" for key, value in sorted(env_overrides.items())) + "\n",
             encoding="utf-8",
@@ -95,8 +96,10 @@ class ClaudeCodeAdapter(AgentAdapter):
             stderr_path=stderr_path,
         )
 
-    def _extra_args(self, context: AgentRunContext) -> list[str]:
+    def _extra_args(self, context: AgentRunContext, settings_path: Path | None = None) -> list[str]:
         args: list[str] = []
+        if settings_path:
+            args.extend(["--settings", str(settings_path)])
         permission_mode = context.config.get("claude", {}).get("permission_mode")
         if permission_mode:
             args.extend(["--permission-mode", str(permission_mode)])

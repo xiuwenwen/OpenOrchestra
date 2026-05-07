@@ -371,7 +371,7 @@ class DashboardProgressReporter(ConsoleProgressReporter):
 
     def _render(self) -> None:
         sys.stdout.write("\x1b[2J\x1b[H")
-        sys.stdout.write("Harness Execution Dashboard\n")
+        sys.stdout.write("OpenOrchestra Execution Dashboard\n")
         sys.stdout.write("=" * 88 + "\n")
         sys.stdout.write(f"Task: {self.state.task_id}\n")
         sys.stdout.write(
@@ -422,7 +422,7 @@ def make_progress_reporter() -> ConsoleProgressReporter:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="orchestra", description="Run the Harness System MVP.")
+    parser = argparse.ArgumentParser(prog="orchestra", description="Run OpenOrchestra.")
     parser.add_argument("prompt", nargs="*", help="User task prompt to run through the harness")
     parser.add_argument("--config", default="config/config.yaml", help="Path to config.yaml")
     parser.add_argument(
@@ -503,7 +503,7 @@ def start_ui_server(
         host=str(visualization.get("host", "127.0.0.1")),
         port=int(port if port is not None else visualization.get("port", 8765)),
     ).start()
-    print(f"[ui] Harness Execution Viewer: {server.url}")
+    print(f"[ui] OpenOrchestra Execution Viewer: {server.url}")
     return server
 
 
@@ -636,7 +636,7 @@ def save_user_env_value(key: str, value: str, path: Path = USER_ENV_PATH) -> Non
 
 
 def write_user_env(values: dict[str, str], path: Path = USER_ENV_PATH) -> None:
-    lines = ["# myHarnessSystem persistent CLI settings"]
+    lines = ["# OpenOrchestra persistent CLI settings"]
     lines.extend(f"{name}={values[name]}" for name in sorted(values))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -752,7 +752,7 @@ class InteractiveCLI:
         self._prompt_toolkit_notice_shown = False
 
     def run(self) -> int:
-        print("Harness interactive mode. Type /help for commands, or 'exit' to quit.")
+        print("OpenOrchestra interactive mode. Type /help for commands, or 'exit' to quit.")
         while not self._stop_input.is_set():
             try:
                 prompt = self._read_line().strip()
@@ -1123,8 +1123,13 @@ class InteractiveCLI:
             lines.append(f"- success_path: {success_path}")
             source_path = success_path / "source"
             if source_path.exists():
-                source_label = "materialized_source" if self._looks_like_runnable_source(source_path) else "partial_materialized_source"
+                source_label = (
+                    "materialized_source_candidate"
+                    if self._looks_like_runnable_source(source_path)
+                    else "partial_materialized_source"
+                )
                 lines.append(f"- {source_label}: {source_path}")
+                lines.append("- source_note: reconstructed from patch; validate completeness with final.patch and project tests.")
         if latest_repo:
             lines.append(f"- latest_agent_repo_workspace: {latest_repo}")
         for artifact_type in (
@@ -1217,10 +1222,20 @@ class InteractiveCLI:
         project_markers = (
             "package.json",
             "pyproject.toml",
+            "setup.py",
+            "requirements.txt",
             "Cargo.toml",
             "go.mod",
             "pom.xml",
             "build.gradle",
+            "CMakeLists.txt",
+            "Makefile",
+            "Kconfig",
+            "Kbuild",
+            "meson.build",
+            "BUILD",
+            "WORKSPACE",
+            "configure",
             "index.html",
         )
         return any((path / marker).exists() for marker in project_markers)

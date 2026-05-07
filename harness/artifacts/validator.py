@@ -3,7 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-STATUS_FIELD_PATTERN = re.compile(r"^status\s*:\s*(success|failed|partial)\s*$", re.IGNORECASE)
+from harness.artifacts.delivery_codes import DELIVERY_SUCCESS_RETURN_CODE, delivery_status_for_return_code
+
+RETURN_CODE_FIELD_PATTERN = re.compile(r"^return_code\s*:\s*(-?\d+)\s*$")
+ARTIFACT_RESULT_CODE_FIELD_PATTERN = re.compile(r"^artifact_result_code\s*:\s*(-?\d+)\s*$")
 
 
 class ArtifactValidator:
@@ -19,27 +22,52 @@ class ArtifactValidator:
                 errors.append(f"Required output is empty: {relative_name}")
         delivery_path = output_dir / "delivery.md"
         if delivery_path.exists() and delivery_path.is_file():
-            status = self.parse_delivery_status(delivery_path)
-            if status is None:
-                errors.append("delivery.md must contain `status: success|failed|partial`")
-            elif status != "success":
-                errors.append(f"delivery.md reports non-success status: {status}")
+            return_code = self.parse_delivery_return_code(delivery_path)
+            if return_code is None:
+                errors.append("delivery.md must contain `return_code: <int>` as its first non-empty line")
+            elif return_code != DELIVERY_SUCCESS_RETURN_CODE:
+                errors.append(f"delivery.md reports non-zero return_code: {return_code}")
+        for relative_name in required_outputs:
+            if relative_name == "delivery.md" or not relative_name.endswith(".md"):
+                continue
+            path = output_dir / relative_name
+            if not path.exists() or not path.is_file() or path.stat().st_size == 0:
+                continue
+            artifact_code = self.parse_markdown_artifact_result_code(path)
+            if artifact_code is None:
+                errors.append(
+                    f"{relative_name} must contain `artifact_result_code: <int>` as its first non-empty line"
+                )
+            elif artifact_code != DELIVERY_SUCCESS_RETURN_CODE:
+                errors.append(f"{relative_name} reports non-zero artifact_result_code: {artifact_code}")
         return not errors, errors
 
-    def parse_delivery_status(self, delivery_path: Path) -> str | None:
+    def parse_delivery_return_code(self, delivery_path: Path) -> int | None:
         if not delivery_path.exists() or not delivery_path.is_file():
             return None
         for line in delivery_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            match = STATUS_FIELD_PATTERN.match(self._normalize_markdown_field_line(line))
+            if not line.strip():
+                continue
+            match = RETURN_CODE_FIELD_PATTERN.fullmatch(line.strip())
             if match:
-                return match.group(1).lower()
+                return int(match.group(1))
+            return None
         return None
 
-    def _normalize_markdown_field_line(self, line: str) -> str:
-        normalized = line.strip().replace("：", ":")
-        normalized = re.sub(r"^#{1,6}\s+", "", normalized).strip()
-        normalized = re.sub(r"^[-*+]\s+", "", normalized).strip()
-        normalized = re.sub(r"\*\*(.*?)\*\*", r"\1", normalized)
-        normalized = re.sub(r"__(.*?)__", r"\1", normalized)
-        normalized = normalized.strip("`").strip()
-        return normalized
+    def parse_markdown_artifact_result_code(self, artifact_path: Path) -> int | None:
+        if not artifact_path.exists() or not artifact_path.is_file():
+            return None
+        for line in artifact_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            match = ARTIFACT_RESULT_CODE_FIELD_PATTERN.fullmatch(line.strip())
+            if match:
+                return int(match.group(1))
+            return None
+        return None
+
+    def parse_delivery_status(self, delivery_path: Path) -> str | None:
+        return_code = self.parse_delivery_return_code(delivery_path)
+        if return_code is None:
+            return None
+        return delivery_status_for_return_code(return_code)

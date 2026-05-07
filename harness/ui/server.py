@@ -21,30 +21,51 @@ class UiEventStore:
     def __init__(self, max_events_per_task: int = 300):
         self.max_events_per_task = max_events_per_task
         self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
+        self._next_event_id = 0
         self._events: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=max_events_per_task))
+        self._global_events: deque[dict[str, Any]] = deque(maxlen=max_events_per_task * 3)
         self.latest_task_id: str | None = None
 
     def __call__(self, event: ProgressEvent) -> None:
-        payload = {
-            "ts": time.time(),
-            "event_type": event.event_type,
-            "task_id": event.task_id,
-            "phase": event.phase,
-            "role": event.role,
-            "agent_id": event.agent_id,
-            "round_id": event.round_id,
-            "attempt": event.attempt,
-            "status": event.status,
-            "message": event.message,
-            "data": event.data,
-        }
         with self._lock:
+            self._next_event_id += 1
+            payload = {
+                "id": self._next_event_id,
+                "ts": time.time(),
+                "event_type": event.event_type,
+                "task_id": event.task_id,
+                "phase": event.phase,
+                "role": event.role,
+                "agent_id": event.agent_id,
+                "round_id": event.round_id,
+                "attempt": event.attempt,
+                "status": event.status,
+                "message": event.message,
+                "data": event.data,
+            }
             self.latest_task_id = event.task_id
             self._events[event.task_id].append(payload)
+            self._global_events.append(payload)
+            self._condition.notify_all()
 
     def events_for(self, task_id: str) -> list[dict[str, Any]]:
         with self._lock:
             return list(self._events.get(task_id, ()))
+
+    def events_since(self, last_event_id: int, task_id: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            source = self._events.get(task_id, ()) if task_id else self._global_events
+            return [event for event in source if int(event.get("id") or 0) > last_event_id]
+
+    def wait_for_events(self, last_event_id: int, timeout_seconds: float = 15.0) -> list[dict[str, Any]]:
+        with self._condition:
+            self._condition.wait_for(lambda: self._next_event_id > last_event_id, timeout=timeout_seconds)
+            return [event for event in self._global_events if int(event.get("id") or 0) > last_event_id]
+
+    def latest_event_id(self) -> int:
+        with self._lock:
+            return self._next_event_id
 
     def select_task(self, task_id: str) -> None:
         with self._lock:
@@ -103,6 +124,8 @@ class HarnessStateView:
         return {
             "task": task,
             "phases": phases,
+            "workflow_timeline": self._workflow_timeline(phases),
+            "workflow_loop_edges": self._workflow_loop_edges(phases),
             "agent_runs": agent_runs,
             "artifacts": artifacts,
             "events": self.event_store.events_for(task_id),
@@ -111,6 +134,38 @@ class HarnessStateView:
             "success_path": str(success_path) if success_path and success_path.exists() else None,
             "task_workspace": str(task_workspace) if task_workspace.exists() else str(task_workspace),
         }
+
+    def _workflow_timeline(self, phases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        timeline: list[dict[str, Any]] = []
+        phase_counts: dict[str, int] = defaultdict(int)
+        for index, phase in enumerate(phases):
+            phase_type = str(phase.get("phase_type") or "-")
+            phase_counts[phase_type] += 1
+            item = dict(phase)
+            item["timeline_index"] = index
+            item["phase_occurrence"] = phase_counts[phase_type]
+            item["loop_revisit"] = phase_counts[phase_type] > 1
+            timeline.append(item)
+        return timeline
+
+    def _workflow_loop_edges(self, phases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        last_seen: dict[str, dict[str, Any]] = {}
+        edges: list[dict[str, Any]] = []
+        for index, phase in enumerate(phases):
+            phase_type = str(phase.get("phase_type") or "-")
+            previous = last_seen.get(phase_type)
+            if previous is not None:
+                edges.append(
+                    {
+                        "phase_type": phase_type,
+                        "from_index": previous["index"],
+                        "to_index": index,
+                        "from_round": previous["round_id"],
+                        "to_round": phase.get("round_id"),
+                    }
+                )
+            last_seen[phase_type] = {"index": index, "round_id": phase.get("round_id")}
+        return edges
 
     def read_file(self, path_text: str, max_chars: int = 200_000) -> dict[str, Any]:
         path = Path(unquote(path_text)).expanduser().resolve()
@@ -427,6 +482,12 @@ class HarnessWebServer:
                 if parsed.path == "/":
                     self._send_text(_html(), content_type="text/html; charset=utf-8")
                     return
+                if parsed.path == "/api/events":
+                    query = parse_qs(parsed.query)
+                    task_id = query.get("task", [None])[0] or None
+                    last_event_id = int(query.get("last_id", ["0"])[0] or "0")
+                    self._send_event_stream(view.event_store, task_id, last_event_id)
+                    return
                 if parsed.path == "/api/tasks":
                     self._send_json({"tasks": view.tasks(50), "latest_task_id": view.event_store.latest_task_id})
                     return
@@ -469,6 +530,34 @@ class HarnessWebServer:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _send_event_stream(self, event_store: UiEventStore, task_id: str | None, last_event_id: int) -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.end_headers()
+                deadline = time.time() + 300
+                current_id = last_event_id
+                try:
+                    self.wfile.write(b": connected\n\n")
+                    self.wfile.flush()
+                    while time.time() < deadline:
+                        events = event_store.events_since(current_id, task_id)
+                        if not events:
+                            event_store.wait_for_events(current_id, timeout_seconds=15)
+                            events = event_store.events_since(current_id, task_id)
+                        if not events:
+                            self.wfile.write(b": heartbeat\n\n")
+                            self.wfile.flush()
+                            continue
+                        for event in events:
+                            current_id = max(current_id, int(event.get("id") or 0))
+                            payload = json.dumps(event, ensure_ascii=False, default=str)
+                            self.wfile.write(f"id: {current_id}\nevent: progress\ndata: {payload}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                    return
+
         self._server = ThreadingHTTPServer((self.host, self.port), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, name="harness-ui", daemon=True)
         self._thread.start()
@@ -499,7 +588,7 @@ def _html() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Harness Task Console</title>
+  <title>OpenOrchestra Task Console</title>
   <style>
     :root { color-scheme: light; --bg:#f5f6f8; --panel:#ffffff; --panel2:#fbfcfd; --line:#d9dee7; --text:#16202c; --muted:#687386; --accent:#126b63; --accent-soft:#e5f3f0; --warn:#9a5d00; --warn-soft:#fff2d7; --bad:#a23434; --bad-soft:#fde9e9; --good:#247a3d; --good-soft:#e8f5ec; --info:#275b9f; --info-soft:#eaf1fb; }
     * { box-sizing: border-box; }
@@ -507,11 +596,11 @@ def _html() -> str:
     header { min-height:56px; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:10px 18px; border-bottom:1px solid var(--line); background:#fff; position:sticky; top:0; z-index:2; padding-top:max(10px,env(safe-area-inset-top)); }
     h1 { font-size:18px; margin:0; font-weight:700; text-wrap:balance; }
     h2 { font-size:16px; margin:18px 0 10px; font-weight:700; }
-    h3 { font-size:14px; margin:0 0 8px; font-weight:700; }
+    h3 { font-size:14px; margin:0 0 8px; font-weight:700; min-width:0; overflow-wrap:anywhere; }
     main { display:grid; grid-template-columns:320px minmax(0,1fr); min-height:calc(100vh - 56px); }
     aside { border-right:1px solid var(--line); background:#fff; padding:14px; overflow:auto; }
     section { padding:16px; overflow:auto; min-width:0; }
-    button { border:1px solid var(--line); background:#fff; border-radius:6px; padding:6px 9px; cursor:pointer; color:var(--text); touch-action:manipulation; }
+    button { border:1px solid var(--line); background:#fff; border-radius:6px; padding:6px 9px; cursor:pointer; color:var(--text); touch-action:manipulation; max-width:100%; overflow-wrap:anywhere; }
     button:hover { border-color:var(--accent); background:var(--accent-soft); }
     button:focus-visible, a:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
     button:disabled { cursor:not-allowed; color:var(--muted); background:#f2f4f7; }
@@ -519,20 +608,21 @@ def _html() -> str:
     .segmented { display:inline-flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; background:#fff; }
     .segmented button { border:0; border-radius:0; min-width:44px; }
     .segmented button.active { background:var(--accent); color:#fff; }
-    .task { width:100%; text-align:left; margin:0 0 8px; display:grid; gap:4px; }
+    .task { width:100%; text-align:left; margin:0 0 8px; display:grid; gap:4px; min-width:0; overflow-wrap:anywhere; }
     .task.active { border-color:var(--accent); box-shadow:inset 3px 0 0 var(--accent); background:var(--accent-soft); }
     .task-title { display:flex; justify-content:space-between; gap:8px; min-width:0; }
-    .muted { color:var(--muted); }
-    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums; }
+    .muted { color:var(--muted); min-width:0; overflow-wrap:anywhere; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; word-break:break-word; }
     .grid { display:grid; gap:12px; }
     .overview { grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); margin-bottom:14px; }
     .roles { margin:12px 0; }
     .role-flow { display:flex; align-items:stretch; gap:0; overflow-x:auto; padding:2px 2px 10px; }
-    .role-card { width:220px; min-width:220px; text-align:left; display:grid; grid-template-rows:auto 1fr auto; gap:8px; cursor:pointer; position:relative; }
+    .role-card { width:230px; min-width:230px; text-align:left; display:grid; grid-template-rows:auto auto 1fr; gap:8px; cursor:pointer; position:relative; overflow:hidden; }
     .role-card:hover { border-color:var(--accent); background:var(--accent-soft); }
     .role-card.selected { border-color:var(--accent); box-shadow:inset 3px 0 0 var(--accent); background:var(--accent-soft); }
     .role-topline { display:flex; align-items:center; justify-content:space-between; gap:8px; }
     .role-title { display:flex; align-items:center; gap:8px; min-width:0; }
+    .role-title h3 { margin:0; overflow-wrap:anywhere; }
     .role-step { display:inline-grid; place-items:center; width:24px; height:24px; border-radius:999px; background:#eef2f6; color:var(--muted); font-size:12px; font-weight:800; flex:0 0 auto; font-variant-numeric:tabular-nums; }
     .role-card.RUNNING .role-step { background:var(--warn-soft); color:var(--warn); }
     .role-card.COMPLETED .role-step { background:var(--good-soft); color:var(--good); }
@@ -546,10 +636,10 @@ def _html() -> str:
     .round-tabs button.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:700; }
     .delivery-run { border-top:1px solid var(--line); padding-top:10px; margin-top:10px; }
     .split { display:grid; grid-template-columns:minmax(360px,1fr) minmax(360px,1fr); gap:14px; align-items:start; }
-    .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; overflow:hidden; overflow-wrap:anywhere; }
     .metric { font-size:26px; font-weight:750; letter-spacing:0; line-height:1.1; margin-top:4px; font-variant-numeric:tabular-nums; }
     .status { font-weight:700; }
-    .pill { display:inline-flex; align-items:center; min-height:22px; border-radius:999px; padding:2px 8px; font-size:12px; font-weight:700; background:#eef2f6; color:var(--muted); }
+    .pill { display:inline-flex; align-items:center; min-height:22px; max-width:100%; border-radius:999px; padding:2px 8px; font-size:12px; font-weight:700; background:#eef2f6; color:var(--muted); overflow-wrap:anywhere; }
     .pill.RUNNING { background:var(--warn-soft); color:var(--warn); }
     .pill.COMPLETED { background:var(--good-soft); color:var(--good); }
     .pill.FAILED,.pill.OUTPUT_INVALID,.pill.TIMEOUT { background:var(--bad-soft); color:var(--bad); }
@@ -557,15 +647,34 @@ def _html() -> str:
     .COMPLETED { color:var(--good); }
     .FAILED,.OUTPUT_INVALID,.TIMEOUT { color:var(--bad); }
     .RUNNING { color:var(--warn); }
-    .workflow { display:flex; gap:8px; overflow-x:auto; padding:2px 0 8px; }
-    .step { min-width:140px; border:1px solid var(--line); border-radius:8px; background:#fff; padding:8px; }
+    .workflow { display:flex; gap:0; overflow-x:auto; padding:2px 0 8px; align-items:stretch; }
+    .workflow-node { display:flex; align-items:stretch; }
+    .step { width:164px; min-width:164px; border:1px solid var(--line); border-radius:8px; background:#fff; padding:8px; position:relative; overflow:hidden; overflow-wrap:anywhere; }
+    .step strong { display:block; line-height:1.25; overflow-wrap:anywhere; }
     .step.current { border-color:var(--accent); background:var(--accent-soft); }
     .step.done { border-color:#b9d7c2; }
     .step.failed { border-color:#e0b5b5; background:var(--bad-soft); }
+    .step.loop { border-color:var(--info); box-shadow:inset 0 3px 0 var(--info); }
+    .loop-badge { display:inline-flex; align-items:center; min-height:18px; border-radius:999px; padding:1px 6px; font-size:11px; font-weight:750; color:var(--info); background:var(--info-soft); margin-left:4px; }
+    .workflow-edge { width:38px; min-width:38px; position:relative; display:flex; align-items:center; justify-content:center; }
+    .workflow-edge::before { content:""; width:100%; height:2px; background:var(--line); }
+    .workflow-edge::after { content:""; position:absolute; right:4px; width:8px; height:8px; border-top:2px solid var(--line); border-right:2px solid var(--line); transform:rotate(45deg); background:var(--bg); }
+    .workflow-edge.loop::before { background:var(--info); }
+    .workflow-edge.loop::after { border-color:var(--info); }
+    .workflow-edge.loop .loop-arrow { position:absolute; top:4px; left:4px; right:4px; height:18px; border:2px solid var(--info); border-bottom:0; border-radius:12px 12px 0 0; color:var(--info); font-size:11px; text-align:center; line-height:14px; background:var(--bg); }
+    .live-flow { display:grid; gap:8px; max-height:220px; overflow:auto; }
+    .live-event { display:grid; grid-template-columns:84px minmax(0,1fr) auto; gap:10px; align-items:start; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; overflow:hidden; }
+    .live-event.RUNNING { border-color:#efd49a; background:var(--warn-soft); }
+    .live-event.COMPLETED,.live-event.PASS { border-color:#b9d7c2; background:var(--good-soft); }
+    .live-event.FAILED,.live-event.FAIL,.live-event.OUTPUT_INVALID,.live-event.TIMEOUT { border-color:#e0b5b5; background:var(--bad-soft); }
+    .live-main { min-width:0; }
+    .live-meta { color:var(--muted); font-size:12px; margin-top:2px; }
     .agent-list { display:grid; gap:8px; }
-    .agent-card { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--panel2); }
-    .agent-head { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
-    .files { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .agent-card { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--panel2); min-width:0; overflow:hidden; overflow-wrap:anywhere; }
+    .agent-head { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; min-width:0; }
+    .agent-head > div { min-width:0; }
+    .files { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; min-width:0; }
+    .file-btn { max-width:100%; white-space:normal; text-align:left; line-height:1.25; }
     .file-btn.primary { border-color:var(--accent); color:var(--accent); font-weight:700; }
     .viewer { display:grid; grid-template-columns:minmax(0,1fr); gap:10px; }
     .viewer-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
@@ -586,6 +695,13 @@ def _html() -> str:
       aside { border-right:0; border-bottom:1px solid var(--line); max-height:36vh; }
       .role-flow { flex-direction:column; overflow-x:visible; padding-right:0; }
       .role-card { width:100%; min-width:0; }
+      .workflow { flex-direction:column; overflow-x:visible; gap:8px; }
+      .workflow-node { flex-direction:column; }
+      .step { width:100%; min-width:0; }
+      .workflow-edge { width:100%; min-width:0; height:24px; }
+      .workflow-edge::before { width:2px; height:100%; }
+      .workflow-edge::after { right:auto; bottom:2px; transform:rotate(135deg); }
+      .workflow-edge.loop .loop-arrow { top:2px; left:50%; width:42px; right:auto; transform:translateX(-50%); }
       .role-connector { width:100%; min-width:0; height:26px; }
       .role-connector::before { width:2px; height:100%; }
       .role-connector::after { right:auto; bottom:3px; transform:rotate(135deg); background:var(--bg); }
@@ -595,7 +711,7 @@ def _html() -> str:
 <body>
   <header>
     <div>
-      <h1>Harness Task Console</h1>
+      <h1>OpenOrchestra Task Console</h1>
       <div class="muted" data-i18n="subtitle">看状态、看过程、看产物</div>
     </div>
     <div class="top-actions">
@@ -615,6 +731,8 @@ def _html() -> str:
       <div id="summary" class="grid overview"></div>
       <h2 data-i18n="workflowProgress">流程进度</h2>
       <div id="workflow" class="workflow"></div>
+      <h2 data-i18n="liveFlow">实时任务流</h2>
+      <div id="liveFlow" class="live-flow"></div>
       <h2 data-i18n="roleStatus">角色状态</h2>
       <div id="roles" class="roles role-flow"></div>
       <h2 data-i18n="roleDeliveries">角色思考与交付</h2>
@@ -624,8 +742,6 @@ def _html() -> str:
         <div>
           <h2 data-i18n="activeAgents">正在执行</h2>
           <div id="activeAgents" class="agent-list"></div>
-          <h2 data-i18n="allRuns">全部执行记录</h2>
-          <div id="runs"></div>
         </div>
         <div class="viewer">
           <div class="viewer-head">
@@ -654,6 +770,10 @@ let selectedRoundByRole = {};
 let selectedRolesTaskId = null;
 let currentFile = null;
 let translationSeq = 0;
+let eventSource = null;
+let eventSourceTask = null;
+let lastEventId = 0;
+let refreshTimer = null;
 const translationCache = new Map();
 const roleLabels = {planner:"规划者", executor:"执行者", tester:"测试者", reviewer:"审阅者", judge:"裁决者", communicator:"交付者", orchestrator:"编排器"};
 const roleLabelsEn = {planner:"Planner", executor:"Executor", tester:"Tester", reviewer:"Reviewer", judge:"Judge", communicator:"Communicator", orchestrator:"Orchestrator"};
@@ -672,11 +792,14 @@ const phaseLabelsEn = {
 const i18n = {
   zh: {
     subtitle:"看状态、看过程、看产物", taskHistory:"任务历史", workflowProgress:"流程进度", roleStatus:"角色状态",
+    liveFlow:"实时任务流",
+    loop:"循环",
     roleDeliveries:"角色思考与交付", roleDeliveryHint:"选择一个或多个角色，再选择轮次查看该角色的 prompt、stdout、stderr 与交付 md/json。",
-    activeAgents:"正在执行", allRuns:"全部执行记录", visibleOutput:"可见输出 & 交付", recentEvents:"最近事件", clear:"清空",
-    currentTask:"当前任务", running:"正在运行", failures:"失败/重试", artifacts:"交付产物", successPath:"成功路径", taskWorkspace:"工程主目录",
+    activeAgents:"正在执行", visibleOutput:"可见输出 & 交付", recentEvents:"最近事件", clear:"清空",
+    currentTask:"当前任务", running:"正在运行", successPath:"成功路径", taskWorkspace:"工程主目录",
     noTasks:"还没有任务。启动一次 Harness 任务后，这里会显示历史。", noRunning:"当前没有运行中的 agent。任务进行时，这里会优先显示正在执行的角色、日志和产物入口。",
-    noRuns:"还没有 agent run。", noEvents:"暂无事件。", selectFile:"选择 prompt、stdout、stderr 或 artifact。",
+    noLiveFlow:"任务启动后，这里会按实时事件显示每一步。",
+    noEvents:"暂无事件。", selectFile:"选择 prompt、stdout、stderr 或 artifact。",
     noRole:"选择角色卡片后，这里会按角色和轮次显示交付文件。", noRoleOutput:"该角色暂无可查看轮次。",
     autoTranslated:"中文模式：只翻译 prompt、交付物、stdout/stderr 里的说明性文本；文件路径、命令、代码、JSON 和配置保持原文。切换 EN 查看完整原文。",
     translating:"正在翻译说明性文本…",
@@ -686,11 +809,14 @@ const i18n = {
   },
   en: {
     subtitle:"Status, process, and artifacts", taskHistory:"Task History", workflowProgress:"Workflow", roleStatus:"Role Status",
+    liveFlow:"Live Task Flow",
+    loop:"Loop",
     roleDeliveries:"Role Reasoning and Deliveries", roleDeliveryHint:"Select one or more roles, then choose rounds to inspect prompts, stdout, stderr, and md/json deliveries.",
-    activeAgents:"Active Agents", allRuns:"All Runs", visibleOutput:"Visible Output & Delivery", recentEvents:"Recent Events", clear:"Clear",
-    currentTask:"Current Task", running:"Running", failures:"Failures / Retries", artifacts:"Artifacts", successPath:"Success Path", taskWorkspace:"Project Root",
+    activeAgents:"Active Agents", visibleOutput:"Visible Output & Delivery", recentEvents:"Recent Events", clear:"Clear",
+    currentTask:"Current Task", running:"Running", successPath:"Success Path", taskWorkspace:"Project Root",
     noTasks:"No tasks yet. Start a Harness task and history will appear here.", noRunning:"No running agents. Active role logs and artifacts appear here while a task runs.",
-    noRuns:"No agent runs yet.", noEvents:"No events yet.", selectFile:"Select prompt, stdout, stderr, or an artifact.",
+    noLiveFlow:"Live events appear here as each task step happens.",
+    noEvents:"No events yet.", selectFile:"Select prompt, stdout, stderr, or an artifact.",
     noRole:"Select role cards to show delivery files by role and round.", noRoleOutput:"No viewable rounds for this role yet.",
     autoTranslated:"Chinese mode: content is automatically translated for display; switch to EN for the original.",
     translating:"Translating prose text…",
@@ -808,19 +934,59 @@ async function refresh() {
     const taskList = await getJson("/api/tasks");
     const latestTask = (taskList.tasks || []).find(t => t.task_id === taskList.latest_task_id);
     if (taskList.latest_task_id && (!currentTask || (latestTask && latestTask.status === "RUNNING" && currentTask !== taskList.latest_task_id))) {
+      if (currentTask !== taskList.latest_task_id) lastEventId = 0;
       currentTask = taskList.latest_task_id;
       history.replaceState(null, "", "?task=" + encodeURIComponent(currentTask));
     }
     if (!currentTask && taskList.tasks.length) currentTask = taskList.tasks[0].task_id;
     renderTasks(taskList.tasks);
     if (currentTask) {
+      connectEventStream(currentTask);
       latestData = await getJson("/api/tasks/" + encodeURIComponent(currentTask));
+      lastEventId = Math.max(lastEventId, latestEventId(latestData.events || []));
       renderSnapshot(latestData);
     }
     document.getElementById("heartbeat").textContent = "刷新 " + dateFormat.format(new Date());
   } catch (e) {
     document.getElementById("heartbeat").textContent = "错误：" + e.message;
   }
+}
+
+function scheduleRefresh(delay=150) {
+  if (refreshTimer) return;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    refresh();
+  }, delay);
+}
+
+function latestEventId(events) {
+  return events.reduce((maxId, event) => Math.max(maxId, Number(event.id || 0)), 0);
+}
+
+function connectEventStream(taskId) {
+  if (!window.EventSource) return;
+  if (eventSource && eventSourceTask === taskId) return;
+  if (eventSource) eventSource.close();
+  eventSourceTask = taskId;
+  eventSource = new EventSource(`/api/events?task=${encodeURIComponent(taskId)}&last_id=${encodeURIComponent(lastEventId)}`);
+  eventSource.addEventListener("progress", event => {
+    const payload = JSON.parse(event.data);
+    lastEventId = Math.max(lastEventId, Number(payload.id || event.lastEventId || 0));
+    if (payload.task_id !== currentTask) return;
+    if (latestData) {
+      const events = latestData.events || [];
+      if (!events.some(item => Number(item.id || 0) === Number(payload.id || 0))) {
+        latestData.events = [...events, payload].slice(-300);
+        renderLiveFlow(latestData.events);
+        renderEvents(latestData.events);
+      }
+    }
+    scheduleRefresh(100);
+  });
+  eventSource.onerror = () => {
+    scheduleRefresh(1000);
+  };
 }
 
 function renderTasks(tasks) {
@@ -838,6 +1004,7 @@ function renderTasks(tasks) {
 
 function selectTask(taskId) {
   currentTask = taskId;
+  lastEventId = 0;
   history.replaceState(null, "", "?task=" + encodeURIComponent(taskId));
   refresh();
 }
@@ -848,8 +1015,6 @@ function renderSnapshot(data) {
   loadRoleSelection(task.task_id);
   const runs = data.agent_runs || [];
   const running = runs.filter(r => r.status === "RUNNING");
-  const failed = runs.filter(r => ["FAILED","OUTPUT_INVALID","TIMEOUT"].includes(r.status));
-  const completedArtifacts = runs.reduce((sum, r) => sum + Number(r.artifact_count || 0), 0);
   ensureDefaultSelectedRoles(data);
   document.getElementById("summary").innerHTML = `
     <div class="card">
@@ -859,27 +1024,109 @@ function renderSnapshot(data) {
       <div style="margin-top:8px">${esc(task.user_prompt)}</div>
     </div>
     <div class="card"><h3>${esc(t("running"))}</h3><div class="metric">${numberFormat.format(running.length)}</div><div class="muted">${running.length ? (uiLanguage === "en" ? "Roles are working" : "有角色在工作") : (uiLanguage === "en" ? "No active agents" : "当前无运行 agent")}</div></div>
-    <div class="card"><h3>${esc(t("failures"))}</h3><div class="metric">${numberFormat.format(failed.length)}</div><div class="muted">${failed.length ? (uiLanguage === "en" ? "Inspect stderr or delivery.md" : "需要检查 stderr 或 delivery.md") : (uiLanguage === "en" ? "No blockers yet" : "暂无阻塞错误")}</div></div>
-    <div class="card"><h3>${esc(t("artifacts"))}</h3><div class="metric">${numberFormat.format(completedArtifacts)}</div><div class="muted">${uiLanguage === "en" ? "collected artifacts" : "已收集 artifact"}</div></div>
     <div class="card"><h3>${esc(t("taskWorkspace"))}</h3><div class="mono">${esc(data.task_workspace || "-")}</div></div>
     <div class="card"><h3>${esc(t("successPath"))}</h3><div class="mono">${data.success_path ? esc(data.success_path) : "-"}</div></div>`;
-  renderWorkflow(data.phases || [], task.current_phase);
+  renderWorkflow(data.workflow_timeline || data.phases || [], task.current_phase, data.workflow_loop_edges || []);
+  renderLiveFlow(data.events || []);
   renderRoleFlow(data.roles || {}, runs);
   renderRoleBrowser(data);
   renderActiveAgents(running);
-  renderRuns(data.agent_runs || []);
   renderEvents(data.events || []);
 }
 
-function renderWorkflow(phases, currentPhase) {
-  const seen = new Map(phases.map(p => [p.phase_type, p]));
-  const ordered = workflowOrder.filter(p => seen.has(p) || p === currentPhase || workflowOrder.indexOf(p) <= workflowOrder.indexOf(currentPhase || ""));
-  document.getElementById("workflow").innerHTML = ordered.length ? ordered.map(phase => {
-    const item = seen.get(phase);
-    const status = item?.status || (phase === currentPhase ? "RUNNING" : "PENDING");
-    const cls = status === "COMPLETED" ? "done" : status === "FAILED" ? "failed" : phase === currentPhase ? "current" : "";
-    return `<div class="step ${cls}"><strong>${esc(labelPhase(phase))}</strong><div>${statusPill(status)}</div><div class="muted">round ${esc(item?.round_id ?? "-")}</div></div>`;
-  }).join("") : `<div class="empty">任务启动后会显示阶段流程。</div>`;
+function renderWorkflow(phases, currentPhase, loopEdges = []) {
+  const timeline = workflowTimeline(phases, currentPhase);
+  if (!timeline.length) {
+    document.getElementById("workflow").innerHTML = `<div class="empty">任务启动后会显示阶段流程。</div>`;
+    return;
+  }
+  const loopToIndexes = new Set((loopEdges || []).map(edge => Number(edge.to_index)));
+  document.getElementById("workflow").innerHTML = timeline.map((item, index) => {
+    const status = item.status || (item.phase_type === currentPhase ? "RUNNING" : "PENDING");
+    const isCurrent = item.phase_type === currentPhase && status !== "COMPLETED";
+    const isLoop = Boolean(item.loop_revisit) || loopToIndexes.has(Number(item.timeline_index ?? index));
+    const cls = status === "COMPLETED" ? "done" : status === "FAILED" ? "failed" : isCurrent ? "current" : "";
+    const connector = index < timeline.length - 1 ? workflowConnector(timeline[index + 1]) : "";
+    return `<div class="workflow-node">
+      <div class="step ${cls} ${isLoop ? "loop" : ""}">
+        <strong>${esc(labelPhase(item.phase_type))}</strong>${isLoop ? `<span class="loop-badge">${esc(t("loop"))}</span>` : ""}
+        <div>${statusPill(status)}</div>
+        <div class="muted">round ${esc(item.round_id ?? "-")}${Number(item.phase_occurrence || 1) > 1 ? ` · #${esc(item.phase_occurrence)}` : ""}</div>
+      </div>
+      ${connector}
+    </div>`;
+  }).join("");
+}
+
+function workflowTimeline(phases, currentPhase) {
+  const existing = (phases || []).map((phase, index) => ({
+    ...phase,
+    phase_type: phase.phase_type || phase,
+    timeline_index: phase.timeline_index ?? index
+  }));
+  if (existing.length) return existing;
+  const currentIndex = workflowOrder.indexOf(currentPhase || "");
+  if (currentIndex < 0) return currentPhase ? [{phase_type: currentPhase, status:"RUNNING", round_id:"-"}] : [];
+  return workflowOrder.slice(0, currentIndex + 1).map((phase, index) => ({
+    phase_type: phase,
+    status: phase === currentPhase ? "RUNNING" : "PENDING",
+    round_id: "-",
+    timeline_index: index
+  }));
+}
+
+function workflowConnector(nextItem) {
+  const isLoop = Boolean(nextItem?.loop_revisit);
+  return `<div class="workflow-edge ${isLoop ? "loop" : ""}" aria-label="${isLoop ? esc(t("loop")) : ""}">${isLoop ? `<span class="loop-arrow">↩</span>` : ""}</div>`;
+}
+
+function renderLiveFlow(events) {
+  const root = document.getElementById("liveFlow");
+  const visible = (events || []).filter(event => isFlowEvent(event)).slice(-80).reverse();
+  if (!visible.length) {
+    root.innerHTML = `<div class="empty">${esc(t("noLiveFlow"))}</div>`;
+    return;
+  }
+  root.innerHTML = visible.map(event => liveEventCard(event)).join("");
+}
+
+function isFlowEvent(event) {
+  return /^(task_|phase_|agent_|patch_|test_|delivery_|judge_)/.test(String(event.event_type || ""));
+}
+
+function liveEventCard(event) {
+  const status = String(event.status || "");
+  const phase = labelPhase(event.phase || "");
+  const role = event.role ? roleLabel(event.role) : "";
+  const agent = event.agent_id || "";
+  const round = event.round_id === null || event.round_id === undefined ? "" : `round ${event.round_id}`;
+  const attempt = event.attempt === null || event.attempt === undefined ? "" : `try ${Number(event.attempt) + 1}`;
+  const meta = [phase, role, agent, round, attempt].filter(Boolean).join(" · ");
+  return `<div class="live-event ${esc(status)}">
+    <div class="muted mono">${esc(dateFormat.format(new Date(Number(event.ts || 0) * 1000)))}</div>
+    <div class="live-main">
+      <strong>${esc(flowEventLabel(event.event_type))}</strong>
+      <div class="live-meta">${esc(meta)}</div>
+      ${event.message ? `<div>${esc(event.message)}</div>` : ""}
+    </div>
+    ${statusPill(status || "INFO")}
+  </div>`;
+}
+
+function flowEventLabel(eventType) {
+  const labels = {
+    task_created:"任务创建", task_started:"任务启动", task_completed:"任务完成", task_failed:"任务失败",
+    phase_started:"阶段开始", phase_completed:"阶段完成", phase_skipped:"阶段跳过",
+    agent_started:"Agent 开始", agent_heartbeat:"Agent 运行中", agent_completed:"Agent 完成", agent_failed:"Agent 失败", agent_retryable_failure:"Agent 可重试失败",
+    patch_validated:"补丁门禁", test_gate:"测试门禁", delivery_published:"交付发布", judge_decision:"裁决完成"
+  };
+  const labelsEn = {
+    task_created:"Task Created", task_started:"Task Started", task_completed:"Task Completed", task_failed:"Task Failed",
+    phase_started:"Phase Started", phase_completed:"Phase Completed", phase_skipped:"Phase Skipped",
+    agent_started:"Agent Started", agent_heartbeat:"Agent Running", agent_completed:"Agent Completed", agent_failed:"Agent Failed", agent_retryable_failure:"Agent Retryable Failure",
+    patch_validated:"Patch Gate", test_gate:"Test Gate", delivery_published:"Delivery Published", judge_decision:"Judge Decision"
+  };
+  return (uiLanguage === "en" ? labelsEn[eventType] : labels[eventType]) || eventType || "-";
 }
 
 function orderedRoles(roles) {
@@ -1017,15 +1264,6 @@ function renderActiveAgents(running) {
     return;
   }
   root.innerHTML = running.map(run => agentCard(run, true)).join("");
-}
-
-function renderRuns(runs) {
-  const root = document.getElementById("runs");
-  if (!runs.length) {
-    root.innerHTML = `<div class="empty">${esc(t("noRuns"))}</div>`;
-    return;
-  }
-  root.innerHTML = runs.slice().reverse().map(run => agentCard(run, false)).join("");
 }
 
 function agentCard(run, compact) {
@@ -1323,7 +1561,7 @@ function formatBytes(bytes) {
 setLanguage(uiLanguage);
 clearViewer();
 refresh();
-setInterval(refresh, 2000);
+setInterval(refresh, 5000);
 </script>
 </body>
 </html>"""

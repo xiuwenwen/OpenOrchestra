@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from harness.adapters.claude_code_adapter import ClaudeCodeAdapter
@@ -98,6 +99,11 @@ def test_claude_adapter_does_not_force_permission_mode(tmp_path: Path) -> None:
     assert runner.command is not None
     assert "--permission-mode" not in runner.command
     assert runner.env == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"}
+    assert "--settings" in runner.command
+    settings_path = Path(runner.command[runner.command.index("--settings") + 1])
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "env": {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"}
+    }
 
 
 def test_claude_adapter_accepts_configured_permission_mode(tmp_path: Path) -> None:
@@ -119,6 +125,11 @@ def test_claude_adapter_uses_configured_max_output_tokens(tmp_path: Path) -> Non
     )
 
     assert runner.env == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192"}
+    assert runner.command is not None
+    settings_path = Path(runner.command[runner.command.index("--settings") + 1])
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "env": {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192"}
+    }
 
 
 def test_claude_dynamic_max_output_tokens_respects_context_window() -> None:
@@ -167,6 +178,11 @@ def test_claude_adapter_lowers_max_output_for_large_prompt(tmp_path: Path) -> No
     adjusted_max_output_tokens = int(runner.env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"])
     assert MIN_DYNAMIC_MAX_OUTPUT_TOKENS <= adjusted_max_output_tokens
     assert adjusted_max_output_tokens < DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE["planner"]
+    assert runner.command is not None
+    settings_path = Path(runner.command[runner.command.index("--settings") + 1])
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "env": {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(adjusted_max_output_tokens)}
+    }
 
 
 def test_dynamic_max_output_tokens_keeps_128k_requests_below_200k_context() -> None:
@@ -319,6 +335,11 @@ def test_claude_adapter_uses_role_specific_max_output_tokens(tmp_path: Path) -> 
     )
 
     assert runner.env == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "48000"}
+    assert runner.command is not None
+    settings_path = Path(runner.command[runner.command.index("--settings") + 1])
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "env": {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "48000"}
+    }
 
 
 def test_claude_adapter_uses_role_specific_default_when_mapping_omits_role(tmp_path: Path) -> None:
@@ -339,6 +360,8 @@ def test_claude_adapter_can_disable_max_output_override(tmp_path: Path) -> None:
     )
 
     assert runner.env == {}
+    assert runner.command is not None
+    assert "--settings" not in runner.command
 
 
 def test_claude_adapter_writes_request_diagnostics_for_oversized_requests(tmp_path: Path) -> None:

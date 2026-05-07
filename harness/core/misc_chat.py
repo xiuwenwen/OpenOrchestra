@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from harness.adapters.claude_config import claude_env_for_role
+from harness.adapters.claude_config import claude_env_for_role, write_claude_invocation_settings
 from harness.adapters.subprocess_runner import SubprocessRunner
 
 
@@ -32,9 +32,10 @@ class MiscChatRunner:
         (run_dir / "prompt.md").write_text(full_prompt, encoding="utf-8")
         stdout_path = run_dir / "stdout.log"
         stderr_path = run_dir / "stderr.log"
-        command = self._command(run_dir)
+        env = claude_env_for_role(self.config, "misc", full_prompt) if self.backend == "claude" else None
+        settings_path = write_claude_invocation_settings(run_dir, env or {}) if self.backend == "claude" else None
+        command = self._command(run_dir, settings_path)
         (run_dir / "command.txt").write_text(" ".join(command), encoding="utf-8")
-        env = claude_env_for_role(self.config, "misc") if self.backend == "claude" else None
         if env:
             (run_dir / "env_overrides.txt").write_text(
                 "\n".join(f"{key}={value}" for key, value in sorted(env.items())) + "\n",
@@ -45,9 +46,13 @@ class MiscChatRunner:
             raise MiscChatError(f"Misc chat failed with exit_code={exit_code}. See logs: {run_dir}")
         return stdout_path.read_text(encoding="utf-8", errors="replace").strip()
 
-    def _command(self, run_dir: Path) -> list[str]:
+    def _command(self, run_dir: Path, settings_path: Path | None = None) -> list[str]:
         if self.backend == "claude":
-            return ["claude", "-p", "--output-format", "text"]
+            command = ["claude", "-p"]
+            if settings_path:
+                command.extend(["--settings", str(settings_path)])
+            command.extend(["--output-format", "text"])
+            return command
         if self.backend == "codex":
             return ["codex", "exec", "--skip-git-repo-check", "--cd", str(run_dir), "-"]
         raise MiscChatError(f"Unsupported misc chat backend: {self.backend}")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from harness.core.misc_chat import MiscChatRunner
@@ -60,5 +61,33 @@ def test_misc_chat_applies_claude_token_budget(tmp_path: Path) -> None:
 
     assert answer == "direct answer"
     assert runner.env == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "4321"}
+    assert runner.command is not None
+    assert "--settings" in runner.command
+    settings_path = Path(runner.command[runner.command.index("--settings") + 1])
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "env": {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "4321"}
+    }
     assert runner.cwd is not None
     assert (runner.cwd / "env_overrides.txt").read_text(encoding="utf-8") == "CLAUDE_CODE_MAX_OUTPUT_TOKENS=4321\n"
+
+
+def test_misc_chat_lowers_claude_token_budget_for_large_prompt(tmp_path: Path) -> None:
+    runner = FakeRunner("direct answer")
+    chat = MiscChatRunner(
+        "claude",
+        runner=runner,
+        log_root=tmp_path,
+        config={
+            "claude": {
+                "context_window_tokens": 200_000,
+                "context_window_buffer_tokens": 2_048,
+                "max_output_tokens": {"misc": 128_000},
+            }
+        },
+    )
+
+    chat.ask("x" * (72_001 * 4))
+
+    assert runner.env is not None
+    adjusted = int(runner.env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"])
+    assert adjusted < 128_000

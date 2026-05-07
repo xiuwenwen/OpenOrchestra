@@ -1,6 +1,6 @@
-# Harness System MVP
+# OpenOrchestra
 
-This project implements a minimal orchestration harness for mature coding agents such as Codex CLI or Claude Code.
+OpenOrchestra implements a minimal orchestration harness for mature coding agents such as Codex CLI or Claude Code.
 
 The harness does not implement internal tools like FileTool, ShellTool, EditTool, or TestTool. Agents are responsible for reading files, editing code, and running commands inside their own isolated workspace. The harness only coordinates phases, retries, timeouts, workspace isolation, artifact collection, artifact validation, judge decisions, and final delivery.
 
@@ -15,6 +15,110 @@ The harness does not implement internal tools like FileTool, ShellTool, EditTool
 - Versioned artifact collection with SHA-256 hashes.
 - A mock judge and communicator-driven final delivery.
 - Pytest coverage for the state store, workspace isolation, artifact validation, mock adapter, and full mock flow.
+
+## Quick Start / 快速开始
+
+### 1. Clone the repository / 克隆仓库
+
+```bash
+git clone git@github.com:xiuwenwen/OpenOrchestra.git
+cd OpenOrchestra
+```
+
+If you use HTTPS instead of SSH:
+
+如果你使用 HTTPS：
+
+```bash
+git clone https://github.com/xiuwenwen/OpenOrchestra.git
+cd OpenOrchestra
+```
+
+### 2. Create a Python environment / 创建 Python 环境
+
+OpenOrchestra requires Python 3.11 or newer.
+
+OpenOrchestra 需要 Python 3.11 或更高版本。
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
+```
+
+### 3. Prepare an agent backend / 准备 Agent 后端
+
+Install and authenticate at least one supported mature coding agent:
+
+安装并登录至少一个支持的成熟编码 Agent：
+
+- Claude Code: make sure `claude` is available in `PATH`.
+- Codex CLI: make sure `codex` is available in `PATH`.
+
+OpenOrchestra can select a backend automatically, or you can force one with
+`--backend claude` or `--backend codex`.
+
+OpenOrchestra 可以自动选择后端，也可以用 `--backend claude` 或
+`--backend codex` 指定。
+
+### 4. Start OpenOrchestra / 启动 OpenOrchestra
+
+```bash
+./orchestra
+```
+
+The Web execution viewer starts by default and prints a local URL, usually:
+
+默认会启动 Web 执行查看器，并打印本地地址，通常是：
+
+```text
+http://127.0.0.1:8765
+```
+
+Then type a task in the interactive prompt:
+
+然后在交互式命令行里输入任务：
+
+```text
+harness[claude]> 做一个根据 IP 查询天气的小工具
+```
+
+### 5. Run a one-shot task / 一次性执行任务
+
+```bash
+./orchestra --backend claude "做一个根据 IP 查询天气的小工具"
+./orchestra --backend codex "fix the failing login test"
+```
+
+To skip automatic workflow classification, pass the workflow explicitly:
+
+如果不想让模型自动分类工作流，可以显式指定：
+
+```bash
+./orchestra --workflow new_project "做一个待办事项 CLI"
+./orchestra --workflow bugfix "修复现有项目里的登录失败问题"
+./orchestra --workflow feature_change "给现有应用增加 CSV 导出"
+./orchestra --workflow misc "解释一下这个项目怎么运行"
+```
+
+### 6. Read the result / 查看结果
+
+For project workflows, OpenOrchestra prints:
+
+对于项目类工作流，OpenOrchestra 最后会打印：
+
+- `project_dir`: delivered project directory / 交付工程目录
+- `run_command`: command to run or verify the project / 运行或验证命令
+- `dependency_install`: dependency install command, or `not_required` / 依赖安装命令，或 `not_required`
+
+You can also inspect the live process and artifacts in the Web viewer.
+
+你也可以在 Web 查看器里查看实时流程、角色输出和交付产物。
+
+### 7. Run tests / 运行测试
+
+```bash
+.venv/bin/python -m pytest
+```
 
 ## Run the real agent flow
 
@@ -348,24 +452,60 @@ Every adapter receives an `AgentRunContext` with:
 Every adapter returns an `AgentRunResult`. The orchestrator then validates required files in `workspace/output`, collects them into the artifact store, records hashes and versions, and advances the state machine.
 
 Every role and every phase must also write `delivery.md` into `workspace/output`.
-Harness treats it as the agent's explicit status report and validates it before
+Harness treats it as the agent's explicit numeric return-code report and validates it before
 accepting the run:
 
 ```markdown
-# Role Delivery
+return_code: 0
 
-status: success
+# Role Delivery
 
 role: executor
 phase: EXECUTION
+role_return_code: 0
 summary: Produced implementation artifacts.
 known_risks: none
 ```
 
-Allowed status values are `success`, `failed`, and `partial`. Only `success`
-allows the agent run to be accepted. `failed` or `partial` keeps the run from
+The first non-empty line must be `return_code: <integer>`. `return_code: 0`
+allows the agent run to be accepted. Non-zero return codes keep the run from
 advancing even if the process exits with code 0 and the other required files
-exist.
+exist. Business verdicts belong in role-specific artifacts such as
+`decision.json`, `test_report.md`, `review_report.md`, or `peer_review.md`, not
+in `delivery.md`.
+
+Canonical return codes are defined in `harness/artifacts/delivery_codes.py` and
+used by both prompt generation and artifact validation:
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | Role delivery files are complete and Harness may accept the role run. |
+| `1` | Partial role delivery; useful files may exist but the contract is incomplete. |
+| `2` | Blocked by missing input, context, or evidence required to complete the role. |
+| `3` | Degraded role delivery that requires manual review before it can be trusted. |
+| `-1` | Role failed to produce a usable result. |
+| `-2` | Required role outputs are missing, empty, or invalid. |
+| `-3` | Tool, runtime, adapter, or internal execution error. |
+
+Every other required Markdown artifact must also start with a numeric result
+code:
+
+```markdown
+artifact_result_code: 0
+
+# Test Report
+
+test_result_code: -1
+evidence: pytest failed in tests/test_login.py
+```
+
+`artifact_result_code` describes whether that Markdown file itself is complete.
+Business verdicts inside Markdown files must use numeric `*_code` fields such
+as `test_result_code`, `build_result_code`, `bug_result_code`,
+`review_decision_code`, `peer_review_code`, `decision_code`, and
+`final_delivery_code`. Do not use Markdown verdict fields like
+`test_result: pass`, `review_decision: approved`, or
+`peer_review_status: satisfied`.
 
 ## Connecting Codex CLI or Claude Code later
 

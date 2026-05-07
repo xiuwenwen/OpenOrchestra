@@ -51,29 +51,34 @@ class MockAgentAdapter(AgentAdapter):
     def _content_for(self, context: AgentRunContext, name: str) -> str:
         if name == "delivery.md":
             return (
+                "return_code: 0\n\n"
                 "# Role Delivery\n\n"
-                "status: success\n\n"
                 f"role: {context.role}\n"
                 f"phase: {context.phase}\n"
                 f"agent_id: {context.agent_id}\n\n"
+                "role_return_code: 0\n"
                 "summary: Mock agent completed the required output contract.\n"
                 "known_risks: none\n"
             )
         if context.role == "tester" and name == "test_report.md":
-            return "# Test Report\n\nstatus: pass\nAll mock tests passed.\n"
+            return "artifact_result_code: 0\n\n# Test Report\n\ntest_result_code: 0\nAll mock tests passed.\n"
         if context.role == "tester" and name == "bug_report.md":
-            return "# Bug Report\n\nseverity: none\nNo blocking bugs found.\n"
+            return "artifact_result_code: 0\n\n# Bug Report\n\nbug_result_code: 0\nNo blocking bugs found.\n"
         if context.role == "executor" and name == "response.md":
-            return "# Response\n\nMock informational response for the user's request.\n"
+            return "artifact_result_code: 0\n\n# Response\n\nMock informational response for the user's request.\n"
         if context.role == "executor" and name == "notes.md":
-            return "# Notes\n\nContext used: mock input artifacts.\nLimitations: mock adapter output.\n"
+            return "artifact_result_code: 0\n\n# Notes\n\nContext used: mock input artifacts.\nLimitations: mock adapter output.\n"
         if context.role == "reviewer" and name == "review_report.md":
-            return "# Review Report\n\nstatus: approved\nNo changes required.\n"
+            return "artifact_result_code: 0\n\n# Review Report\n\nreview_decision_code: 0\nNo changes required.\n"
         if context.role == "reviewer" and name == "selected_plan.md":
-            return "# Selected Plan\n\nUse the mock planner proposal as the single execution plan.\n"
+            return "artifact_result_code: 0\n\n# Selected Plan\n\nUse the mock planner proposal as the single execution plan.\n"
+        if context.role == "planner" and name == "peer_review.md":
+            return "artifact_result_code: 0\n\n# Peer Review\n\npeer_review_code: 1\nMock peer review requests one bounded revision loop.\n"
         if context.role == "communicator" and name == "final_delivery.md":
             return (
+                "artifact_result_code: 0\n\n"
                 "# Final Delivery\n\n"
+                "final_delivery_code: 0\n\n"
                 f"Task `{context.task_id}` completed through the mock harness flow.\n\n"
                 "## Handoff\n\n"
                 "- project_dir: source\n"
@@ -83,6 +88,7 @@ class MockAgentAdapter(AgentAdapter):
             )
         if context.role == "communicator" and name == "usage_guide.md":
             return (
+                "artifact_result_code: 0\n\n"
                 "# Usage Guide\n\n"
                 "## Prerequisites\n\n"
                 "- Use the collected artifacts for this task.\n\n"
@@ -91,7 +97,7 @@ class MockAgentAdapter(AgentAdapter):
                 "python mock.py\n"
                 "```\n\n"
                 "## Verification\n\n"
-                "- Confirm every role delivery.md reports `status: success`.\n"
+                "- Confirm every role delivery.md reports `return_code: 0`.\n"
                 "- Confirm final judge approval exists.\n\n"
                 "## Known Risks\n\n"
                 "- This is mock output and does not contain a real implementation.\n"
@@ -100,7 +106,14 @@ class MockAgentAdapter(AgentAdapter):
             return json.dumps(self._decision_payload(context), ensure_ascii=False, indent=2) + "\n"
         if context.role == "judge" and name == "decision_summary.md":
             payload = self._decision_payload(context)
-            return f"# Decision Summary\n\nDecision: {payload['decision']}\nReason: {payload['reason']}\n"
+            decision_code = -1 if payload["decision"] == "fail" else 1 if payload["decision"] == "changes_required" else 0
+            return (
+                "artifact_result_code: 0\n\n"
+                "# Decision Summary\n\n"
+                f"decision_code: {decision_code}\n"
+                "decision_source: decision.json\n"
+                f"Reason: {payload['reason']}\n"
+            )
         if context.role == "executor" and name == "patch_metadata.md":
             return self._patch_metadata(context)
         if context.role == "executor" and name == "merged_patch_metadata.md":
@@ -108,6 +121,8 @@ class MockAgentAdapter(AgentAdapter):
         if name.endswith(".diff"):
             return "diff --git a/mock.txt b/mock.txt\nnew file mode 100644\n--- /dev/null\n+++ b/mock.txt\n@@ -0,0 +1 @@\n+mock change\n"
         title = name.replace("_", " ").replace(".md", "").title()
+        if name.endswith(".md"):
+            return f"artifact_result_code: 0\n\n# {title}\n\nMock output for role `{context.role}` in phase `{context.phase}`.\n"
         return f"# {title}\n\nMock output for role `{context.role}` in phase `{context.phase}`.\n"
 
     def _patch_metadata(self, context: AgentRunContext) -> str:
@@ -120,8 +135,8 @@ class MockAgentAdapter(AgentAdapter):
             "repository_source_path", str(context.repo_dir)
         )
         return (
+            "artifact_result_code: 0\n\n"
             "# Patch Metadata\n\n"
-            "status: success\n"
             f"patch_artifact: {patch_artifact}\n"
             f"base_source_type: {source_type}\n"
             f"base_source_path: {source_path}\n"
@@ -142,8 +157,8 @@ class MockAgentAdapter(AgentAdapter):
             "repository_source_path", str(context.repo_dir)
         )
         return (
+            "artifact_result_code: 0\n\n"
             "# Merged Patch Metadata\n\n"
-            "status: success\n"
             "patch_artifact: merged_patch.diff\n"
             f"base_source_type: {source_type}\n"
             f"base_source_path: {source_path}\n"
@@ -159,11 +174,11 @@ class MockAgentAdapter(AgentAdapter):
 
     def _decision_payload(self, context: AgentRunContext) -> dict[str, object]:
         if context.phase == PLAN_JUDGEMENT:
-            return {"decision": "approved", "selected_plan": "mock-plan", "reason": "Mock plan is acceptable."}
+            return {"decision": "approved", "selected_plan": "mock-plan", "evidence": {}, "reason": "Mock plan is acceptable."}
         if context.phase == TEST_JUDGEMENT:
-            return {"decision": "pass", "tests_passed": True, "reason": "Mock tests passed."}
+            return {"decision": "pass", "tests_passed": True, "evidence": {}, "reason": "Mock tests passed."}
         if context.phase == REVIEW_JUDGEMENT:
-            return {"decision": "approved", "changes_required": False, "reason": "Mock review approved."}
+            return {"decision": "approved", "changes_required": False, "evidence": {}, "reason": "Mock review approved."}
         if context.phase == FINAL_JUDGEMENT:
-            return {"decision": "approved", "final_approved": True, "reason": "Mock final approval granted."}
-        return {"decision": "approved", "reason": "Mock judge approved."}
+            return {"decision": "approved", "final_approved": True, "evidence": {}, "reason": "Mock final approval granted."}
+        return {"decision": "approved", "evidence": {}, "reason": "Mock judge approved."}
