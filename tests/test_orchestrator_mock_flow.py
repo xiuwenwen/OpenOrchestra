@@ -16,8 +16,10 @@ from harness.core.state_machine import (
     FAILED,
     FIXING,
     PATCH_MERGE,
+    PLAN_REVIEW,
     PLAN_JUDGEMENT,
     PLANNING_DRAFT,
+    PLANNING_REVISION,
     REVIEW_FIXING,
     RUNNING,
     TESTING,
@@ -371,6 +373,8 @@ def test_planning_block_runs_peer_review_loop_and_plan_review(monkeypatch, tmp_p
     staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "executor-input", "executor", "EXECUTION")
     manifest = staged[0].read_text(encoding="utf-8")
     assert "selected_plan.md" in manifest
+    assert "planner-1_plan.md" not in manifest
+    assert "planner-2_plan.md" not in manifest
 
 
 def test_planner_retry_can_see_previous_planning_artifacts(tmp_path: Path) -> None:
@@ -422,6 +426,47 @@ def test_planner_retry_can_see_previous_planning_artifacts(tmp_path: Path) -> No
     assert "risk.md" in manifest
     assert "todo_breakdown.md" in manifest
     assert "current-plan.md" not in manifest
+
+
+def test_plan_review_only_receives_current_planning_round(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("review latest plan")
+    old_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_DRAFT, "planner", 0)
+    current_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_REVISION, "planner", 1)
+    for phase_id, round_label, version in (
+        (old_phase_id, "old", 1),
+        (current_phase_id, "current", 2),
+    ):
+        for artifact_name in ("plan.md", "risk.md", "todo_breakdown.md", "peer_review.md"):
+            path = tmp_path / f"{round_label}-{artifact_name}"
+            path.write_text(round_label, encoding="utf-8")
+            orchestrator.repository.create_artifact(
+                ArtifactRef(
+                    artifact_id=str(uuid.uuid4()),
+                    task_id=task_id,
+                    phase_id=phase_id,
+                    role="planner",
+                    agent_id="planner-1",
+                    artifact_type=artifact_name,
+                    path=path,
+                    version=version,
+                    hash="hash",
+                )
+            )
+
+    staged = orchestrator._stage_input_artifacts(
+        task_id,
+        tmp_path / "plan-review-input",
+        "reviewer",
+        PLAN_REVIEW,
+        round_id=1,
+    )
+    manifest = staged[0].read_text(encoding="utf-8")
+
+    assert "current-plan.md" in manifest
+    assert "current-peer_review.md" in manifest
+    assert "old-plan.md" not in manifest
+    assert "old-peer_review.md" not in manifest
 
 
 def test_orchestrator_misc_flow_uses_executor_response_only(tmp_path: Path) -> None:
@@ -1303,10 +1348,11 @@ def test_current_phase_artifacts_are_excluded_from_agent_inputs(tmp_path: Path) 
     assert "review_report.md" not in manifest
 
 
-def test_staging_does_not_mutate_target_role_while_filtering(tmp_path: Path) -> None:
+def test_execution_staging_uses_selected_plan_not_raw_planner_outputs(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("implement planned work")
-    phase_id = orchestrator.repository.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+    planner_phase_id = orchestrator.repository.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+    reviewer_phase_id = orchestrator.repository.create_phase(task_id, PLAN_REVIEW, "reviewer", 0)
     artifact_names = ["plan.md", "assumptions.md", "risk.md", "todo_breakdown.md"]
     for artifact_name in artifact_names:
         path = tmp_path / artifact_name
@@ -1315,7 +1361,7 @@ def test_staging_does_not_mutate_target_role_while_filtering(tmp_path: Path) -> 
             ArtifactRef(
                 artifact_id=str(uuid.uuid4()),
                 task_id=task_id,
-                phase_id=phase_id,
+                phase_id=planner_phase_id,
                 role="planner",
                 agent_id="planner-1",
                 artifact_type=artifact_name,
@@ -1324,12 +1370,28 @@ def test_staging_does_not_mutate_target_role_while_filtering(tmp_path: Path) -> 
                 hash="hash",
             )
         )
+    selected_plan = tmp_path / "selected_plan.md"
+    selected_plan.write_text("selected", encoding="utf-8")
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=reviewer_phase_id,
+            role="reviewer",
+            agent_id="reviewer-1",
+            artifact_type="selected_plan.md",
+            path=selected_plan,
+            version=1,
+            hash="hash",
+        )
+    )
 
     staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input", "executor", "EXECUTION")
     manifest = staged[0].read_text(encoding="utf-8")
 
+    assert "selected_plan.md" in manifest
     for artifact_name in artifact_names:
-        assert artifact_name in manifest
+        assert f"planner-1_{artifact_name}" not in manifest
 
 
 def test_judge_receives_merged_patch_for_test_judgement(tmp_path: Path) -> None:

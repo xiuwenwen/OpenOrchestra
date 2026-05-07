@@ -1843,9 +1843,14 @@ class Orchestrator:
         }
         for artifact in artifacts:
             artifact_type = artifact["artifact_type"]
+            artifact_role = artifact["role"] or ""
             phase_row = phases_by_id.get(artifact.get("phase_id") or "")
             artifact_round = int(phase_row["round_id"]) if phase_row and phase_row.get("round_id") is not None else None
             artifact_phase = phase_row["phase_type"] if phase_row else None
+
+            if phase in {PLAN_REVIEW, PLAN_JUDGEMENT} and artifact_role in {"planner", "reviewer"}:
+                if round_id is not None and artifact_round != round_id:
+                    continue
 
             if artifact_type in candidate_patch_types:
                 if patch_merge_phase and artifact_round == round_id and artifact_phase in {EXECUTION, FIXING, REVIEW_FIXING}:
@@ -1990,13 +1995,8 @@ class Orchestrator:
             }
         if role == "executor":
             if phase == EXECUTION:
-                return artifact_role in {"planner", "reviewer", "judge"} and artifact_type in {
+                return artifact_role in {"reviewer", "judge"} and artifact_type in {
                     "selected_plan.md",
-                    "plan.md",
-                    "assumptions.md",
-                    "risk.md",
-                    "todo_breakdown.md",
-                    "peer_review.md",
                     "review_report.md",
                     "decision.json",
                     "decision_summary.md",
