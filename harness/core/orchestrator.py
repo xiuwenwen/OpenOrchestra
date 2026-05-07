@@ -1860,6 +1860,7 @@ class Orchestrator:
         latest_authoritative: dict[str, dict[str, Any]] = {}
         filtered: list[dict[str, Any]] = []
         candidate_patch_types = {"patch.diff", "fix_patch.diff", "patch_metadata.md"}
+        patch_merge_context_types = {"merged_patch.diff", "merged_patch_metadata.md"}
         authoritative_types = {
             "merged_patch.diff",
             "merged_patch_metadata.md",
@@ -1888,6 +1889,17 @@ class Orchestrator:
             phase_row = phases_by_id.get(artifact.get("phase_id") or "")
             artifact_round = int(phase_row["round_id"]) if phase_row and phase_row.get("round_id") is not None else None
             artifact_phase = phase_row["phase_type"] if phase_row else None
+
+            if patch_merge_phase:
+                if artifact_type in candidate_patch_types:
+                    if artifact_round == round_id and artifact_phase in {EXECUTION, FIXING, REVIEW_FIXING}:
+                        filtered.append(artifact)
+                    continue
+                if artifact_type in patch_merge_context_types:
+                    if artifact_round is not None and artifact_round < round_id and artifact_phase == PATCH_MERGE:
+                        latest_authoritative[artifact_type] = artifact
+                    continue
+                continue
 
             if role == "planner" and phase == PLANNING_REVISION and rejected_plan_review_round is not None:
                 if artifact_type == "project_context.md":
@@ -2086,29 +2098,12 @@ class Orchestrator:
                     "review_report.md",
                 }
             if phase == PATCH_MERGE:
-                return artifact_role in {"planner", "executor", "tester", "reviewer", "judge", "orchestrator"} and artifact_type in {
-                    "selected_plan.md",
-                    "plan.md",
-                    "assumptions.md",
-                    "risk.md",
-                    "todo_breakdown.md",
-                    "implementation_plan.md",
-                    "changed_files.md",
+                return artifact_role == "executor" and artifact_type in {
                     "patch.diff",
                     "patch_metadata.md",
-                    "fix_schedule.md",
                     "fix_patch.diff",
-                    "fix_notes.md",
-                    "self_check.md",
-                    "build_report.md",
-                    "test_report.md",
-                    "bug_report.md",
-                    "review_report.md",
-                    "decision.json",
-                    "decision_summary.md",
                     "merged_patch.diff",
                     "merged_patch_metadata.md",
-                    "merge_report.md",
                 }
             if phase == FIXING:
                 return artifact_role in {"executor", "tester", "judge", "orchestrator"} and artifact_type in {
@@ -2151,21 +2146,10 @@ class Orchestrator:
                 }
             return False
         if role == "tester":
-            return artifact_role in {"executor", "orchestrator"} and artifact_type in {
-                "implementation_plan.md",
-                "changed_files.md",
-                "merged_patch.diff",
-                "merged_patch_metadata.md",
-                "patch_validation.md",
-                "materialized_repo.md",
-                "objective_gate.md",
-                "test_gate.md",
-                "patch_metadata.md",
-                "fix_schedule.md",
-                "fix_notes.md",
-                "self_check.md",
-                "merge_report.md",
-            }
+            # Testers should validate the materialized program in repo_dir.
+            # Executor narrative artifacts are intentionally hidden to keep
+            # testing grounded in runnable source instead of implementation notes.
+            return False
         if role == "reviewer":
             if phase == PLAN_REVIEW:
                 return artifact_role in {"planner"} and artifact_type in {

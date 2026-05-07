@@ -1529,16 +1529,20 @@ def test_judge_receives_merged_patch_for_test_judgement(tmp_path: Path) -> None:
     assert "patch-merger" in manifest
 
 
-def test_tester_sees_authoritative_merged_patch_not_raw_candidate_patches(tmp_path: Path) -> None:
+def test_tester_receives_no_executor_markdown_artifacts(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
-    task_id = orchestrator.create_task("test merged patch only")
+    task_id = orchestrator.create_task("test materialized repository directly")
     execution_phase_id = orchestrator.repository.create_phase(task_id, "EXECUTION", "executor", 0)
     merge_phase_id = orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 0)
     for artifact_type, phase_id, agent_id in [
         ("patch.diff", execution_phase_id, "executor-1"),
         ("fix_patch.diff", execution_phase_id, "executor-2"),
         ("merged_patch.diff", merge_phase_id, "executor-1"),
+        ("merged_patch_metadata.md", merge_phase_id, "executor-1"),
         ("merge_report.md", merge_phase_id, "executor-1"),
+        ("implementation_plan.md", execution_phase_id, "executor-1"),
+        ("changed_files.md", execution_phase_id, "executor-1"),
+        ("self_check.md", execution_phase_id, "executor-1"),
     ]:
         path = tmp_path / artifact_type
         path.write_text(artifact_type, encoding="utf-8")
@@ -1559,13 +1563,17 @@ def test_tester_sees_authoritative_merged_patch_not_raw_candidate_patches(tmp_pa
     staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input", "tester", "TESTING")
     manifest = staged[0].read_text(encoding="utf-8")
 
-    assert "merged_patch.diff" in manifest
-    assert "merge_report.md" in manifest
-    assert not re.search(r"## \d+\. patch\.diff\b", manifest)
-    assert not re.search(r"## \d+\. fix_patch\.diff\b", manifest)
+    assert staged == [tmp_path / "input" / "manifest.md"]
+    assert "implementation_plan.md" not in manifest
+    assert "changed_files.md" not in manifest
+    assert "self_check.md" not in manifest
+    assert "merge_report.md" not in manifest
+    assert "merged_patch.diff" not in manifest
+    assert "patch.diff" not in manifest
+    assert "fix_patch.diff" not in manifest
 
 
-def test_tester_stages_latest_authoritative_patch_as_path_only_for_large_diffs(tmp_path: Path) -> None:
+def test_tester_does_not_stage_large_authoritative_patch(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("test latest large patch only")
     first_merge_phase_id = orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 0)
@@ -1593,11 +1601,9 @@ def test_tester_stages_latest_authoritative_patch_as_path_only_for_large_diffs(t
     manifest = staged[0].read_text(encoding="utf-8")
 
     assert len(staged) == 1
-    assert "merged_patch.diff v2" in manifest
-    assert "latest_merged.patch" in manifest
+    assert "merged_patch.diff" not in manifest
+    assert "latest_merged.patch" not in manifest
     assert "old_merged.patch" not in manifest
-    assert "full_content_staged: false" in manifest
-    assert "path_only" in manifest
 
 
 def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_patch_only(tmp_path: Path) -> None:
@@ -1615,8 +1621,15 @@ def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_pat
         ("patch_metadata.md", old_fix_phase_id, "executor", "old-fix-metadata.md"),
         ("merged_patch.diff", previous_merge_phase_id, "executor", "previous-merged.patch"),
         ("merged_patch_metadata.md", previous_merge_phase_id, "executor", "previous-merged-metadata.md"),
+        ("merge_report.md", previous_merge_phase_id, "executor", "previous-merge-report.md"),
         ("fix_patch.diff", current_fix_phase_id, "executor", "current-fix.patch"),
         ("patch_metadata.md", current_fix_phase_id, "executor", "current-fix-metadata.md"),
+        ("self_check.md", current_fix_phase_id, "executor", "current-self-check.md"),
+        ("fix_notes.md", current_fix_phase_id, "executor", "current-fix-notes.md"),
+        ("test_report.md", old_fix_phase_id, "tester", "old-test-report.md"),
+        ("decision.json", old_fix_phase_id, "judge", "old-decision.json"),
+        ("review_report.md", old_fix_phase_id, "reviewer", "old-review-report.md"),
+        ("plan.md", execution_phase_id, "planner", "old-plan.md"),
     ]
     for artifact_type, phase_id, role, filename in artifact_rows:
         path = tmp_path / filename
@@ -1649,6 +1662,13 @@ def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_pat
     assert "current-fix-metadata.md" in manifest
     assert "previous-merged.patch" in manifest
     assert "previous-merged-metadata.md" in manifest
+    assert "previous-merge-report.md" not in manifest
+    assert "current-self-check.md" not in manifest
+    assert "current-fix-notes.md" not in manifest
+    assert "old-test-report.md" not in manifest
+    assert "old-decision.json" not in manifest
+    assert "old-review-report.md" not in manifest
+    assert "old-plan.md" not in manifest
     assert "old-execution.patch" not in manifest
     assert "old-execution-metadata.md" not in manifest
     assert "old-fix.patch" not in manifest

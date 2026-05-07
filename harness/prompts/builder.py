@@ -317,7 +317,8 @@ class PromptBuilder:
                 "- Valid `patch_scope` values are `full_project`, `incremental_fix`, and `merged_authoritative`.",
                 "- Treat any patch artifact as invalid evidence when its metadata is missing, does not name that patch artifact, or declares a baseline/apply target incompatible with the current repository.",
                 "- `patch.diff` and `fix_patch.diff` are candidate inputs for PATCH_MERGE only; tester, reviewer, judge, and communicator roles must not treat them as final deliverables.",
-                "- Tester, reviewer, and judge roles must evaluate the repository directory, `merged_patch.diff`, `merge_report.md`, Harness gate reports, role reports, and summaries.",
+                "- Tester roles must evaluate the runnable repository directory directly; do not depend on executor narrative reports.",
+                "- Reviewer and judge roles must evaluate the repository directory, `merged_patch.diff`, `merge_report.md`, Harness gate reports, role reports, and summaries.",
                 "",
                 "## Required Output Files",
                 required_outputs,
@@ -424,14 +425,11 @@ class PromptBuilder:
             ]
         if context.role == "tester":
             return [
-                "- Use `merged_patch.diff` as the implementation under test whenever it exists.",
+                "- Treat the repository directory as the implementation under test.",
                 "- `build_report.md`, `test_report.md`, and `bug_report.md` must each start with `artifact_result_code: 0` when complete.",
                 "- Prefer running build, tests, and smoke checks directly in the repository directory when it contains materialized source.",
-                "- Read `materialized_repo.md` when present to understand which Harness materialized source snapshot was copied into the repository directory.",
-                "- Read `patch_validation.md` when present. If it reports `status: fail`, report testing as fail unless you have stronger direct evidence from applying and testing the patch yourself.",
-                "- Read `objective_gate.md` and `test_gate.md` when present; if either reports `status: fail`, report testing as fail.",
-                "- Read `merged_patch_metadata.md` when present; fail testing if the authoritative patch metadata is missing or incompatible with the repository under test.",
-                "- Treat raw `patch.diff` and `fix_patch.diff` as non-authoritative candidate inputs; do not pass a task based only on raw candidate patches.",
+                "- Use staged Harness evidence only when it is explicitly present in the input manifest; otherwise validate by executing or inspecting the repository directory.",
+                "- Do not treat executor planning notes, self-checks, or change summaries as test evidence.",
                 "- If no merged repository exists, report that the implementation is not ready for testing unless the current phase explicitly predates PATCH_MERGE.",
                 "- `build_report.md` must describe setup/build outcome or explain why build execution was not possible, and include `build_result_code: 0` for build passed/not required, `build_result_code: -1` for build failed, or `build_result_code: 2` for blocked/not run.",
                 "- `test_report.md` must include one machine-readable line: `test_result_code: 0` for tests passed, `test_result_code: -1` for tests failed, or `test_result_code: 2` for blocked/not testable.",

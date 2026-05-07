@@ -67,8 +67,8 @@ def test_prompt_builder_marks_merged_patch_as_authoritative(tmp_path: Path) -> N
 
     prompt = PromptBuilder().build(context)
 
-    assert "`merged_patch.diff` is the authoritative implementation artifact" in prompt
-    assert "raw `patch.diff` and `fix_patch.diff` as non-authoritative" in prompt
+    assert "Treat the repository directory as the implementation under test" in prompt
+    assert "Do not treat executor planning notes, self-checks, or change summaries as test evidence" in prompt
 
 
 def test_prompt_builder_has_model_driven_patch_merge_contract(tmp_path: Path) -> None:
