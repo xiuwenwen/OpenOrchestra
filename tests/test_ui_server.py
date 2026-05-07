@@ -211,6 +211,16 @@ def test_ui_role_card_labels_artifacts_by_agent() -> None:
     assert "ag-card" in html
 
 
+def test_ui_labels_output_invalid_as_contract_issue_not_test_failure() -> None:
+    html = _html()
+
+    assert "产物格式无效" in html
+    assert "Output Contract Invalid" in html
+    assert "不代表测试结论失败" in html
+    assert "This is not the test verdict" in html
+    assert ".pill.OUTPUT_INVALID{background:var(--warn-soft)" in html
+
+
 def test_ui_html_auto_follows_running_latest_task() -> None:
     html = _html()
 

@@ -631,7 +631,8 @@ def _html() -> str:
     .pill::before{content:'';width:6px;height:6px;border-radius:50%;flex-shrink:0}
     .pill.RUNNING{background:var(--accent-soft);color:var(--accent)}.pill.RUNNING::before{background:var(--accent);animation:blink 1.5s infinite}
     .pill.COMPLETED{background:var(--good-soft);color:var(--good)}.pill.COMPLETED::before{background:var(--good)}
-    .pill.FAILED,.pill.OUTPUT_INVALID,.pill.TIMEOUT{background:var(--bad-soft);color:var(--bad)}.pill.FAILED::before,.pill.OUTPUT_INVALID::before,.pill.TIMEOUT::before{background:var(--bad)}
+    .pill.FAILED,.pill.TIMEOUT{background:var(--bad-soft);color:var(--bad)}.pill.FAILED::before,.pill.TIMEOUT::before{background:var(--bad)}
+    .pill.OUTPUT_INVALID{background:var(--warn-soft);color:var(--warn)}.pill.OUTPUT_INVALID::before{background:var(--warn)}
     .pill.PENDING,.pill.CREATED{background:var(--overlay);color:var(--muted)}.pill.PENDING::before,.pill.CREATED::before{background:var(--subtle)}
     .pill.INFO{background:var(--overlay);color:var(--muted)}.pill.INFO::before{display:none}
 
@@ -674,6 +675,8 @@ def _html() -> str:
     .role-chip.RUNNING .rc-dot{background:var(--accent);animation:blink 1.5s infinite}
     .role-chip.COMPLETED .rc-dot{background:var(--good)}
     .role-chip.FAILED .rc-dot{background:var(--bad)}
+    .role-chip.OUTPUT_INVALID .rc-dot{background:var(--warn)}
+    .role-chip.TIMEOUT .rc-dot{background:var(--bad)}
     .role-chip .rc-count{font-size:10px;color:var(--muted);font-family:var(--mono)}
 
     /* === DETAIL PANEL === */
@@ -805,7 +808,19 @@ function labelPhase(p){return(uiLanguage==="en"?plEn[p]:pl[p])||p||"-"}
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function short(s,n=60){s=String(s??"").replace(/\s+/g," ");return s.length>n?s.slice(0,n-1)+"…":s}
 function fmtBytes(b){if(b==null)return"";if(b<1024)return b+" B";if(b<1048576)return Math.round(b/1024)+" KB";return(b/1048576).toFixed(1)+" MB"}
-function pill(st){let s=st||"PENDING";return `<span class="pill ${esc(s)}">${esc(s)}</span>`}
+function statusLabel(st){
+  const s=String(st||"PENDING");
+  const zh={OUTPUT_INVALID:"产物格式无效",FAILED:"执行失败",TIMEOUT:"超时",COMPLETED:"完成",RUNNING:"运行中",PENDING:"等待",CREATED:"已创建"};
+  const en={OUTPUT_INVALID:"Output Contract Invalid",FAILED:"Failed",TIMEOUT:"Timeout",COMPLETED:"Completed",RUNNING:"Running",PENDING:"Pending",CREATED:"Created"};
+  return (uiLanguage==="en"?en[s]:zh[s])||s;
+}
+function statusHelp(st){
+  const s=String(st||"PENDING");
+  const zh={OUTPUT_INVALID:"Agent 没有产出符合角色合同的必需文件或 return_code，不代表测试结论失败。测试结论请看 build_result_code、test_result_code、bug_result_code 或 test_gate。"};
+  const en={OUTPUT_INVALID:"The agent did not produce the required role-contract files or return_code. This is not the test verdict; check build_result_code, test_result_code, bug_result_code, or test_gate for test results."};
+  return (uiLanguage==="en"?en[s]:zh[s])||s;
+}
+function pill(st){let s=st||"PENDING";return `<span class="pill ${esc(s)}" title="${esc(statusHelp(s))}">${esc(statusLabel(s))}</span>`}
 async function getJson(u){const r=await fetch(u);if(!r.ok)throw new Error(await r.text());return r.json()}
 async function postJson(u,p){const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(p)});if(!r.ok)throw new Error(await r.text());return r.json()}
 

@@ -1,5 +1,7 @@
 # OpenOrchestra
 
+[![CI](https://github.com/xiuwenwen/OpenOrchestra/actions/workflows/ci.yml/badge.svg)](https://github.com/xiuwenwen/OpenOrchestra/actions/workflows/ci.yml)
+
 OpenOrchestra 是一个面向成熟编码 Agent 的本地编排器。它协调 Codex CLI、Claude Code、Gemini CLI、Qwen CLI 等 Agent 完成规划、执行、测试、审查、裁决和交付。
 
 OpenOrchestra is a local orchestration harness for mature coding agents such as Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. It coordinates planning, execution, testing, review, judgement, and delivery.
@@ -42,7 +44,8 @@ OpenOrchestra 需要 Python 3.11 或更高版本。
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m pip install -r requirements.lock
+.venv/bin/python -m pip install -e .
 ```
 
 Make sure at least one real backend is installed and authenticated:
@@ -164,36 +167,36 @@ After `/resume`, the prompt includes the selected task id. New non-command input
 
 ## Configuration / 配置
 
-OpenOrchestra loads defaults from `config/config.yaml`, then applies user overrides from `~/.myharness.env`. Command-line flags take precedence for the current run.
+OpenOrchestra loads defaults from `config/config.yaml`, then applies user overrides from `~/.openorchestra.env`. For compatibility, existing `~/.myharness.env` files and `HARNESS_*` keys are still read as legacy aliases. Command-line flags take precedence for the current run.
 
-OpenOrchestra 先读取 `config/config.yaml` 默认值，再读取 `~/.myharness.env` 用户配置。命令行参数只覆盖当前运行。
+OpenOrchestra 先读取 `config/config.yaml` 默认值，再读取 `~/.openorchestra.env` 用户配置。为了兼容，已有的 `~/.myharness.env` 文件和 `HARNESS_*` key 仍会作为旧别名读取。命令行参数只覆盖当前运行。
 
 Common settings:
 
 常用配置：
 
 ```env
-HARNESS_BACKEND=claude
-HARNESS_WORKSPACE_ROOT=./workspaces
-HARNESS_ARTIFACT_ROOT=./artifacts
-HARNESS_DELIVER_ROOT=./deliver
-HARNESS_STATE_DB=./state/harness.db
-HARNESS_SOURCE_REPO=.
-HARNESS_PLANNER_COUNT=2
-HARNESS_EXECUTOR_COUNT=2
-HARNESS_TESTER_COUNT=1
-HARNESS_REVIEWER_COUNT=1
-HARNESS_JUDGE_COUNT=1
-HARNESS_COMMUNICATOR_COUNT=1
-HARNESS_TIMEOUT_EXECUTOR=3600
-HARNESS_UI_HOST=127.0.0.1
-HARNESS_UI_PORT=8765
-HARNESS_MAX_TEST_FIX_ROUNDS=unlimited
-HARNESS_PLANNING_PEER_REVIEW_LOOPS=3
-HARNESS_HEARTBEAT_INTERVAL_SECONDS=60
-HARNESS_CLAUDE_CONTEXT_WINDOW_TOKENS=200000
-HARNESS_CLAUDE_CONTEXT_WINDOW_BUFFER_TOKENS=2048
-HARNESS_CLAUDE_MAX_TOKENS_EXECUTOR=64000
+OO_BACKEND=claude
+OO_WORKSPACE_ROOT=./workspaces
+OO_ARTIFACT_ROOT=./artifacts
+OO_DELIVER_ROOT=./deliver
+OO_STATE_DB=./state/harness.db
+OO_SOURCE_REPO=.
+OO_PLANNER_COUNT=2
+OO_EXECUTOR_COUNT=2
+OO_TESTER_COUNT=1
+OO_REVIEWER_COUNT=1
+OO_JUDGE_COUNT=1
+OO_COMMUNICATOR_COUNT=1
+OO_TIMEOUT_EXECUTOR=3600
+OO_UI_HOST=127.0.0.1
+OO_UI_PORT=8765
+OO_MAX_TEST_FIX_ROUNDS=10
+OO_PLANNING_PEER_REVIEW_LOOPS=3
+OO_HEARTBEAT_INTERVAL_SECONDS=60
+OO_CLAUDE_CONTEXT_WINDOW_TOKENS=200000
+OO_CLAUDE_CONTEXT_WINDOW_BUFFER_TOKENS=2048
+OO_CLAUDE_MAX_TOKENS_EXECUTOR=64000
 ```
 
 For Qwen Code, configure a supported auth provider in `config/config.yaml` when the CLI requires it:
@@ -210,9 +213,9 @@ Set a role timeout to `0` to disable timeout enforcement for that role. Use posi
 
 把角色 timeout 设为 `0` 可以关闭该角色的超时限制。真实 Agent 运行建议使用正数超时，避免 provider 卡住后无限等待。
 
-`HARNESS_MAX_TEST_FIX_ROUNDS=unlimited` means test/fix loops keep running until the test judge passes or the task is stopped. A positive integer restores a bounded loop.
+`OO_MAX_TEST_FIX_ROUNDS=10` is the default guardrail for test/fix loops. When the limit is reached, interactive mode asks whether to add 10 more rounds, exit, or continue until fixed. Set `OO_MAX_TEST_FIX_ROUNDS=unlimited` only when you intentionally want an unbounded loop.
 
-`HARNESS_MAX_TEST_FIX_ROUNDS=unlimited` 表示测试/修复循环会一直运行，直到测试裁决通过或任务被停止。设置为正整数可以恢复有界循环。
+`OO_MAX_TEST_FIX_ROUNDS=10` 是测试/修复循环的默认保护上限。达到上限后，交互模式会询问额外给 10 轮、退出，或一直修复直到通过。只有明确需要无界循环时才设置 `OO_MAX_TEST_FIX_ROUNDS=unlimited`。
 
 ## Workflows / 工作流
 

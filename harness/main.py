@@ -52,7 +52,8 @@ from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT
 from harness.ui.server import HarnessWebServer, UiEventStore
 from harness.ui.terminal import TerminalStatusLine
 
-USER_ENV_PATH = Path.home() / ".myharness.env"
+USER_ENV_PATH = Path.home() / ".openorchestra.env"
+LEGACY_USER_ENV_PATH = Path.home() / ".myharness.env"
 REAL_BACKENDS = ("codex", "claude", "gemini", "qwen")
 
 
@@ -88,60 +89,61 @@ def pad_display(text: str, width: int) -> str:
     return clipped + (" " * max(0, width - display_width(clipped)))
 
 ROLE_COUNT_ENV_KEYS = {
-    "HARNESS_PLANNER_COUNT": "planner",
-    "HARNESS_EXECUTOR_COUNT": "executor",
-    "HARNESS_TESTER_COUNT": "tester",
-    "HARNESS_REVIEWER_COUNT": "reviewer",
-    "HARNESS_JUDGE_COUNT": "judge",
-    "HARNESS_COMMUNICATOR_COUNT": "communicator",
+    "OO_PLANNER_COUNT": "planner",
+    "OO_EXECUTOR_COUNT": "executor",
+    "OO_TESTER_COUNT": "tester",
+    "OO_REVIEWER_COUNT": "reviewer",
+    "OO_JUDGE_COUNT": "judge",
+    "OO_COMMUNICATOR_COUNT": "communicator",
 }
 
 ENV_CONFIG_SPECS: dict[str, tuple[tuple[str, ...], type]] = {
-    "HARNESS_BACKEND": (("agent_backend", "default"), str),
-    "HARNESS_WORKSPACE_ROOT": (("system", "workspace_root"), str),
-    "HARNESS_ARTIFACT_ROOT": (("system", "artifact_root"), str),
-    "HARNESS_DELIVER_ROOT": (("system", "deliver_root"), str),
-    "HARNESS_STATE_DB": (("system", "state_db"), str),
-    "HARNESS_SOURCE_REPO": (("system", "source_repo"), str),
-    "HARNESS_PLANNER_COUNT": (("roles", "planner", "count"), int),
-    "HARNESS_EXECUTOR_COUNT": (("roles", "executor", "count"), int),
-    "HARNESS_TESTER_COUNT": (("roles", "tester", "count"), int),
-    "HARNESS_REVIEWER_COUNT": (("roles", "reviewer", "count"), int),
-    "HARNESS_JUDGE_COUNT": (("roles", "judge", "count"), int),
-    "HARNESS_COMMUNICATOR_COUNT": (("roles", "communicator", "count"), int),
-    "HARNESS_MAX_PLANNING_ROUNDS": (("limits", "max_planning_rounds"), int),
-    "HARNESS_PLANNING_PEER_REVIEW_LOOPS": (("limits", "planning_peer_review_loops"), int),
-    "HARNESS_MAX_TEST_FIX_ROUNDS": (("limits", "max_test_fix_rounds"), str),
-    "HARNESS_MAX_REVIEW_ROUNDS": (("limits", "max_review_rounds"), int),
-    "HARNESS_MAX_AGENT_RETRY": (("limits", "max_agent_retry"), int),
-    "HARNESS_TIMEOUT_PLANNER": (("timeouts", "planner"), int),
-    "HARNESS_TIMEOUT_EXECUTOR": (("timeouts", "executor"), int),
-    "HARNESS_TIMEOUT_TESTER": (("timeouts", "tester"), int),
-    "HARNESS_TIMEOUT_REVIEWER": (("timeouts", "reviewer"), int),
-    "HARNESS_TIMEOUT_JUDGE": (("timeouts", "judge"), int),
-    "HARNESS_TIMEOUT_COMMUNICATOR": (("timeouts", "communicator"), int),
-    "HARNESS_HEARTBEAT_INTERVAL_SECONDS": (("heartbeat", "interval_seconds"), int),
-    "HARNESS_UI_HOST": (("visualization", "host"), str),
-    "HARNESS_UI_PORT": (("visualization", "port"), int),
-    "HARNESS_CLAUDE_MAX_TOKENS_CLASSIFIER": (("claude", "max_output_tokens", "classifier"), int),
-    "HARNESS_CLAUDE_MAX_TOKENS_MISC": (("claude", "max_output_tokens", "misc"), int),
-    "HARNESS_CLAUDE_MAX_TOKENS_PLANNER": (("claude", "max_output_tokens", "planner"), int),
-    "HARNESS_CLAUDE_MAX_TOKENS_EXECUTOR": (("claude", "max_output_tokens", "executor"), int),
-    "HARNESS_CLAUDE_MAX_TOKENS_TESTER": (("claude", "max_output_tokens", "tester"), int),
-    "HARNESS_CLAUDE_MAX_TOKENS_REVIEWER": (("claude", "max_output_tokens", "reviewer"), int),
-    "HARNESS_CLAUDE_MAX_TOKENS_JUDGE": (("claude", "max_output_tokens", "judge"), int),
-    "HARNESS_CLAUDE_MAX_TOKENS_COMMUNICATOR": (("claude", "max_output_tokens", "communicator"), int),
-    "HARNESS_CLAUDE_CONTEXT_WINDOW_TOKENS": (("claude", "context_window_tokens"), int),
-    "HARNESS_CLAUDE_CONTEXT_WINDOW_BUFFER_TOKENS": (("claude", "context_window_buffer_tokens"), int),
-    "HARNESS_ARTIFACT_INPUT_MAX_FILES": (("artifact_input", "max_files"), int),
-    "HARNESS_ARTIFACT_INPUT_MAX_FILE_BYTES": (("artifact_input", "max_file_bytes"), int),
-    "HARNESS_ARTIFACT_INPUT_MAX_TOTAL_BYTES": (("artifact_input", "max_total_bytes"), int),
-    "HARNESS_POLICY_DIFFERENT_ROLES_CAN_RUN_CONCURRENTLY": (("policy", "different_roles_can_run_concurrently"), bool),
-    "HARNESS_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY": (("policy", "same_role_can_run_concurrently"), bool),
-    "HARNESS_POLICY_REQUIRE_JUDGE_FINAL_APPROVAL": (("policy", "require_judge_final_approval"), bool),
-    "HARNESS_POLICY_ALLOW_MEDIUM_BUG_DELIVERY": (("policy", "allow_medium_bug_delivery"), bool),
-    "HARNESS_POLICY_REQUIRE_ALL_TESTS_PASS": (("policy", "require_all_tests_pass"), bool),
+    "OO_BACKEND": (("agent_backend", "default"), str),
+    "OO_WORKSPACE_ROOT": (("system", "workspace_root"), str),
+    "OO_ARTIFACT_ROOT": (("system", "artifact_root"), str),
+    "OO_DELIVER_ROOT": (("system", "deliver_root"), str),
+    "OO_STATE_DB": (("system", "state_db"), str),
+    "OO_SOURCE_REPO": (("system", "source_repo"), str),
+    "OO_PLANNER_COUNT": (("roles", "planner", "count"), int),
+    "OO_EXECUTOR_COUNT": (("roles", "executor", "count"), int),
+    "OO_TESTER_COUNT": (("roles", "tester", "count"), int),
+    "OO_REVIEWER_COUNT": (("roles", "reviewer", "count"), int),
+    "OO_JUDGE_COUNT": (("roles", "judge", "count"), int),
+    "OO_COMMUNICATOR_COUNT": (("roles", "communicator", "count"), int),
+    "OO_MAX_PLANNING_ROUNDS": (("limits", "max_planning_rounds"), int),
+    "OO_PLANNING_PEER_REVIEW_LOOPS": (("limits", "planning_peer_review_loops"), int),
+    "OO_MAX_TEST_FIX_ROUNDS": (("limits", "max_test_fix_rounds"), str),
+    "OO_MAX_REVIEW_ROUNDS": (("limits", "max_review_rounds"), int),
+    "OO_MAX_AGENT_RETRY": (("limits", "max_agent_retry"), int),
+    "OO_TIMEOUT_PLANNER": (("timeouts", "planner"), int),
+    "OO_TIMEOUT_EXECUTOR": (("timeouts", "executor"), int),
+    "OO_TIMEOUT_TESTER": (("timeouts", "tester"), int),
+    "OO_TIMEOUT_REVIEWER": (("timeouts", "reviewer"), int),
+    "OO_TIMEOUT_JUDGE": (("timeouts", "judge"), int),
+    "OO_TIMEOUT_COMMUNICATOR": (("timeouts", "communicator"), int),
+    "OO_HEARTBEAT_INTERVAL_SECONDS": (("heartbeat", "interval_seconds"), int),
+    "OO_UI_HOST": (("visualization", "host"), str),
+    "OO_UI_PORT": (("visualization", "port"), int),
+    "OO_CLAUDE_MAX_TOKENS_CLASSIFIER": (("claude", "max_output_tokens", "classifier"), int),
+    "OO_CLAUDE_MAX_TOKENS_MISC": (("claude", "max_output_tokens", "misc"), int),
+    "OO_CLAUDE_MAX_TOKENS_PLANNER": (("claude", "max_output_tokens", "planner"), int),
+    "OO_CLAUDE_MAX_TOKENS_EXECUTOR": (("claude", "max_output_tokens", "executor"), int),
+    "OO_CLAUDE_MAX_TOKENS_TESTER": (("claude", "max_output_tokens", "tester"), int),
+    "OO_CLAUDE_MAX_TOKENS_REVIEWER": (("claude", "max_output_tokens", "reviewer"), int),
+    "OO_CLAUDE_MAX_TOKENS_JUDGE": (("claude", "max_output_tokens", "judge"), int),
+    "OO_CLAUDE_MAX_TOKENS_COMMUNICATOR": (("claude", "max_output_tokens", "communicator"), int),
+    "OO_CLAUDE_CONTEXT_WINDOW_TOKENS": (("claude", "context_window_tokens"), int),
+    "OO_CLAUDE_CONTEXT_WINDOW_BUFFER_TOKENS": (("claude", "context_window_buffer_tokens"), int),
+    "OO_ARTIFACT_INPUT_MAX_FILES": (("artifact_input", "max_files"), int),
+    "OO_ARTIFACT_INPUT_MAX_FILE_BYTES": (("artifact_input", "max_file_bytes"), int),
+    "OO_ARTIFACT_INPUT_MAX_TOTAL_BYTES": (("artifact_input", "max_total_bytes"), int),
+    "OO_POLICY_DIFFERENT_ROLES_CAN_RUN_CONCURRENTLY": (("policy", "different_roles_can_run_concurrently"), bool),
+    "OO_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY": (("policy", "same_role_can_run_concurrently"), bool),
+    "OO_POLICY_REQUIRE_JUDGE_FINAL_APPROVAL": (("policy", "require_judge_final_approval"), bool),
+    "OO_POLICY_ALLOW_MEDIUM_BUG_DELIVERY": (("policy", "allow_medium_bug_delivery"), bool),
+    "OO_POLICY_REQUIRE_ALL_TESTS_PASS": (("policy", "require_all_tests_pass"), bool),
 }
+LEGACY_ENV_ALIASES = {key.replace("OO_", "HARNESS_", 1): key for key in ENV_CONFIG_SPECS}
 
 
 COMMANDS = {
@@ -520,7 +522,7 @@ def main() -> int:
     ensure_user_env_defaults(config, user_env)
     user_env = load_user_env()
     apply_user_env_config(config, user_env)
-    backend = resolve_real_backend(args.backend or user_env.get("HARNESS_BACKEND", "auto"))
+    backend = resolve_real_backend(args.backend or user_env.get("OO_BACKEND", "auto"))
     config["agent_backend"]["default"] = backend
     for role in ("planner", "executor", "tester", "reviewer", "judge", "communicator"):
         config["agent_backend"][role] = backend
@@ -809,6 +811,14 @@ def run_once(
 
 
 def load_user_env(path: Path = USER_ENV_PATH) -> dict[str, str]:
+    if path == USER_ENV_PATH:
+        values = _read_user_env_file(LEGACY_USER_ENV_PATH)
+        values.update(_read_user_env_file(USER_ENV_PATH))
+        return canonicalize_user_env(values)
+    return canonicalize_user_env(_read_user_env_file(path))
+
+
+def _read_user_env_file(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     values: dict[str, str] = {}
@@ -819,6 +829,13 @@ def load_user_env(path: Path = USER_ENV_PATH) -> dict[str, str]:
         key, value = stripped.split("=", 1)
         values[key.strip()] = value.strip().strip('"').strip("'")
     return values
+
+
+def canonicalize_user_env(values: dict[str, str]) -> dict[str, str]:
+    canonical: dict[str, str] = {}
+    for key, value in values.items():
+        canonical[LEGACY_ENV_ALIASES.get(key, key)] = value
+    return canonical
 
 
 def save_user_env_value(key: str, value: str, path: Path = USER_ENV_PATH) -> None:
@@ -935,6 +952,7 @@ class InteractiveCLI:
         self.ui_store = ui_store or UiEventStore()
         self.ui_server = ui_server
         self.orchestrator = orchestrator or Orchestrator(self.config, progress_callback=self.progress_callback)
+        self.orchestrator.fix_round_limit_callback = self._choose_test_fix_limit_action
         self.history_rows: list[dict[str, Any]] = []
         self.active_task_id: str | None = None
         self.input_history: list[str] = []
@@ -1013,6 +1031,26 @@ class InteractiveCLI:
                 complete_while_typing=True,
             )
         return self._prompt_session
+
+    def _choose_test_fix_limit_action(self, task_id: str, current_limit: int) -> str:
+        print(f"[WARN] 已达最大修复轮次({current_limit})，任务终止。")
+        print("请选择下一步:")
+        print("  1. 额外给10轮")
+        print("  2. 退出")
+        print("  3. fix直至修复")
+        prompt = "选择 [1/2/3]: "
+        while True:
+            try:
+                choice = builtins.input(prompt).strip().lower()
+            except EOFError:
+                return "exit"
+            if choice in {"1", "+10", "10", "额外给10轮", "continue", "c"}:
+                return "extra_10"
+            if choice in {"2", "exit", "quit", "q", "退出"}:
+                return "exit"
+            if choice in {"3", "unlimited", "fix", "fix直至修复", "一直修复"}:
+                return "unlimited"
+            print("请输入 1、2 或 3。")
 
     def completion_items(self, text: str) -> list[Completion]:
         stripped = text.strip()
@@ -1172,7 +1210,7 @@ class InteractiveCLI:
         backend = resolve_real_backend(requested)
         self.backend = backend
         self._apply_backend(backend)
-        save_user_env_value("HARNESS_BACKEND", backend)
+        save_user_env_value("OO_BACKEND", backend)
         print(f"switched backend to: {backend} (saved to {USER_ENV_PATH})")
 
     def _apply_backend(self, backend: str) -> None:

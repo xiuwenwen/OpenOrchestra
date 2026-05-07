@@ -1,6 +1,6 @@
-# myHarnessSystem Architecture and Flow
+# OpenOrchestra Architecture and Flow
 
-This document provides a comprehensive overview of the `myHarnessSystem` architecture and its core workflows.
+This document provides a comprehensive overview of the `OpenOrchestra` architecture and its core workflows.
 
 ## 1. System Architecture
 

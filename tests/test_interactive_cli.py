@@ -631,34 +631,44 @@ def test_dashboard_render_does_not_draw_input_prompt(capsys) -> None:
 
 
 def test_user_env_round_trip(tmp_path: Path) -> None:
+    env_path = tmp_path / ".openorchestra.env"
+
+    main_module.save_user_env_value("OO_BACKEND", "claude", env_path)
+
+    assert main_module.load_user_env(env_path)["OO_BACKEND"] == "claude"
+
+
+def test_legacy_user_env_keys_are_mapped_to_openorchestra_keys(tmp_path: Path) -> None:
     env_path = tmp_path / ".myharness.env"
+    env_path.write_text("HARNESS_BACKEND=claude\nHARNESS_TESTER_COUNT=3\n", encoding="utf-8")
 
-    main_module.save_user_env_value("HARNESS_BACKEND", "claude", env_path)
+    values = main_module.load_user_env(env_path)
 
-    assert main_module.load_user_env(env_path)["HARNESS_BACKEND"] == "claude"
+    assert values["OO_BACKEND"] == "claude"
+    assert values["OO_TESTER_COUNT"] == "3"
 
 
 def test_ensure_user_env_defaults_adds_missing_config_values(tmp_path: Path) -> None:
-    env_path = tmp_path / ".myharness.env"
+    env_path = tmp_path / ".openorchestra.env"
     config = _config(tmp_path)
     config["roles"]["planner"]["count"] = 2
     config["roles"]["executor"]["count"] = 2
-    env_path.write_text("HARNESS_BACKEND=claude\nHARNESS_TESTER_COUNT=3\n", encoding="utf-8")
+    env_path.write_text("OO_BACKEND=claude\nOO_TESTER_COUNT=3\n", encoding="utf-8")
 
     main_module.ensure_user_env_defaults(config, main_module.load_user_env(env_path), env_path)
 
     values = main_module.load_user_env(env_path)
-    assert values["HARNESS_BACKEND"] == "claude"
-    assert values["HARNESS_PLANNER_COUNT"] == "2"
-    assert values["HARNESS_EXECUTOR_COUNT"] == "2"
-    assert values["HARNESS_TESTER_COUNT"] == "3"
-    assert values["HARNESS_REVIEWER_COUNT"] == "1"
-    assert values["HARNESS_JUDGE_COUNT"] == "1"
-    assert values["HARNESS_COMMUNICATOR_COUNT"] == "1"
-    assert values["HARNESS_WORKSPACE_ROOT"] == str(tmp_path / "workspaces")
-    assert values["HARNESS_UI_PORT"] == "8765"
-    assert values["HARNESS_CLAUDE_MAX_TOKENS_MISC"] == "64000"
-    assert values["HARNESS_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY"] == "true"
+    assert values["OO_BACKEND"] == "claude"
+    assert values["OO_PLANNER_COUNT"] == "2"
+    assert values["OO_EXECUTOR_COUNT"] == "2"
+    assert values["OO_TESTER_COUNT"] == "3"
+    assert values["OO_REVIEWER_COUNT"] == "1"
+    assert values["OO_JUDGE_COUNT"] == "1"
+    assert values["OO_COMMUNICATOR_COUNT"] == "1"
+    assert values["OO_WORKSPACE_ROOT"] == str(tmp_path / "workspaces")
+    assert values["OO_UI_PORT"] == "8765"
+    assert values["OO_CLAUDE_MAX_TOKENS_MISC"] == "64000"
+    assert values["OO_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY"] == "true"
 
 
 def test_env_role_counts_override_config(tmp_path: Path) -> None:
@@ -667,10 +677,10 @@ def test_env_role_counts_override_config(tmp_path: Path) -> None:
     main_module.apply_env_role_counts(
         config,
         {
-            "HARNESS_PLANNER_COUNT": "3",
-            "HARNESS_EXECUTOR_COUNT": "4",
-            "HARNESS_TESTER_COUNT": "2",
-            "HARNESS_REVIEWER_COUNT": "1",
+            "OO_PLANNER_COUNT": "3",
+            "OO_EXECUTOR_COUNT": "4",
+            "OO_TESTER_COUNT": "2",
+            "OO_REVIEWER_COUNT": "1",
         },
     )
 
@@ -686,19 +696,19 @@ def test_user_env_config_overrides_nested_values(tmp_path: Path) -> None:
     main_module.apply_user_env_config(
         config,
         {
-            "HARNESS_BACKEND": "claude",
-            "HARNESS_WORKSPACE_ROOT": "/tmp/harness-workspaces",
-            "HARNESS_PLANNER_COUNT": "4",
-            "HARNESS_TIMEOUT_PLANNER": "0",
-            "HARNESS_MAX_TEST_FIX_ROUNDS": "unlimited",
-            "HARNESS_UI_PORT": "9999",
-            "HARNESS_CLAUDE_MAX_TOKENS_EXECUTOR": "64000",
-            "HARNESS_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY": "false",
+            "OO_BACKEND": "claude",
+            "OO_WORKSPACE_ROOT": "/tmp/openorchestra-workspaces",
+            "OO_PLANNER_COUNT": "4",
+            "OO_TIMEOUT_PLANNER": "0",
+            "OO_MAX_TEST_FIX_ROUNDS": "unlimited",
+            "OO_UI_PORT": "9999",
+            "OO_CLAUDE_MAX_TOKENS_EXECUTOR": "64000",
+            "OO_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY": "false",
         },
     )
 
     assert config["agent_backend"]["default"] == "claude"
-    assert config["system"]["workspace_root"] == "/tmp/harness-workspaces"
+    assert config["system"]["workspace_root"] == "/tmp/openorchestra-workspaces"
     assert config["roles"]["planner"]["count"] == 4
     assert config["timeouts"]["planner"] == 0
     assert config["limits"]["max_test_fix_rounds"] == "unlimited"
@@ -715,6 +725,19 @@ def test_input_history_remembers_non_duplicate_commands(tmp_path: Path) -> None:
     cli._remember_input("/resume 1")
 
     assert cli.input_history == ["/history", "/resume 1"]
+
+
+def test_interactive_cli_fix_round_limit_choices(monkeypatch, tmp_path: Path, capsys) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    answers = iter(["bad", "1", "2", "3"])
+    monkeypatch.setattr(main_module.builtins, "input", lambda prompt: next(answers))
+
+    assert cli._choose_test_fix_limit_action("task-1", 10) == "extra_10"
+    assert cli._choose_test_fix_limit_action("task-1", 10) == "exit"
+    assert cli._choose_test_fix_limit_action("task-1", 10) == "unlimited"
+    output = capsys.readouterr().out
+    assert "[WARN] 已达最大修复轮次(10)，任务终止。" in output
+    assert "请输入 1、2 或 3。" in output
 
 
 def test_main_starts_ui_by_default_and_can_disable_it(monkeypatch, tmp_path: Path) -> None:
@@ -734,7 +757,7 @@ def test_main_starts_ui_by_default_and_can_disable_it(monkeypatch, tmp_path: Pat
             return 0
 
     monkeypatch.setattr(main_module, "load_config", fake_load_config)
-    monkeypatch.setattr(main_module, "load_user_env", lambda path=main_module.USER_ENV_PATH: {"HARNESS_BACKEND": "codex"})
+    monkeypatch.setattr(main_module, "load_user_env", lambda path=main_module.USER_ENV_PATH: {"OO_BACKEND": "codex"})
     monkeypatch.setattr(main_module, "ensure_user_env_defaults", lambda config, values, path=main_module.USER_ENV_PATH: None)
     monkeypatch.setattr(main_module, "resolve_real_backend", lambda requested: requested)
     monkeypatch.setattr(main_module, "start_ui_server", lambda *args, **kwargs: starts.append("ui") or object())

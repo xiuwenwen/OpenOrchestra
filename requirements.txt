@@ -1,5 +1,0 @@
-# Runtime dependencies
-prompt_toolkit>=3.0.52
-
-# Test dependencies
-pytest

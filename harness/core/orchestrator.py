@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import subprocess
 import sys
@@ -9,7 +10,7 @@ import time
 import re
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from harness.adapters.base import AgentAdapter
 from harness.adapters.claude_code_adapter import ClaudeCodeAdapter, REQUEST_SIZE_ERROR_PATTERNS
@@ -124,6 +125,7 @@ class NonRetryableAgentError(TaskFailedError):
 
 MATERIALIZED_SUCCESS_MARKER = ".harness_materialized_success.json"
 SINGLE_EXECUTOR_FIX_PHASES = {FIXING, REVIEW_FIXING}
+FixRoundLimitCallback = Callable[[str, int], str]
 
 
 class Orchestrator:
@@ -134,6 +136,7 @@ class Orchestrator:
         workspace_manager: WorkspaceManager | None = None,
         artifact_manager: ArtifactManager | None = None,
         progress_callback: ProgressCallback | None = None,
+        fix_round_limit_callback: FixRoundLimitCallback | None = None,
     ):
         self.config = config or load_config()
         system = self.config["system"]
@@ -149,6 +152,7 @@ class Orchestrator:
         self._active_workflow_type: str | None = None
         self._active_task_resume_status: str | None = None
         self.progress_callback = progress_callback
+        self.fix_round_limit_callback = fix_round_limit_callback
 
     def create_task(self, user_prompt: str, workflow_type: str | None = None) -> str:
         task_id = self.repository.create_task(user_prompt, CREATED, workflow_type=workflow_type)
@@ -230,22 +234,27 @@ class Orchestrator:
         start_round = self._bugfix_resume_start_round(task_id)
         round_id = start_round
         attempts = 0
-        while max_rounds is None or attempts < max_rounds:
-            self.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
-            merge_ok = self._run_patch_merge(task_id, round_id, user_prompt)
-            if not merge_ok:
+        while True:
+            while max_rounds is None or attempts < max_rounds:
+                self.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
+                merge_ok = self._run_patch_merge(task_id, round_id, user_prompt)
+                if merge_ok:
+                    self.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
+                    self._run_harness_test_gate(task_id, round_id)
+                    test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
+                    if self.judge.is_test_pass(test_decision):
+                        break
                 round_id += 1
                 attempts += 1
                 continue
-            self.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
-            self._run_harness_test_gate(task_id, round_id)
-            test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
+            else:
+                updated_max_rounds = self._resolve_test_fix_round_limit(task_id, max_rounds)
+                if updated_max_rounds == max_rounds:
+                    raise TaskFailedError("Bugfix testing did not pass within max_test_fix_rounds")
+                max_rounds = updated_max_rounds
+                continue
             if self.judge.is_test_pass(test_decision):
                 break
-            round_id += 1
-            attempts += 1
-        else:
-            raise TaskFailedError("Bugfix testing did not pass within max_test_fix_rounds")
         self._run_review_loop(task_id, user_prompt)
         self._run_final_judgement(task_id, user_prompt)
         return self._run_delivery(task_id, user_prompt)
@@ -389,27 +398,42 @@ class Orchestrator:
             self.run_role_phase("executor", EXECUTION, 0, required_outputs_for("executor", EXECUTION), user_prompt)
             merge_ok = self._run_patch_merge(task_id, 0, user_prompt)
             round_id = 0
-            end_round = max_rounds
         else:
             round_id = start_round
-            end_round = None if max_rounds is None else start_round + max(1, max_rounds) - 1
             self.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
             merge_ok = self._run_patch_merge(task_id, round_id, user_prompt)
-        while end_round is None or round_id <= end_round:
-            if merge_ok:
-                self.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
-                self._run_harness_test_gate(task_id, round_id)
-                test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
-                if self.judge.is_test_pass(test_decision):
-                    return
-            if end_round is not None and round_id >= end_round:
-                break
-            # Use next round_id for fixing effort to signal progression in dashboard
+        end_round = self._execution_test_end_round(start_round, max_rounds)
+        while True:
+            while end_round is None or round_id <= end_round:
+                if merge_ok:
+                    self.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
+                    self._run_harness_test_gate(task_id, round_id)
+                    test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
+                    if self.judge.is_test_pass(test_decision):
+                        return
+                if end_round is not None and round_id >= end_round:
+                    break
+                # Use next round_id for fixing effort to signal progression in dashboard
+                next_round = round_id + 1
+                self.run_role_phase("executor", FIXING, next_round, required_outputs_for("executor", FIXING), user_prompt)
+                merge_ok = self._run_patch_merge(task_id, next_round, user_prompt)
+                round_id = next_round
+            updated_max_rounds = self._resolve_test_fix_round_limit(task_id, max_rounds)
+            if updated_max_rounds == max_rounds:
+                raise TaskFailedError("Testing did not pass within max_test_fix_rounds")
+            max_rounds = updated_max_rounds
+            end_round = self._execution_test_end_round(start_round, max_rounds)
             next_round = round_id + 1
             self.run_role_phase("executor", FIXING, next_round, required_outputs_for("executor", FIXING), user_prompt)
             merge_ok = self._run_patch_merge(task_id, next_round, user_prompt)
             round_id = next_round
-        raise TaskFailedError("Testing did not pass within max_test_fix_rounds")
+
+    def _execution_test_end_round(self, start_round: int, max_rounds: int | None) -> int | None:
+        if max_rounds is None:
+            return None
+        if start_round <= 0:
+            return max_rounds
+        return start_round + max(1, max_rounds) - 1
 
     def _execution_resume_start_round(self, task_id: str) -> int:
         if self._active_task_id != task_id or self._active_task_resume_status != FAILED:
@@ -425,7 +449,7 @@ class Orchestrator:
         return highest_round + 1
 
     def _max_test_fix_rounds(self) -> int | None:
-        value = self.config.get("limits", {}).get("max_test_fix_rounds", 5)
+        value = self.config.get("limits", {}).get("max_test_fix_rounds", 10)
         if isinstance(value, str):
             normalized = value.strip().lower()
             if normalized in {"", "0", "-1", "none", "no_limit", "nolimit", "infinite", "infinity", "unlimited"}:
@@ -434,6 +458,32 @@ class Orchestrator:
         else:
             parsed = int(value)
         return parsed if parsed > 0 else None
+
+    def _resolve_test_fix_round_limit(self, task_id: str, current_limit: int | None) -> int | None:
+        if current_limit is None:
+            return None
+        message = f"[WARN] 已达最大修复轮次({current_limit})，任务终止。"
+        self.logger.warning(message)
+        self._emit(
+            ProgressEvent(
+                "test_fix_round_limit_reached",
+                task_id=task_id,
+                status=FAILED,
+                message=message,
+                data={
+                    "max_test_fix_rounds": current_limit,
+                    "choices": ["extra_10", "exit", "unlimited"],
+                },
+            )
+        )
+        if not self.fix_round_limit_callback:
+            return current_limit
+        choice = self.fix_round_limit_callback(task_id, current_limit).strip().lower()
+        if choice in {"extra_10", "10", "+10", "continue", "继续", "额外给10轮"}:
+            return current_limit + 10
+        if choice in {"unlimited", "fix_until_done", "fix_until_fixed", "until_fixed", "一直修复", "fix直至修复"}:
+            return None
+        return current_limit
 
     def _highest_execution_test_round_id(self, task_id: str) -> int | None:
         rounds = [
@@ -462,33 +512,40 @@ class Orchestrator:
     def _run_regression_test_fix_loop(self, task_id: str, user_prompt: str, review_round_id: int, merge_ok: bool) -> None:
         max_rounds = self._max_test_fix_rounds()
         test_round_id = 0
-        while max_rounds is None or test_round_id < max_rounds:
-            phase_round_id = (review_round_id + test_round_id) if max_rounds is None else (review_round_id * max_rounds) + test_round_id
-            if merge_ok:
+        while True:
+            while max_rounds is None or test_round_id < max_rounds:
+                phase_round_id = self._regression_phase_round_id(review_round_id, test_round_id, max_rounds)
+                if merge_ok:
+                    self.run_role_phase(
+                        "tester",
+                        REGRESSION_TESTING,
+                        phase_round_id,
+                        required_outputs_for("tester", REGRESSION_TESTING),
+                        user_prompt,
+                    )
+                    self._run_harness_test_gate(task_id, phase_round_id)
+                    test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, phase_round_id, user_prompt)
+                    if self.judge.is_test_pass(test_decision):
+                        return
+
+                # Use next phase_round_id for fixing effort
+                next_phase_round = phase_round_id + 1
                 self.run_role_phase(
-                    "tester",
-                    REGRESSION_TESTING,
-                    phase_round_id,
-                    required_outputs_for("tester", REGRESSION_TESTING),
+                    "executor",
+                    REVIEW_FIXING,
+                    next_phase_round,
+                    required_outputs_for("executor", REVIEW_FIXING),
                     user_prompt,
                 )
-                self._run_harness_test_gate(task_id, phase_round_id)
-                test_decision = self._run_judge_phase(task_id, TEST_JUDGEMENT, phase_round_id, user_prompt)
-                if self.judge.is_test_pass(test_decision):
-                    return
-            
-            # Use next phase_round_id for fixing effort
-            next_phase_round = phase_round_id + 1
-            self.run_role_phase(
-                "executor",
-                REVIEW_FIXING,
-                next_phase_round,
-                required_outputs_for("executor", REVIEW_FIXING),
-                user_prompt,
-            )
-            merge_ok = self._run_patch_merge(task_id, next_phase_round, user_prompt)
-            test_round_id += 1
-        raise TaskFailedError("Regression testing did not pass within max_test_fix_rounds")
+                merge_ok = self._run_patch_merge(task_id, next_phase_round, user_prompt)
+                test_round_id += 1
+            updated_max_rounds = self._resolve_test_fix_round_limit(task_id, max_rounds)
+            if updated_max_rounds == max_rounds:
+                raise TaskFailedError("Regression testing did not pass within max_test_fix_rounds")
+            max_rounds = updated_max_rounds
+
+    def _regression_phase_round_id(self, review_round_id: int, test_round_id: int, max_rounds: int | None) -> int:
+        return (review_round_id + test_round_id) if max_rounds is None else (review_round_id * max_rounds) + test_round_id
 
     def _run_final_judgement(self, task_id: str, user_prompt: str) -> None:
         final_decision = self._run_judge_phase(task_id, FINAL_JUDGEMENT, 0, user_prompt)
@@ -1192,6 +1249,22 @@ class Orchestrator:
                 return line.split(":", 1)[1].strip()
         return None
 
+    def _artifact_declared_round_id(self, artifact: dict[str, Any]) -> int | None:
+        path = Path(str(artifact.get("path") or ""))
+        if not path.exists() or not path.is_file():
+            return None
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        value = self._markdown_field(content, "round_id")
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
     def _run_harness_test_gate(self, task_id: str, round_id: int) -> bool:
         repo_dir = self._latest_materialized_repo(task_id)
         commands = self._harness_test_commands(repo_dir)
@@ -1208,11 +1281,11 @@ class Orchestrator:
                 stdout_path = log_dir / f"command_{index}.stdout.log"
                 stderr_path = log_dir / f"command_{index}.stderr.log"
                 try:
+                    argv = self._harness_test_command_argv(command)
                     completed = subprocess.run(
-                        command,
+                        argv,
                         cwd=repo_dir,
                         text=True,
-                        shell=True,
                         capture_output=True,
                         check=False,
                         timeout=int(self.config.get("testing", {}).get("timeout_seconds", 120)),
@@ -1249,6 +1322,15 @@ class Orchestrator:
             agent_id="test-gate",
         )
         return status == "pass"
+
+    def _harness_test_command_argv(self, command: str) -> list[str]:
+        try:
+            argv = shlex.split(command)
+        except ValueError as exc:
+            raise TaskFailedError(f"Invalid Harness test command: {command!r}: {exc}") from exc
+        if not argv:
+            raise TaskFailedError("Invalid Harness test command: command is empty")
+        return argv
 
     def _timeout_output_to_text(self, value: str | bytes | None) -> str:
         if value is None:
@@ -1857,6 +1939,8 @@ class Orchestrator:
         round_id: int | None,
     ) -> list[dict[str, Any]]:
         patch_merge_phase = role == "executor" and phase == PATCH_MERGE and round_id is not None
+        fixing_phase = role == "executor" and phase in {FIXING, REVIEW_FIXING} and round_id is not None
+        test_judgement_phase = role == "judge" and phase in {TEST_JUDGEMENT, REVIEW_JUDGEMENT} and round_id is not None
         latest_authoritative: dict[str, dict[str, Any]] = {}
         filtered: list[dict[str, Any]] = []
         candidate_patch_types = {"patch.diff", "fix_patch.diff", "patch_metadata.md"}
@@ -1889,6 +1973,7 @@ class Orchestrator:
             phase_row = phases_by_id.get(artifact.get("phase_id") or "")
             artifact_round = int(phase_row["round_id"]) if phase_row and phase_row.get("round_id") is not None else None
             artifact_phase = phase_row["phase_type"] if phase_row else None
+            effective_round = artifact_round if artifact_round is not None else self._artifact_declared_round_id(artifact)
 
             if patch_merge_phase:
                 if artifact_type in candidate_patch_types:
@@ -1899,6 +1984,80 @@ class Orchestrator:
                     if artifact_round is not None and artifact_round < round_id and artifact_phase == PATCH_MERGE:
                         latest_authoritative[artifact_type] = artifact
                     continue
+                continue
+
+            if fixing_phase:
+                target_round = max(0, round_id - 1)
+                if artifact_type == "project_context.md":
+                    filtered.append(artifact)
+                    continue
+                if effective_round != target_round:
+                    continue
+                if artifact_role == "orchestrator" and artifact_type in {
+                    "test_gate.md",
+                    "objective_gate.md",
+                    "patch_validation.md",
+                    "materialized_repo.md",
+                }:
+                    filtered.append(artifact)
+                    continue
+                if artifact_role == "executor" and artifact_type == "merged_patch_metadata.md" and artifact_phase == PATCH_MERGE:
+                    filtered.append(artifact)
+                    continue
+                if (
+                    artifact_role == "tester"
+                    and artifact_phase in {TESTING, REGRESSION_TESTING}
+                    and artifact_type in {"build_report.md", "test_report.md", "bug_report.md"}
+                ):
+                    filtered.append(artifact)
+                    continue
+                if (
+                    artifact_role == "judge"
+                    and artifact_phase in {TEST_JUDGEMENT, REVIEW_JUDGEMENT}
+                    and artifact_type in {"decision.json", "decision_summary.md"}
+                ):
+                    filtered.append(artifact)
+                    continue
+                if (
+                    phase == REVIEW_FIXING
+                    and artifact_role == "reviewer"
+                    and artifact_phase == REVIEWING
+                    and artifact_type == "review_report.md"
+                ):
+                    filtered.append(artifact)
+                continue
+
+            if test_judgement_phase:
+                if artifact_type == "project_context.md":
+                    filtered.append(artifact)
+                    continue
+                if effective_round != round_id:
+                    continue
+                if artifact_role == "orchestrator" and artifact_type in {
+                    "test_gate.md",
+                    "objective_gate.md",
+                    "patch_validation.md",
+                    "materialized_repo.md",
+                }:
+                    filtered.append(artifact)
+                    continue
+                if artifact_role == "executor" and artifact_type == "merged_patch_metadata.md" and artifact_phase == PATCH_MERGE:
+                    filtered.append(artifact)
+                    continue
+                if (
+                    artifact_role == "tester"
+                    and artifact_phase in {TESTING, REGRESSION_TESTING}
+                    and artifact_type in {"build_report.md", "test_report.md", "bug_report.md"}
+                ):
+                    filtered.append(artifact)
+                    continue
+                if (
+                    phase == REVIEW_JUDGEMENT
+                    and artifact_role == "reviewer"
+                    and artifact_phase == REVIEWING
+                    and artifact_type == "review_report.md"
+                ):
+                    filtered.append(artifact)
                 continue
 
             if role == "planner" and phase == PLANNING_REVISION and rejected_plan_review_round is not None:
@@ -2106,44 +2265,27 @@ class Orchestrator:
                     "merged_patch_metadata.md",
                 }
             if phase == FIXING:
-                return artifact_role in {"executor", "tester", "judge", "orchestrator"} and artifact_type in {
-                    "implementation_plan.md",
-                    "changed_files.md",
-                    "merged_patch.diff",
-                    "merged_patch_metadata.md",
-                    "patch_validation.md",
-                    "materialized_repo.md",
-                    "objective_gate.md",
-                    "test_gate.md",
-                    "patch_metadata.md",
-                    "self_check.md",
-                    "merge_report.md",
-                    "build_report.md",
-                    "test_report.md",
-                    "bug_report.md",
-                    "decision.json",
-                    "decision_summary.md",
-                }
+                if artifact_role == "orchestrator":
+                    return artifact_type in {"test_gate.md", "objective_gate.md", "patch_validation.md", "materialized_repo.md"}
+                if artifact_role == "executor":
+                    return artifact_type == "merged_patch_metadata.md"
+                if artifact_role == "tester":
+                    return artifact_type in {"build_report.md", "test_report.md", "bug_report.md"}
+                if artifact_role == "judge":
+                    return artifact_type in {"decision.json", "decision_summary.md"}
+                return False
             if phase == REVIEW_FIXING:
-                return artifact_role in {"executor", "tester", "reviewer", "judge", "orchestrator"} and artifact_type in {
-                    "implementation_plan.md",
-                    "changed_files.md",
-                    "merged_patch.diff",
-                    "merged_patch_metadata.md",
-                    "patch_validation.md",
-                    "materialized_repo.md",
-                    "objective_gate.md",
-                    "test_gate.md",
-                    "patch_metadata.md",
-                    "self_check.md",
-                    "merge_report.md",
-                    "build_report.md",
-                    "test_report.md",
-                    "bug_report.md",
-                    "review_report.md",
-                    "decision.json",
-                    "decision_summary.md",
-                }
+                if artifact_role == "orchestrator":
+                    return artifact_type in {"test_gate.md", "objective_gate.md", "patch_validation.md", "materialized_repo.md"}
+                if artifact_role == "executor":
+                    return artifact_type == "merged_patch_metadata.md"
+                if artifact_role == "tester":
+                    return artifact_type in {"build_report.md", "test_report.md", "bug_report.md"}
+                if artifact_role == "judge":
+                    return artifact_type in {"decision.json", "decision_summary.md"}
+                if artifact_role == "reviewer":
+                    return artifact_type == "review_report.md"
+                return False
             return False
         if role == "tester":
             # Testers should validate the materialized program in repo_dir.
@@ -2189,15 +2331,23 @@ class Orchestrator:
                     "peer_review.md",
                 }
             if phase == TEST_JUDGEMENT:
-                return (
-                    artifact_role in {"executor", "tester", "orchestrator"}
-                    and artifact_type not in {"patch.diff", "fix_patch.diff"}
-                )
+                if artifact_role == "orchestrator":
+                    return artifact_type in {"test_gate.md", "objective_gate.md", "patch_validation.md", "materialized_repo.md"}
+                if artifact_role == "executor":
+                    return artifact_type == "merged_patch_metadata.md"
+                if artifact_role == "tester":
+                    return artifact_type in {"build_report.md", "test_report.md", "bug_report.md"}
+                return False
             if phase == REVIEW_JUDGEMENT:
-                return (
-                    artifact_role in {"executor", "tester", "reviewer", "orchestrator"}
-                    and artifact_type not in {"patch.diff", "fix_patch.diff"}
-                )
+                if artifact_role == "orchestrator":
+                    return artifact_type in {"test_gate.md", "objective_gate.md", "patch_validation.md", "materialized_repo.md"}
+                if artifact_role == "executor":
+                    return artifact_type == "merged_patch_metadata.md"
+                if artifact_role == "tester":
+                    return artifact_type in {"build_report.md", "test_report.md", "bug_report.md"}
+                if artifact_role == "reviewer":
+                    return artifact_type == "review_report.md"
+                return False
             if phase == FINAL_JUDGEMENT:
                 return (
                     artifact_role in {"planner", "executor", "tester", "reviewer", "judge", "orchestrator"}
