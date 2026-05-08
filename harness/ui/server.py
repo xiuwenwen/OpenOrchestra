@@ -23,6 +23,35 @@ def api_error_payload(code: str, message: str) -> dict[str, dict[str, str]]:
     return {"error": {"code": code, "message": message}}
 
 
+def parse_json_object_body(raw: bytes, endpoint: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{endpoint} request body must be valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{endpoint} request body must be a JSON object")
+    return payload
+
+
+def validate_runtime_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    allowed_keys = {"agent_backend", "roles", "persist"}
+    unknown_keys = sorted(set(payload) - allowed_keys)
+    if unknown_keys:
+        raise ValueError(f"/api/config request contains unsupported field(s): {', '.join(unknown_keys)}")
+    if "persist" in payload and not isinstance(payload["persist"], bool):
+        raise ValueError("/api/config persist must be a boolean")
+    return payload
+
+
+def require_string_field(payload: dict[str, Any], field: str, endpoint: str, max_chars: int) -> str:
+    value = payload.get(field)
+    if not isinstance(value, str):
+        raise ValueError(f"{endpoint} {field} must be a string")
+    if len(value) > max_chars:
+        raise ValueError(f"{endpoint} {field} exceeds {max_chars} characters")
+    return value
+
+
 class UiEventStore:
     def __init__(self, max_events_per_task: int = 300):
         self.max_events_per_task = max_events_per_task
@@ -526,7 +555,7 @@ class HarnessWebServer:
                 if parsed.path == "/api/config":
                     length = int(self.headers.get("Content-Length", "0"))
                     raw = self.rfile.read(min(length, 250_000))
-                    payload = json.loads(raw.decode("utf-8") or "{}")
+                    payload = validate_runtime_config_payload(parse_json_object_body(raw, "/api/config"))
 
                     if view.has_active_task():
                         self._send_json(
@@ -546,8 +575,8 @@ class HarnessWebServer:
                     return
                 length = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(min(length, 250_000))
-                payload = json.loads(raw.decode("utf-8") or "{}")
-                text = str(payload.get("text") or "")
+                payload = parse_json_object_body(raw, "/api/translate")
+                text = require_string_field(payload, "text", "/api/translate", 200_000)
                 self._send_json(translator.translate_to_zh(text))
 
             def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:

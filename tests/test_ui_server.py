@@ -11,7 +11,16 @@ from harness.core.progress import ProgressEvent
 from harness.core.state_machine import FIXING, PATCH_MERGE, PLANNING_DRAFT, TESTING
 from harness.state.db import StateDB
 from harness.state.repository import StateRepository
-from harness.ui.server import DisplayTranslator, HarnessStateView, UiEventStore, _html, api_error_payload
+from harness.ui.server import (
+    DisplayTranslator,
+    HarnessStateView,
+    UiEventStore,
+    _html,
+    api_error_payload,
+    parse_json_object_body,
+    require_string_field,
+    validate_runtime_config_payload,
+)
 
 
 def _config(tmp_path: Path) -> dict:
@@ -140,6 +149,31 @@ def test_api_error_payload_has_stable_code_and_message() -> None:
     assert api_error_payload("bad_request", "invalid") == {
         "error": {"code": "bad_request", "message": "invalid"}
     }
+
+
+def test_ui_api_json_body_must_be_an_object() -> None:
+    assert parse_json_object_body(b'{"text":"ok"}', "/api/translate") == {"text": "ok"}
+    with pytest.raises(ValueError, match="valid JSON"):
+        parse_json_object_body(b"{", "/api/translate")
+    with pytest.raises(ValueError, match="JSON object"):
+        parse_json_object_body(b'["text"]', "/api/translate")
+
+
+def test_ui_api_translate_text_must_be_a_bounded_string() -> None:
+    assert require_string_field({"text": "hello"}, "text", "/api/translate", 10) == "hello"
+    with pytest.raises(ValueError, match="must be a string"):
+        require_string_field({"text": 1}, "text", "/api/translate", 10)
+    with pytest.raises(ValueError, match="exceeds 3 characters"):
+        require_string_field({"text": "long"}, "text", "/api/translate", 3)
+
+
+def test_ui_api_runtime_config_rejects_unknown_or_invalid_fields() -> None:
+    payload = {"agent_backend": {}, "roles": {}, "persist": False}
+    assert validate_runtime_config_payload(payload) == payload
+    with pytest.raises(ValueError, match="unsupported field"):
+        validate_runtime_config_payload({"unknown": True})
+    with pytest.raises(ValueError, match="persist must be a boolean"):
+        validate_runtime_config_payload({"persist": "yes"})
 
 
 def test_ui_runtime_config_updates_shared_config(tmp_path: Path) -> None:
