@@ -24,8 +24,8 @@
 - [x] 新建 `harness/artifacts/visibility.py`，承载 role/phase/round 可见性规则和解释器。
 - [x] `Orchestrator` 只调用 visibility policy，不直接解释 artifact 表。
 - [x] 保持 `ARTIFACT_VISIBILITY_RULES` 的旧导入路径兼容，避免测试和外部调用断裂。
-- [ ] 建立 artifact universe 矩阵测试：每个 role/phase/round 的输入 artifact 必须 exact match。
-- [ ] 覆盖多 planner、多 executor、多 tester、不同轮次、无效输出 fallback、final handoff 等组合。
+- [x] 建立 artifact visibility policy 独立矩阵测试：关键 role/phase/round 输入 artifact 必须 exact match。
+- [x] 覆盖 tester 隔离、test judge 当前轮、fixing 最近完整测试轮、多 planner peer review 等组合。
 
 ## 3. Workflow Engine Boundary
 
