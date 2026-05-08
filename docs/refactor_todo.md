@@ -59,7 +59,7 @@
 - [x] API handler 拆出到 `harness/ui/api.py`。
 - [x] `HarnessStateView` 和 `UiEventStore` 拆出到 `harness/ui/state_view.py`。
 - [x] UI 翻译逻辑拆出到 `harness/ui/translation.py`。
-- [ ] 继续拆分 HTML/JS 字符串。
+- [x] HTML/JS 模板拆出到 `harness/ui/html.py`。
 - [x] UI API 增加稳定错误码。
 - [x] UI API 增加基础请求 schema validation。
 - [x] 配置 UI 显示当前配置来源：runtime、task override、persisted default。
