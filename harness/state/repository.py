@@ -8,6 +8,29 @@ from pathlib import Path
 from typing import Any
 
 from harness.agents.result import ArtifactRef
+from harness.core.state_machine import (
+    COMPLETED,
+    CREATED,
+    DELIVERY,
+    EXECUTION,
+    FAILED,
+    FINAL_JUDGEMENT,
+    FIXING,
+    MISC_RESPONSE,
+    PATCH_MERGE,
+    PLAN_REVIEW,
+    PLAN_JUDGEMENT,
+    PLANNING_DRAFT,
+    PLANNING_PEER_REVIEW,
+    PLANNING_REVISION,
+    REGRESSION_TESTING,
+    REVIEW_FIXING,
+    REVIEW_JUDGEMENT,
+    REVIEWING,
+    RUNNING,
+    TEST_JUDGEMENT,
+    TESTING,
+)
 from harness.state.db import StateDB
 
 
@@ -16,6 +39,28 @@ def utc_now_iso() -> str:
 
 
 _UNSET = object()
+PHASE_TYPES = {
+    DELIVERY,
+    EXECUTION,
+    FINAL_JUDGEMENT,
+    FIXING,
+    MISC_RESPONSE,
+    PATCH_MERGE,
+    PLAN_REVIEW,
+    PLAN_JUDGEMENT,
+    PLANNING_DRAFT,
+    PLANNING_PEER_REVIEW,
+    PLANNING_REVISION,
+    REGRESSION_TESTING,
+    REVIEW_FIXING,
+    REVIEW_JUDGEMENT,
+    REVIEWING,
+    TEST_JUDGEMENT,
+    TESTING,
+}
+TASK_STATUSES = {CREATED, RUNNING, COMPLETED, FAILED, "PENDING", *PHASE_TYPES}
+PHASE_STATUSES = {RUNNING, COMPLETED, FAILED}
+AGENT_RUN_STATUSES = {RUNNING, COMPLETED, FAILED, "OUTPUT_INVALID", "TIMEOUT"}
 
 
 class StateRepository:
@@ -25,6 +70,7 @@ class StateRepository:
         self._lock = threading.RLock()
 
     def create_task(self, user_prompt: str, status: str = "CREATED", workflow_type: str | None = None) -> str:
+        self._require_status(status, TASK_STATUSES, "task status")
         task_id = str(uuid.uuid4())
         now = utc_now_iso()
         with self._lock, self.db.connect() as conn:
@@ -92,6 +138,8 @@ class StateRepository:
         task = self.get_task(task_id)
         if not task:
             raise KeyError(f"Task not found: {task_id}")
+        if status is not _UNSET:
+            self._require_status(str(status), TASK_STATUSES, "task status")
         with self._lock, self.db.connect() as conn:
             conn.execute(
                 """
@@ -109,6 +157,7 @@ class StateRepository:
             )
 
     def create_phase(self, task_id: str, phase_type: str, role: str, round_id: int, status: str = "RUNNING") -> str:
+        self._require_status(status, PHASE_STATUSES, "phase status")
         phase_id = str(uuid.uuid4())
         with self._lock, self.db.connect() as conn:
             conn.execute(
@@ -121,6 +170,7 @@ class StateRepository:
         return phase_id
 
     def update_phase_status(self, phase_id: str, status: str) -> None:
+        self._require_status(status, PHASE_STATUSES, "phase status")
         completed_at = utc_now_iso() if status in {"COMPLETED", "FAILED"} else None
         with self._lock, self.db.connect() as conn:
             conn.execute(
@@ -142,6 +192,7 @@ class StateRepository:
         retry_count: int,
         status: str = "RUNNING",
     ) -> str:
+        self._require_status(status, AGENT_RUN_STATUSES, "agent run status")
         run_id = str(uuid.uuid4())
         with self._lock, self.db.connect() as conn:
             conn.execute(
@@ -154,6 +205,7 @@ class StateRepository:
         return run_id
 
     def update_agent_run_status(self, run_id: str, status: str, error_message: str | None = None) -> None:
+        self._require_status(status, AGENT_RUN_STATUSES, "agent run status")
         completed_at = utc_now_iso() if status in {"COMPLETED", "FAILED", "OUTPUT_INVALID", "TIMEOUT"} else None
         with self._lock, self.db.connect() as conn:
             conn.execute(
@@ -230,3 +282,8 @@ class StateRepository:
                 (task_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def _require_status(self, status: str, allowed: set[str], label: str) -> None:
+        if status not in allowed:
+            allowed_values = ", ".join(sorted(allowed))
+            raise ValueError(f"Invalid {label}: {status!r}; expected one of: {allowed_values}")

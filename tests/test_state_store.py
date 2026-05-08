@@ -4,6 +4,8 @@ import uuid
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from harness.agents.result import ArtifactRef
 from harness.state.db import StateDB
 from harness.state.repository import StateRepository
@@ -86,3 +88,17 @@ def test_state_store_creates_query_indexes(tmp_path: Path) -> None:
 
     assert "idx_artifacts_task_type" in indexes
     assert "idx_artifacts_created_at" in indexes
+
+
+def test_repository_rejects_invalid_status_values(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    task_id = repo.create_task("state validation")
+    phase_id = repo.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+    run_id = repo.create_agent_run(task_id, phase_id, "planner", "planner-1", 0)
+
+    with pytest.raises(ValueError, match="Invalid task status"):
+        repo.update_task(task_id, status="DONE")
+    with pytest.raises(ValueError, match="Invalid phase status"):
+        repo.update_phase_status(phase_id, "OUTPUT_INVALID")
+    with pytest.raises(ValueError, match="Invalid agent run status"):
+        repo.update_agent_run_status(run_id, "SKIPPED")
