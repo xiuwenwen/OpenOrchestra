@@ -4,9 +4,6 @@ from pathlib import Path
 import re
 
 from harness.agents.context import AgentRunContext
-from harness.artifacts.delivery_codes import delivery_return_code_contract_lines, markdown_business_code_contract_lines
-
-
 PLANNER_SPECIALIZATIONS: dict[int, list[tuple[str, str, list[str]]]] = {
     1: [
         (
@@ -329,10 +326,7 @@ class PromptBuilder:
                 "- Create every required output file before exiting.",
                 "- Do not write final deliverables anywhere outside the output directory.",
                 "- Do not overwrite input artifacts.",
-                "- If you cannot complete the role contract, still write every possible required file and mark delivery.md with a non-zero return code.",
-                "- Every role and every phase must create `delivery.md`.",
-                *delivery_return_code_contract_lines(),
-                *markdown_business_code_contract_lines(),
+                *self._output_contract_lines(context),
                 "",
                 "## Phase-Specific Rules",
                 *self._phase_specific_rules(context),
@@ -346,6 +340,67 @@ class PromptBuilder:
                 "- Do not claim completion unless the required output files exist in the output directory.",
             ]
         )
+
+    def _output_contract_lines(self, context: AgentRunContext) -> list[str]:
+        markdown_outputs = [
+            name
+            for name in context.required_outputs
+            if name != "delivery.md" and name.endswith(".md")
+        ]
+        markdown_list = ", ".join(f"`{name}`" for name in markdown_outputs)
+        base = [
+            "- Every role and every phase must create `delivery.md`.",
+            "- `delivery.md` is the role return envelope, not the task/business verdict.",
+            "- The first non-empty line of `delivery.md` must be exactly `return_code: 0` when the required role files are complete.",
+            "- Do not put a Markdown title, prose, front matter, list item, or code block before the first-line contract code.",
+            "- Do not copy phase verdict values into `return_code`.",
+        ]
+        if markdown_outputs:
+            verb = "must start" if len(markdown_outputs) == 1 else "must each start"
+            base.append(f"- {markdown_list} {verb} with exactly `artifact_result_code: 0` when complete.")
+            base.append("- In those Markdown files, line 1 must be `artifact_result_code: 0`; put headings such as `# Report` only after that line.")
+            base.append("- Do not use `artifact_result_code` to report a negative phase verdict.")
+        if context.role == "tester":
+            return [
+                *base,
+                "- Do not use `artifact_result_code` to report build failure, test failure, blocked tests, or blocking bugs.",
+                "- Do not copy `build_result_code`, `test_result_code`, or `bug_result_code` values into `artifact_result_code` or `return_code`.",
+                "- Put build outcome only in `build_report.md` as `build_result_code: 0`, `build_result_code: -1`, or `build_result_code: 2`.",
+                "- Put test outcome only in `test_report.md` as `test_result_code: 0`, `test_result_code: -1`, or `test_result_code: 2`.",
+                "- Put bug outcome only in `bug_report.md` as `bug_result_code: 0`, `bug_result_code: 1`, or `bug_result_code: -1`.",
+                "- If testing is blocked by a broken implementation, still write complete reports with `artifact_result_code: 0` and describe the blocker in the verdict fields.",
+                "- Harness validates `delivery.md` and report headers; any non-zero `return_code` or non-zero `artifact_result_code` prevents the run from advancing.",
+            ]
+        if context.role == "reviewer":
+            return [
+                *base,
+                "- Put review outcome only in `review_report.md` as `review_decision_code: 0`, `review_decision_code: 1`, or `review_decision_code: -1`.",
+                "- Do not copy `review_decision_code` into `artifact_result_code` or `return_code`.",
+            ]
+        if context.role == "judge":
+            return [
+                *base,
+                "- Put the phase verdict only in `decision.json.decision`.",
+                "- Put the numeric summary only in `decision_summary.md` as `decision_code: 0`, `decision_code: 1`, or `decision_code: -1` according to the phase rules below.",
+                "- Do not copy `decision_code` or `decision.json.decision` into `artifact_result_code` or `return_code`.",
+            ]
+        if context.role == "planner":
+            return [
+                *base,
+                "- For `peer_review.md`, put peer-review outcome only in `peer_review_code: 0`, `peer_review_code: 1`, or `peer_review_code: -1`.",
+                "- Do not copy `peer_review_code` into `artifact_result_code` or `return_code`.",
+            ]
+        if context.role == "communicator":
+            return [
+                *base,
+                "- Put final delivery outcome only in `final_delivery.md` as `final_delivery_code: 0`, `final_delivery_code: 1`, `final_delivery_code: 2`, or `final_delivery_code: -1`.",
+                "- Do not copy `final_delivery_code` into `artifact_result_code` or `return_code`.",
+            ]
+        return [
+            *base,
+            "- For executor Markdown notes and metadata, use `artifact_result_code: 0` only to mean the file is complete.",
+            "- Do not use `artifact_result_code` or `return_code` to report implementation quality, patch validity, review verdicts, or test verdicts.",
+        ]
 
     def _phase_specific_rules(self, context: AgentRunContext) -> list[str]:
         if context.role == "judge":
@@ -401,7 +456,7 @@ class PromptBuilder:
                 "- Produce exactly one authoritative `merged_patch.diff` that represents the implementation candidate downstream roles must test, review, judge, and deliver.",
                 "- Produce `merged_patch_metadata.md` next to `merged_patch.diff`; it must declare `patch_artifact: merged_patch.diff`, selected candidate metadata, baseline compatibility decision, current `apply_target`, and `patch_scope: merged_authoritative`.",
                 "- Do not concatenate blindly. Resolve overlaps, choose compatible changes, and explain any omitted or adjusted candidate patch in `merge_report.md`.",
-                "- `merged_patch.diff` must be a valid unified diff. If the candidate patches cannot be merged into a coherent diff, still write the best safe subset when possible and set the first line of `delivery.md` to a non-zero `return_code`.",
+                "- `merged_patch.diff` must be a valid unified diff. If the candidate patches cannot be merged into a coherent diff, still write the best safe subset when possible and describe unresolved merge risk in `merge_report.md`.",
                 "- Generate `merged_patch.diff` into the output directory via shell redirection or file operations; do not paste a large merged diff as a Write-tool payload.",
                 "- Do not print full candidate patches or the full merged patch to stdout. Use `wc -c`, diff stats, and short excerpts only when verifying.",
                 "- `merge_report.md` must state selected candidate artifacts, rejected candidate artifacts, metadata compatibility checks, conflict handling, known risks, and whether the merged patch is ready for testing.",

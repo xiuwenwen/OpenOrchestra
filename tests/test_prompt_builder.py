@@ -71,6 +71,30 @@ def test_prompt_builder_marks_merged_patch_as_authoritative(tmp_path: Path) -> N
     assert "Do not treat executor planning notes, self-checks, or change summaries as test evidence" in prompt
 
 
+def test_prompt_builder_hides_generic_error_code_tables_from_tester(tmp_path: Path) -> None:
+    context = make_context(tmp_path, role="tester", agent_id="tester-1", role_count=1)
+    context = AgentRunContext(
+        **{
+            **context.__dict__,
+            "required_outputs": required_outputs_for("tester", "TESTING"),
+        }
+    )
+
+    prompt = PromptBuilder().build(context)
+
+    assert "Return code meanings:" not in prompt
+    assert "Markdown artifact result code meanings:" not in prompt
+    assert "must each start with exactly `artifact_result_code: 0`" in prompt
+    assert "line 1 must be `artifact_result_code: 0`" in prompt
+    assert "put headings such as `# Report` only after that line" in prompt
+    assert "Do not copy `build_result_code`, `test_result_code`, or `bug_result_code` values" in prompt
+    assert "build_result_code: -1" in prompt
+    assert "test_result_code: 2" in prompt
+    assert "bug_result_code: -1" in prompt
+    assert "`artifact_result_code: -1`" not in prompt
+    assert "`artifact_result_code: 2`" not in prompt
+
+
 def test_prompt_builder_has_model_driven_patch_merge_contract(tmp_path: Path) -> None:
     context = AgentRunContext(
         task_id="task-1",
@@ -203,7 +227,7 @@ def test_prompt_builder_planner_revision_prioritizes_plan_review_feedback(tmp_pa
     assert "do not re-litigate old planner proposals" in prompt
 
 
-def test_prompt_builder_defines_delivery_return_code_as_role_return_value(tmp_path: Path) -> None:
+def test_prompt_builder_hides_generic_error_code_tables_from_judge(tmp_path: Path) -> None:
     context = make_context(tmp_path, role="judge", agent_id="judge-1", role_count=1)
     context = AgentRunContext(
         **{
@@ -216,14 +240,12 @@ def test_prompt_builder_defines_delivery_return_code_as_role_return_value(tmp_pa
     prompt = PromptBuilder().build(context)
 
     assert "`delivery.md` is the role return envelope, not the task/business verdict." in prompt
-    assert "The first non-empty line of `delivery.md` must be exactly `return_code: <integer>`." in prompt
-    assert "Return code meanings:" in prompt
-    for code in ("`0`", "`1`", "`2`", "`3`", "`-1`", "`-2`", "`-3`"):
-        assert code in prompt
-    assert "Use `return_code: 0` only when this role successfully returned all required output files" in prompt
-    assert "Every required Markdown deliverable except `delivery.md` must use `artifact_result_code: <integer>`" in prompt
-    assert "Any business verdict in a Markdown deliverable must use a numeric `*_code` field" in prompt
-    assert "Business outcomes must use separate machine fields" in prompt
+    assert "The first non-empty line of `delivery.md` must be exactly `return_code: 0`" in prompt
+    assert "Return code meanings:" not in prompt
+    assert "Markdown artifact result code meanings:" not in prompt
+    assert "`decision_summary.md` must start with exactly `artifact_result_code: 0`" in prompt
+    assert "Put the phase verdict only in `decision.json.decision`" in prompt
+    assert "Do not copy `decision_code` or `decision.json.decision` into `artifact_result_code` or `return_code`" in prompt
     assert "If you choose `decision: fail` because tests failed, write `return_code: 0` in `delivery.md`" in prompt
 
 

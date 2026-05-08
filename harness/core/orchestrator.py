@@ -19,7 +19,6 @@ from harness.adapters.headless_cli_adapter import HeadlessCLIAdapter
 from harness.adapters.mock_adapter import MockAgentAdapter
 from harness.agents.context import AgentRunContext
 from harness.agents.result import AgentRunResult, ArtifactRef
-from harness.artifacts.delivery_codes import delivery_return_code_meanings_text
 from harness.artifacts.hashing import sha256_file
 from harness.artifacts.manager import ArtifactManager
 from harness.artifacts.schemas import required_outputs_for
@@ -73,9 +72,8 @@ ROLE_INSTRUCTIONS = {
         "Create planning artifacts only. Analyze the request, existing artifacts, assumptions, risks, "
         "compatibility constraints, and an actionable task breakdown. Do not modify source files. "
         "delivery.md is a role return envelope. Its first non-empty line must be exactly `return_code: 0` "
-        "when you produced the required planning files, even if you identify high risks. Use a non-zero "
-        "numeric return code only when the role output contract is incomplete. "
-        f"Return code meanings: {delivery_return_code_meanings_text()}."
+        "when you produced the required planning files, even if you identify high risks. "
+        "Complete planning Markdown artifacts must start with `artifact_result_code: 0`."
     ),
     "executor": (
         "Create the artifacts required by the current executor phase. For implementation and fix phases, "
@@ -83,38 +81,36 @@ ROLE_INSTRUCTIONS = {
         "answer the request without modifying project files. Do not decide workflow progression or communicate "
         "with the user outside required artifacts. delivery.md is a role return envelope. Its first non-empty "
         "line must be exactly `return_code: 0` when you produced the required files, regardless of the "
-        "implementation complexity. Use a non-zero numeric return code only when the role output contract "
-        "is incomplete. "
-        f"Return code meanings: {delivery_return_code_meanings_text()}."
+        "implementation complexity. Complete executor Markdown artifacts must start with `artifact_result_code: 0`."
     ),
     "tester": (
         "Evaluate executor artifacts and available repository state. Produce build, test, and bug reports "
         "with an explicit pass/fail assessment and reproducible evidence. "
         "IMPORTANT: delivery.md is a role return envelope, not the test verdict. Its first non-empty line must "
         "be exactly `return_code: 0` as long as you completed the evaluation and produced the required reports, "
-        "even if the test verdict is `test_result_code: -1` or you find critical bugs. Use a non-zero numeric "
-        "return code only when you cannot complete the testing role output contract. "
-        f"Return code meanings: {delivery_return_code_meanings_text()}."
+        "even if the test verdict is `test_result_code: -1` or you find critical bugs. "
+        "`artifact_result_code` must be `0` for complete tester reports; put build/test/bug outcomes only in "
+        "`build_result_code`, `test_result_code`, and `bug_result_code`."
     ),
     "reviewer": (
         "Review executor and tester artifacts for correctness, scope control, regressions, maintainability, "
         "and missing validation. Produce review findings only. delivery.md is a role return envelope. Its first "
         "non-empty line must be exactly `return_code: 0` if you completed the review, regardless of whether "
         "the review verdict is `review_decision_code: 0` or `review_decision_code: 1`. "
-        f"Return code meanings: {delivery_return_code_meanings_text()}."
+        "`review_report.md` must start with `artifact_result_code: 0` when complete."
     ),
     "judge": (
         "Make the phase decision from collected artifacts only. Produce a strict machine-readable decision "
         "and a concise rationale. Do not create implementation changes. delivery.md is a role return envelope, "
         "not the phase verdict. Its first non-empty line must be exactly `return_code: 0` if you rendered a "
         "clear decision, even when `decision.json` contains `decision: fail` or `decision: changes_required`. "
-        f"Return code meanings: {delivery_return_code_meanings_text()}."
+        "`decision_summary.md` must start with `artifact_result_code: 0` when complete."
     ),
     "communicator": (
         "Create the final delivery artifact only. Summarize outcome, status, produced artifacts, residual "
         "risks, and next steps using the accepted artifact set. delivery.md is a role return envelope. Its first "
         "non-empty line must be exactly `return_code: 0` if the final delivery documentation is complete. "
-        f"Return code meanings: {delivery_return_code_meanings_text()}."
+        "`final_delivery.md` and `usage_guide.md` must start with `artifact_result_code: 0` when complete."
     ),
 }
 

@@ -565,6 +565,19 @@ def test_backend_completion_includes_gemini_and_qwen(tmp_path: Path) -> None:
 
     assert [item.text for item in cli.completion_items("/use g")] == ["gemini"]
     assert [item.text for item in cli.completion_items("/use q")] == ["qwen"]
+    assert [item.text for item in cli.completion_items("/go")] == ["/goal"]
+
+
+def test_goal_command_sets_unlimited_fix_rounds(monkeypatch, tmp_path: Path, capsys) -> None:
+    saved: dict[str, str] = {}
+    monkeypatch.setattr(main_module, "save_user_env_value", lambda key, value: saved.update({key: value}))
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+
+    cli._handle_command("/goal")
+
+    assert cli.config["limits"]["max_test_fix_rounds"] == "unlimited"
+    assert saved == {"OO_MAX_TEST_FIX_ROUNDS": "unlimited"}
+    assert "fix until fixed" in capsys.readouterr().out
 
 
 def test_resume_completion_items_include_task_information(tmp_path: Path) -> None:
@@ -729,7 +742,7 @@ def test_input_history_remembers_non_duplicate_commands(tmp_path: Path) -> None:
 
 def test_interactive_cli_fix_round_limit_choices(monkeypatch, tmp_path: Path, capsys) -> None:
     cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
-    answers = iter(["bad", "1", "2", "3"])
+    answers = iter(["bad", "额外给10轮", "1", "退出", "2", "fix直至修复", "3"])
     monkeypatch.setattr(main_module.builtins, "input", lambda prompt: next(answers))
 
     assert cli._choose_test_fix_limit_action("task-1", 10) == "extra_10"
@@ -737,7 +750,7 @@ def test_interactive_cli_fix_round_limit_choices(monkeypatch, tmp_path: Path, ca
     assert cli._choose_test_fix_limit_action("task-1", 10) == "unlimited"
     output = capsys.readouterr().out
     assert "[WARN] 已达最大修复轮次(10)，任务终止。" in output
-    assert "请输入 1、2 或 3。" in output
+    assert output.count("请输入 1、2 或 3。") == 4
 
 
 def test_main_starts_ui_by_default_and_can_disable_it(monkeypatch, tmp_path: Path) -> None:

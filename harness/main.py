@@ -153,6 +153,7 @@ COMMANDS = {
     "/resume": "Use a historical task as context",
     "/continue": "Continue/retry the active historical task",
     "/clean": "Remove intermediate files for the selected task",
+    "/goal": "Run test/fix loops until fixed without asking at the round limit",
     "/current": "Show selected historical context",
     "/clear": "Clear selected historical context",
     "/ui": "Start or show the local Web execution viewer",
@@ -184,6 +185,7 @@ BARE_COMMAND_ALIASES = {
     "retry": "/continue",
     "run": "/continue",
     "clean": "/clean",
+    "goal": "/goal",
     "current": "/current",
     "ui": "/ui",
 }
@@ -1041,14 +1043,14 @@ class InteractiveCLI:
         prompt = "选择 [1/2/3]: "
         while True:
             try:
-                choice = builtins.input(prompt).strip().lower()
+                choice = builtins.input(prompt).strip()
             except EOFError:
                 return "exit"
-            if choice in {"1", "+10", "10", "额外给10轮", "continue", "c"}:
+            if choice == "1":
                 return "extra_10"
-            if choice in {"2", "exit", "quit", "q", "退出"}:
+            if choice == "2":
                 return "exit"
-            if choice in {"3", "unlimited", "fix", "fix直至修复", "一直修复"}:
+            if choice == "3":
                 return "unlimited"
             print("请输入 1、2 或 3。")
 
@@ -1144,6 +1146,8 @@ class InteractiveCLI:
             self._continue_task()
         elif command == "/clean":
             self._clean_task()
+        elif command == "/goal":
+            self._set_fix_until_goal()
         elif command in {"/resume", "/select", "/task"}:
             if not args:
                 print("usage: /resume <history-number-or-task-id>")
@@ -1195,6 +1199,7 @@ class InteractiveCLI:
                     "  /continue                Continue/retry the active historical task; bare 'continue' also works",
                     "  /resume <n|task_id>      Use a historical task as context for following prompts",
                     "  /clean                   Remove selected task workspaces/artifacts; keep final success_path",
+                    "  /goal                    Set test/fix loops to fix until done without asking",
                     "  /current                 Show selected historical context",
                     "  /clear                   Clear selected historical context",
                     "  /ui                      Start/show the local Web execution viewer",
@@ -1212,6 +1217,11 @@ class InteractiveCLI:
         self._apply_backend(backend)
         save_user_env_value("OO_BACKEND", backend)
         print(f"switched backend to: {backend} (saved to {USER_ENV_PATH})")
+
+    def _set_fix_until_goal(self) -> None:
+        self.config.setdefault("limits", {})["max_test_fix_rounds"] = "unlimited"
+        save_user_env_value("OO_MAX_TEST_FIX_ROUNDS", "unlimited")
+        print(f"test/fix goal mode: fix until fixed (saved to {USER_ENV_PATH})")
 
     def _apply_backend(self, backend: str) -> None:
         self.config["agent_backend"]["default"] = backend
