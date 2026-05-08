@@ -15,9 +15,13 @@ def test_artifact_validator_reports_missing_outputs(tmp_path: Path) -> None:
     (tmp_path / "plan.md").write_text(md_ok(), encoding="utf-8")
 
     ok, errors = validator.validate_required_outputs(tmp_path, ["plan.md", "risk.md"])
+    result = validator.validate_required_outputs_result(tmp_path, ["plan.md", "risk.md"])
 
     assert not ok
     assert errors == ["Missing required output: risk.md"]
+    assert result.ok is False
+    assert result.issues[0].artifact == "risk.md"
+    assert result.issues[0].code == "missing_required_output"
 
 
 def test_artifact_validator_accepts_complete_outputs(tmp_path: Path) -> None:

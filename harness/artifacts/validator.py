@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import re
 
@@ -9,24 +10,63 @@ RETURN_CODE_FIELD_PATTERN = re.compile(r"^return_code\s*:\s*(-?\d+)\s*$")
 ARTIFACT_RESULT_CODE_FIELD_PATTERN = re.compile(r"^artifact_result_code\s*:\s*(-?\d+)\s*$")
 
 
+@dataclass(frozen=True)
+class ValidationIssue:
+    artifact: str
+    code: str
+    message: str
+    severity: str = "error"
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    issues: tuple[ValidationIssue, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not any(issue.severity == "error" for issue in self.issues)
+
+    @property
+    def errors(self) -> list[str]:
+        return [issue.message for issue in self.issues if issue.severity == "error"]
+
+
 class ArtifactValidator:
     def validate_required_outputs(self, output_dir: Path, required_outputs: list[str]) -> tuple[bool, list[str]]:
-        errors: list[str] = []
+        result = self.validate_required_outputs_result(output_dir, required_outputs)
+        return result.ok, result.errors
+
+    def validate_required_outputs_result(self, output_dir: Path, required_outputs: list[str]) -> ValidationResult:
+        issues: list[ValidationIssue] = []
         for relative_name in required_outputs:
             path = output_dir / relative_name
             if not path.exists():
-                errors.append(f"Missing required output: {relative_name}")
+                issues.append(
+                    ValidationIssue(relative_name, "missing_required_output", f"Missing required output: {relative_name}")
+                )
             elif not path.is_file():
-                errors.append(f"Required output is not a file: {relative_name}")
+                issues.append(
+                    ValidationIssue(relative_name, "required_output_not_file", f"Required output is not a file: {relative_name}")
+                )
             elif path.stat().st_size == 0:
-                errors.append(f"Required output is empty: {relative_name}")
+                issues.append(
+                    ValidationIssue(relative_name, "required_output_empty", f"Required output is empty: {relative_name}")
+                )
         delivery_path = output_dir / "delivery.md"
         if delivery_path.exists() and delivery_path.is_file():
             return_code = self.parse_delivery_return_code(delivery_path)
             if return_code is None:
-                errors.append("delivery.md must contain `return_code: <int>`")
+                issues.append(
+                    ValidationIssue("delivery.md", "missing_return_code", "delivery.md must contain `return_code: <int>`")
+                )
             elif return_code != DELIVERY_SUCCESS_RETURN_CODE:
-                errors.append(f"delivery.md reports non-zero return_code: {return_code}")
+                issues.append(
+                    ValidationIssue(
+                        "delivery.md",
+                        "nonzero_return_code",
+                        f"delivery.md reports non-zero return_code: {return_code}",
+                    )
+                )
         for relative_name in required_outputs:
             if relative_name == "delivery.md" or not relative_name.endswith(".md"):
                 continue
@@ -35,12 +75,22 @@ class ArtifactValidator:
                 continue
             artifact_code = self.parse_markdown_artifact_result_code(path)
             if artifact_code is None:
-                errors.append(
-                    f"{relative_name} must contain `artifact_result_code: <int>`"
+                issues.append(
+                    ValidationIssue(
+                        relative_name,
+                        "missing_artifact_result_code",
+                        f"{relative_name} must contain `artifact_result_code: <int>`",
+                    )
                 )
             elif artifact_code != DELIVERY_SUCCESS_RETURN_CODE:
-                errors.append(f"{relative_name} reports non-zero artifact_result_code: {artifact_code}")
-        return not errors, errors
+                issues.append(
+                    ValidationIssue(
+                        relative_name,
+                        "nonzero_artifact_result_code",
+                        f"{relative_name} reports non-zero artifact_result_code: {artifact_code}",
+                    )
+                )
+        return ValidationResult(tuple(issues))
 
     def parse_delivery_return_code(self, delivery_path: Path) -> int | None:
         if not delivery_path.exists() or not delivery_path.is_file():

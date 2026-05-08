@@ -63,8 +63,8 @@
 ## 7. Artifact Contract Boundary
 
 - [ ] 把 required outputs、合同码、visibility 可见性声明归并到 schema 层。
-- [ ] Validator 返回结构化诊断对象，而不是字符串数组。
-- [ ] markdown 合同码继续支持“文件内搜索”，但结构化输出优先。
+- [x] Validator 返回结构化诊断对象，同时保留旧字符串数组接口兼容。
+- [x] markdown 合同码继续支持“文件内搜索”，但结构化输出优先。
 - [ ] 前端区分 OUTPUT_INVALID、业务测试失败、patch gate 失败、agent 执行失败。
 
 ## 8. Delivery And Cleanup
