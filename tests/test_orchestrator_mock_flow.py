@@ -825,6 +825,20 @@ def test_concurrent_phase_has_no_wait_timeout_when_role_timeout_is_zero(monkeypa
     assert captured_timeouts == [None]
 
 
+def test_orchestrator_uses_task_configuration_for_backend_counts_and_timeout(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("task-scoped config")
+    orchestrator.repository.update_task_configuration(
+        task_id,
+        '{"agent_backend":{"planner":"claude"},"roles":{"planner":{"count":1}},"timeouts":{"planner":9}}',
+    )
+
+    assert orchestrator._backend_for(task_id, "planner") == "claude"
+    assert orchestrator._effective_agent_count(task_id, "planner", PLANNING_DRAFT) == 1
+    assert orchestrator.config_service.timeout_for(task_id, "planner") == 9
+
+
 def test_failed_phase_with_completed_agent_runs_is_recovered_on_resume(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("recover old concurrent planner phase")

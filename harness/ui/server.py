@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from harness.config.runtime import RuntimeConfigService
 from harness.core.misc_chat import MiscChatRunner
 from harness.core.progress import ProgressEvent
 from harness.state.repository import StateRepository
@@ -77,30 +78,20 @@ class HarnessStateView:
         self.config = config
         self.repository = repository
         self.event_store = event_store
+        self.config_service = RuntimeConfigService(config, repository)
 
     def tasks(self, limit: int = 20) -> list[dict[str, Any]]:
         return self.repository.list_tasks(limit)
 
-    def get_task_config(self, task_id: str) -> dict[str, Any]:
-        task = self.repository.get_task(task_id)
-        task_config = {}
-        if task and task.get("configuration"):
-            try:
-                task_config = json.loads(task["configuration"])
-            except Exception:
-                pass
+    def get_runtime_config(self) -> dict[str, Any]:
+        return self.config_service.role_runtime_config()
 
-        merged_config = dict(self.config)
-        if "agent_backend" in task_config:
-            merged_config["agent_backend"] = dict(merged_config.get("agent_backend", {}))
-            merged_config["agent_backend"].update(task_config["agent_backend"])
-        if "roles" in task_config:
-            merged_config["roles"] = dict(merged_config.get("roles", {}))
-            for role, role_cfg in task_config["roles"].items():
-                if role not in merged_config["roles"]:
-                    merged_config["roles"][role] = {}
-                merged_config["roles"][role].update(role_cfg)
-        return {"agent_backend": merged_config.get("agent_backend", {}), "roles": merged_config.get("roles", {})}
+    def update_runtime_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.config_service.apply_role_runtime_config(payload)
+
+    def has_active_task(self) -> bool:
+        inactive = {"CREATED", "PENDING", "COMPLETED", "FAILED"}
+        return any(str(task.get("status") or "") not in inactive for task in self.repository.list_tasks(limit=100))
 
     def snapshot(self, task_id: str | None = None) -> dict[str, Any]:
         if not task_id:
@@ -492,7 +483,7 @@ class HarnessWebServer:
 
             def do_POST(self) -> None:
                 try:
-                    self._handle_post(translator, repository)
+                    self._handle_post(translator, repository, state_view)
                 except Exception as exc:
                     self._send_json({"error": str(exc)}, status=500)
 
@@ -513,11 +504,10 @@ class HarnessWebServer:
                 if parsed.path == "/api/tasks":
                     self._send_json({"tasks": view.tasks(50), "latest_task_id": view.event_store.latest_task_id})
                     return
+                if parsed.path == "/api/config":
+                    self._send_json(view.get_runtime_config())
+                    return
                 if parsed.path.startswith("/api/tasks/"):
-                    if parsed.path.endswith("/config"):
-                        task_id = parsed.path.split("/")[3]
-                        self._send_json(view.get_task_config(task_id))
-                        return
                     task_id = parsed.path.removeprefix("/api/tasks/").strip("/")
                     self._send_json(view.snapshot(task_id or None))
                     return
@@ -529,25 +519,19 @@ class HarnessWebServer:
                     return
                 self._send_json({"error": "not found"}, status=404)
 
-            def _handle_post(self, translator: DisplayTranslator, repository: StateRepository) -> None:
+            def _handle_post(self, translator: DisplayTranslator, repository: StateRepository, view: HarnessStateView) -> None:
                 parsed = urlparse(self.path)
 
-                if parsed.path.startswith("/api/tasks/") and parsed.path.endswith("/config"):
-                    task_id = parsed.path.split("/")[3]
+                if parsed.path == "/api/config":
                     length = int(self.headers.get("Content-Length", "0"))
                     raw = self.rfile.read(min(length, 250_000))
                     payload = json.loads(raw.decode("utf-8") or "{}")
 
-                    task = repository.get_task(task_id)
-                    if not task:
-                        self._send_json({"error": "task not found"}, status=404)
-                        return
-                    if task["status"] not in ("CREATED", "PENDING"):
-                        self._send_json({"error": "Task already started, configuration locked"}, status=400)
+                    if view.has_active_task():
+                        self._send_json({"error": "系统中有正在运行的任务，运行配置已锁定 / Runtime config is locked while tasks are active"}, status=400)
                         return
 
-                    repository.update_task_configuration(task_id, json.dumps(payload))
-                    self._send_json({"status": "ok"})
+                    self._send_json({"status": "ok", "config": view.update_runtime_config(payload)})
                     return
 
                 if parsed.path != "/api/translate":
@@ -814,6 +798,7 @@ def _html() -> str:
       <span class="header-task" id="headerTask"></span>
     </div>
     <div class="header-right">
+      <button class="btn" style="padding:4px 10px;font-size:12px;margin-right:15px;background:transparent;border-color:var(--border-muted)" onclick="openConfig()"><span data-i18n="settings">设置</span></button>
       <div class="seg"><button id="langZh" class="on" onclick="setLang('zh')">中</button><button id="langEn" onclick="setLang('en')">EN</button></div>
       <span id="heartbeat"></span>
     </div>
@@ -969,7 +954,7 @@ function renderSnapshot(data){
     <div class="sum-sep"></div>
     <div class="sum-item"><span class="sum-label">${uiLanguage==="en"?"Active":"活跃"}</span><span class="sum-val">${running.length}</span></div>
     <div class="sum-sep"></div>
-    <button class="btn" style="margin-right:10px;padding:3px 8px;font-size:11px;flex-shrink:0" onclick="openConfig('${task.task_id}', '${task.status}')">⚙️ ${uiLanguage==="en"?"Config":"配置"}</button>
+    <button class="btn" style="margin-right:10px;padding:3px 8px;font-size:11px;flex-shrink:0" onclick="openConfig()">${uiLanguage==="en"?"Config":"配置"}</button>
     <div class="sum-prompt">${esc(task.user_prompt)}</div>`;
   renderPipeline(data.workflow_timeline||data.phases||[],task.current_phase,data.workflow_loop_edges||[]);
   renderRoleBar(data.roles||{},runs);
@@ -1211,30 +1196,27 @@ function glossary(t){
 }
 function hasCN(t){const c=(t.slice(0,2000).match(/[\u4e00-\u9fff]/g)||[]).length;const l=(t.slice(0,2000).match(/[A-Za-z]/g)||[]).length;return c>0&&c>=l*.25}
 
-async function openConfig(taskId, status){
-  const locked = (status !== "CREATED" && status !== "PENDING");
+async function openConfig(){
   const d = document.getElementById("configModal");
   d.classList.add("open");
   const b = document.getElementById("configBody");
   b.innerHTML = `<div style="text-align:center;padding:20px;color:var(--muted)">加载中 / Loading...</div>`;
   const stat = document.getElementById("configStatus");
-  stat.textContent = locked ? "任务已开始，配置锁定 / Task started, config locked" : "";
-  stat.style.color = "var(--warn)";
-  document.getElementById("configSaveBtn").disabled = locked;
+  stat.textContent = "";
+  document.getElementById("configSaveBtn").disabled = false;
 
   try {
-    const cfg = await getJson("/api/tasks/" + taskId + "/config");
+    const cfg = await getJson("/api/config");
     let html = "";
-    const models = ["codex","claude","gemini","qwen"];
-    const dr = locked ? "disabled" : "";
+    const models = cfg.backend_options || ["codex","claude","gemini","qwen"];
     roleOrder.forEach(r => {
       if(r==="orchestrator") return;
       const count = (cfg.roles && cfg.roles[r] && cfg.roles[r].count) || 1;
       const be = (cfg.agent_backend && cfg.agent_backend[r]) || "codex";
       html += `<div class="cfg-row">
         <div class="cfg-label">${roleLabel(r)}</div>
-        <input class="cfg-input" type="number" id="cfg-cnt-${r}" value="${count}" min="1" max="10" ${dr}>
-        <select class="cfg-input" id="cfg-be-${r}" ${dr}>
+        <input class="cfg-input" type="number" id="cfg-cnt-${r}" value="${count}" min="1" max="10">
+        <select class="cfg-input" id="cfg-be-${r}">
           ${models.map(m=>`<option value="${m}" ${m===be?'selected':''}>${m}</option>`).join("")}
         </select>
       </div>`;
@@ -1263,11 +1245,11 @@ async function saveConfig(){
   try{
     btn.disabled = true;
     stat.style.color="var(--text)"; stat.textContent = "保存中 / Saving...";
-    await postJson("/api/tasks/" + currentTask + "/config", payload);
-    stat.style.color="var(--good)"; stat.textContent = "已保存 / Saved";
+    await postJson("/api/config", payload);
+    stat.style.color="var(--good)"; stat.textContent = "已保存运行配置 / Runtime config saved";
     setTimeout(closeConfig, 500);
   }catch(e){
-    stat.style.color="var(--bad)"; stat.textContent = "保存失败 / Failed: " + String(e.message);
+    stat.style.color="var(--bad)"; stat.textContent = "保存失败 / Failed: " + (e.message || "Unknown error");
     btn.disabled = false;
   }
 }

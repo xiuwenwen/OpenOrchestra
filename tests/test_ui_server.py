@@ -20,7 +20,24 @@ def _config(tmp_path: Path) -> dict:
             "artifact_root": str(tmp_path / "artifacts"),
             "deliver_root": str(tmp_path / "deliver"),
             "state_db": str(tmp_path / "state" / "harness.db"),
-        }
+        },
+        "agent_backend": {
+            "default": "codex",
+            "planner": "codex",
+            "executor": "codex",
+            "tester": "codex",
+            "reviewer": "codex",
+            "judge": "codex",
+            "communicator": "codex",
+        },
+        "roles": {
+            "planner": {"count": 2},
+            "executor": {"count": 2},
+            "tester": {"count": 1},
+            "reviewer": {"count": 1},
+            "judge": {"count": 1},
+            "communicator": {"count": 1},
+        },
     }
 
 
@@ -116,6 +133,43 @@ def test_ui_store_can_select_resumed_task() -> None:
     store.select_task("task-123")
 
     assert store.latest_task_id == "task-123"
+
+
+def test_ui_runtime_config_updates_shared_config(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    repo = StateRepository(StateDB(config["system"]["state_db"]))
+    view = HarnessStateView(config, repo, UiEventStore())
+
+    updated = view.update_runtime_config(
+        {
+            "agent_backend": {"planner": "claude", "executor": "codex"},
+            "roles": {"planner": {"count": 3}, "executor": {"count": 1}},
+        }
+    )
+
+    assert config["agent_backend"]["planner"] == "claude"
+    assert config["roles"]["planner"]["count"] == 3
+    assert updated["agent_backend"]["planner"] == "claude"
+    assert updated["roles"]["planner"]["count"] == 3
+
+
+def test_ui_runtime_config_rejects_unknown_backend(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    repo = StateRepository(StateDB(config["system"]["state_db"]))
+    view = HarnessStateView(config, repo, UiEventStore())
+
+    with pytest.raises(ValueError, match="Unsupported backend"):
+        view.update_runtime_config({"agent_backend": {"planner": "unknown"}, "roles": {}})
+
+
+def test_ui_runtime_config_locks_while_task_is_active(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    repo = StateRepository(StateDB(config["system"]["state_db"]))
+    view = HarnessStateView(config, repo, UiEventStore())
+    task_id = repo.create_task("running task")
+    repo.update_task(task_id, status="FIXING", current_phase="FIXING", current_role="executor")
+
+    assert view.has_active_task() is True
 
 
 def test_ui_store_tracks_incremental_events_for_live_dashboard() -> None:
