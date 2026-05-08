@@ -4,10 +4,15 @@ from pathlib import Path
 
 from harness.artifacts.visibility import ArtifactVisibilityPolicy
 from harness.core.state_machine import (
+    EXECUTION,
     FIXING,
+    PLAN_REVIEW,
+    PATCH_MERGE,
     PLANNING_DRAFT,
     PLANNING_PEER_REVIEW,
     REGRESSION_TESTING,
+    REVIEW_FIXING,
+    REVIEWING,
     TEST_JUDGEMENT,
     TESTING,
 )
@@ -140,3 +145,79 @@ def test_planner_peer_review_visibility_is_current_round_other_planners_only(tmp
     )
 
     assert _names(visible) == {"current-other-plan.md"}
+
+
+def test_executor_execution_visibility_excludes_plan_review_report(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    artifacts = [
+        _artifact(
+            tmp_path,
+            phases_by_id,
+            role="planner",
+            agent_id="planner-1",
+            artifact_type="plan.md",
+            phase_type=PLANNING_DRAFT,
+            round_id=1,
+            label="planner",
+        ),
+        _artifact(
+            tmp_path,
+            phases_by_id,
+            role="reviewer",
+            agent_id="reviewer-1",
+            artifact_type="selected_plan.md",
+            phase_type=PLAN_REVIEW,
+            round_id=1,
+            label="selected",
+        ),
+        _artifact(
+            tmp_path,
+            phases_by_id,
+            role="reviewer",
+            agent_id="reviewer-1",
+            artifact_type="review_report.md",
+            phase_type=PLAN_REVIEW,
+            round_id=1,
+            label="review",
+        ),
+    ]
+
+    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "executor", EXECUTION, 1)
+
+    assert _names(visible) == {"selected-selected_plan.md"}
+
+
+def test_executor_review_fixing_visibility_excludes_reviewer_report(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    artifacts = [
+        _artifact(
+            tmp_path,
+            phases_by_id,
+            role="reviewer",
+            agent_id="reviewer-1",
+            artifact_type="review_report.md",
+            phase_type=REVIEWING,
+            round_id=2,
+            label="review",
+        ),
+        _artifact(
+            tmp_path,
+            phases_by_id,
+            role="executor",
+            agent_id="executor-1",
+            artifact_type="merged_patch_metadata.md",
+            phase_type=PATCH_MERGE,
+            round_id=1,
+            label="metadata",
+        ),
+    ]
+
+    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(
+        artifacts,
+        phases_by_id,
+        "executor",
+        REVIEW_FIXING,
+        2,
+    )
+
+    assert _names(visible) == {"metadata-merged_patch_metadata.md"}

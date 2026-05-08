@@ -429,7 +429,7 @@ def test_planning_block_runs_peer_review_loop_then_plan_review(monkeypatch, tmp_
     staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "executor-input", "executor", "EXECUTION")
     manifest = staged[0].read_text(encoding="utf-8")
     assert "selected_plan.md" in manifest
-    assert "review_report.md" in manifest
+    assert "review_report.md" not in manifest
     assert "planner-1_plan.md" not in manifest
     assert "planner-2_plan.md" not in manifest
 
@@ -1662,7 +1662,7 @@ def test_execution_staging_uses_selected_plan_not_raw_planner_outputs(tmp_path: 
     manifest = staged[0].read_text(encoding="utf-8")
 
     assert "selected_plan.md" in manifest
-    assert "review_report.md" in manifest
+    assert "review_report.md" not in manifest
     for artifact_name in artifact_names:
         assert f"planner-1_{artifact_name}" not in manifest
 
