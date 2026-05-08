@@ -19,10 +19,9 @@ from harness.ui.api import (
 )
 from harness.ui.server import (
     DisplayTranslator,
-    HarnessStateView,
-    UiEventStore,
     _html,
 )
+from harness.ui.state_view import HarnessStateView, UiEventStore
 
 
 def _config(tmp_path: Path) -> dict:
