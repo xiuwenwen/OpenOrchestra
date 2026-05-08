@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+from harness.artifacts.schemas import output_contract_lines_for, required_outputs_for
+
+
+def test_required_outputs_always_include_delivery_envelope() -> None:
+    assert required_outputs_for("tester", "TESTING") == [
+        "build_report.md",
+        "test_report.md",
+        "bug_report.md",
+        "delivery.md",
+    ]
+
+
+def test_output_contract_lines_for_tester_keep_verdict_codes_separate() -> None:
+    lines = output_contract_lines_for("tester", "TESTING", required_outputs_for("tester", "TESTING"))
+    text = "\n".join(lines)
+
+    assert "`delivery.md` must contain `return_code: 0`" in text
+    assert "Do not copy `build_result_code`, `test_result_code`, or `bug_result_code` values" in text
+    assert "build_result_code: -1" in text
+    assert "`artifact_result_code: 0` somewhere in the file" in text
+
+
+def test_output_contract_lines_for_executor_do_not_define_test_verdicts() -> None:
+    lines = output_contract_lines_for("executor", "EXECUTION", required_outputs_for("executor", "EXECUTION"))
+    text = "\n".join(lines)
+
+    assert "For executor Markdown notes and metadata" in text
+    assert "build_result_code" not in text
+    assert "review_decision_code" not in text
