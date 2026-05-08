@@ -55,8 +55,10 @@
 
 ## 6. UI Server Boundary
 
-- [ ] 拆分 `HarnessStateView`、API handler、HTML/JS 字符串、file reader。
-- [ ] UI API 增加 schema validation 和稳定错误码。
+- [x] 文件读取安全策略拆出到 `HarnessFileReader`。
+- [ ] 继续拆分 `HarnessStateView`、API handler、HTML/JS 字符串。
+- [x] UI API 增加稳定错误码。
+- [ ] UI API 增加请求 schema validation。
 - [x] 配置 UI 显示当前配置来源：runtime、task override、persisted default。
 - [x] 配置 UI 明确保存范围：仅当前运行时、未来任务默认值、或指定任务。
 

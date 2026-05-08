@@ -10,12 +10,17 @@ from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from harness.config.runtime import RuntimeConfigService
 from harness.core.misc_chat import MiscChatRunner
 from harness.core.progress import ProgressEvent
 from harness.state.repository import StateRepository
+from harness.ui.file_reader import HarnessFileReader
+
+
+def api_error_payload(code: str, message: str) -> dict[str, dict[str, str]]:
+    return {"error": {"code": code, "message": message}}
 
 
 class UiEventStore:
@@ -85,6 +90,7 @@ class HarnessStateView:
         self.repository = repository
         self.event_store = event_store
         self.config_service = RuntimeConfigService(config, repository, config_path)
+        self.file_reader = HarnessFileReader(config)
 
     def tasks(self, limit: int = 20) -> list[dict[str, Any]]:
         return self.repository.list_tasks(limit)
@@ -186,20 +192,7 @@ class HarnessStateView:
         return edges
 
     def read_file(self, path_text: str, max_chars: int = 200_000) -> dict[str, Any]:
-        path = Path(unquote(path_text)).expanduser().resolve()
-        if not self._is_allowed_path(path):
-            raise PermissionError(f"Path is outside Harness readable roots: {path}")
-        if not path.exists() or not path.is_file():
-            raise FileNotFoundError(str(path))
-        raw = path.read_text(encoding="utf-8", errors="replace")
-        truncated = len(raw) > max_chars
-        text = raw[-max_chars:] if truncated else raw
-        return {
-            "path": str(path),
-            "size": path.stat().st_size,
-            "text": text,
-            "truncated_from_start": truncated,
-        }
+        return self.file_reader.read_file(path_text, max_chars=max_chars)
 
     def _log_dir_for_run(self, task_id: str, phase: dict[str, Any], run: dict[str, Any]) -> Path:
         workspace_root = Path(self.config["system"]["workspace_root"]).expanduser().resolve()
@@ -273,17 +266,6 @@ class HarnessStateView:
         deliver_root = Path(self.config["system"].get("deliver_root", "./deliver")).expanduser().resolve()
         matches = sorted(deliver_root.glob(f"*-{task_id[:8]}/success_path.md"))
         return matches[-1].parent if matches else None
-
-    def _is_allowed_path(self, path: Path) -> bool:
-        roots = [
-            self.config["system"].get("workspace_root", "./workspaces"),
-            self.config["system"].get("artifact_root", "./artifacts"),
-            self.config["system"].get("deliver_root", "./deliver"),
-            "logs",
-        ]
-        resolved_roots = [Path(str(root)).expanduser().resolve() for root in roots]
-        return any(_is_relative_to(path, root) for root in resolved_roots)
-
 
 class DisplayTranslator:
     def __init__(self, config: dict[str, Any]):
@@ -485,14 +467,26 @@ class HarnessWebServer:
             def do_GET(self) -> None:
                 try:
                     self._handle_get(state_view)
+                except PermissionError as exc:
+                    self._send_json(api_error_payload("forbidden_path", str(exc)), status=403)
+                except FileNotFoundError as exc:
+                    self._send_json(api_error_payload("file_not_found", str(exc)), status=404)
+                except ValueError as exc:
+                    self._send_json(api_error_payload("bad_request", str(exc)), status=400)
                 except Exception as exc:
-                    self._send_json({"error": str(exc)}, status=500)
+                    self._send_json(api_error_payload("internal_error", str(exc)), status=500)
 
             def do_POST(self) -> None:
                 try:
                     self._handle_post(translator, repository, state_view)
+                except PermissionError as exc:
+                    self._send_json(api_error_payload("forbidden_path", str(exc)), status=403)
+                except FileNotFoundError as exc:
+                    self._send_json(api_error_payload("file_not_found", str(exc)), status=404)
+                except ValueError as exc:
+                    self._send_json(api_error_payload("bad_request", str(exc)), status=400)
                 except Exception as exc:
-                    self._send_json({"error": str(exc)}, status=500)
+                    self._send_json(api_error_payload("internal_error", str(exc)), status=500)
 
             def log_message(self, format: str, *args) -> None:
                 return
@@ -524,7 +518,7 @@ class HarnessWebServer:
                     max_chars = int(query.get("max_chars", ["200000"])[0])
                     self._send_json(view.read_file(path, max_chars=max_chars))
                     return
-                self._send_json({"error": "not found"}, status=404)
+                self._send_json(api_error_payload("not_found", "not found"), status=404)
 
             def _handle_post(self, translator: DisplayTranslator, repository: StateRepository, view: HarnessStateView) -> None:
                 parsed = urlparse(self.path)
@@ -535,14 +529,20 @@ class HarnessWebServer:
                     payload = json.loads(raw.decode("utf-8") or "{}")
 
                     if view.has_active_task():
-                        self._send_json({"error": "系统中有正在运行的任务，运行配置已锁定 / Runtime config is locked while tasks are active"}, status=400)
+                        self._send_json(
+                            api_error_payload(
+                                "runtime_config_locked",
+                                "系统中有正在运行的任务，运行配置已锁定 / Runtime config is locked while tasks are active",
+                            ),
+                            status=400,
+                        )
                         return
 
                     self._send_json({"status": "ok", "config": view.update_runtime_config(payload)})
                     return
 
                 if parsed.path != "/api/translate":
-                    self._send_json({"error": "not found"}, status=404)
+                    self._send_json(api_error_payload("not_found", "not found"), status=404)
                     return
                 length = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(min(length, 250_000))
@@ -604,14 +604,6 @@ class HarnessWebServer:
             self._server.shutdown()
             self._server.server_close()
             self._server = None
-
-
-def _is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.relative_to(parent)
-        return True
-    except ValueError:
-        return False
 
 
 def file_url(path: str) -> str:
@@ -892,8 +884,16 @@ function statusHelp(st){
   return (uiLanguage==="en"?en[s]:zh[s])||s;
 }
 function pill(st){let s=st||"PENDING";return `<span class="pill ${esc(s)}" title="${esc(statusHelp(s))}">${esc(statusLabel(s))}</span>`}
-async function getJson(u){const r=await fetch(u);if(!r.ok)throw new Error(await r.text());return r.json()}
-async function postJson(u,p){const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(p)});if(!r.ok)throw new Error(await r.text());return r.json()}
+async function apiErrorMessage(r){
+  try{
+    const p=await r.json();
+    return p?.error?.message||p?.error?.code||JSON.stringify(p);
+  }catch(_){
+    return await r.text();
+  }
+}
+async function getJson(u){const r=await fetch(u);if(!r.ok)throw new Error(await apiErrorMessage(r));return r.json()}
+async function postJson(u,p){const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(p)});if(!r.ok)throw new Error(await apiErrorMessage(r));return r.json()}
 
 function setLang(l){
   uiLanguage=l==="en"?"en":"zh";localStorage.setItem("harness-ui-lang",uiLanguage);
@@ -1031,7 +1031,9 @@ function renderRoleBar(roles,runs){
     return `<div class="role-chip ${st} ${active}" onclick="selectRoleChip('${esc(r.role)}')">
       <span class="rc-dot"></span>
       <span>${esc(roleLabel(r.role))}</span>
-      <span class="rc-count">${r.agent_count||0}a/${r.artifact_count||0}f</span>
+      <span class="rc-count" title="${uiLanguage==='en'?'Agent Runs / Generated Files':'Agent 执行次数 / 产生的文件数量'}">
+        ${r.agent_count||0} ${uiLanguage==="en"?"runs":"次运行"}, ${r.artifact_count||0} ${uiLanguage==="en"?"files":"个文件"}
+      </span>
     </div>`;
   }).join("");
 }

@@ -6,8 +6,8 @@ import re
 
 from harness.artifacts.delivery_codes import DELIVERY_SUCCESS_RETURN_CODE, delivery_status_for_return_code
 
-RETURN_CODE_FIELD_PATTERN = re.compile(r"^return_code\s*:\s*(-?\d+)\s*$")
-ARTIFACT_RESULT_CODE_FIELD_PATTERN = re.compile(r"^artifact_result_code\s*:\s*(-?\d+)\s*$")
+RETURN_CODE_FIELD_PATTERN = re.compile(r"^\s*[\-\*\s]*\**return_code\**\s*:\s*\**(-?\d+)\**\s*$")
+ARTIFACT_RESULT_CODE_FIELD_PATTERN = re.compile(r"^\s*[\-\*\s]*\**artifact_result_code\**\s*:\s*\**(-?\d+)\**\s*$")
 
 
 @dataclass(frozen=True)

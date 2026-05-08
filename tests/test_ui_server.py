@@ -11,7 +11,7 @@ from harness.core.progress import ProgressEvent
 from harness.core.state_machine import FIXING, PATCH_MERGE, PLANNING_DRAFT, TESTING
 from harness.state.db import StateDB
 from harness.state.repository import StateRepository
-from harness.ui.server import DisplayTranslator, HarnessStateView, UiEventStore, _html
+from harness.ui.server import DisplayTranslator, HarnessStateView, UiEventStore, _html, api_error_payload
 
 
 def _config(tmp_path: Path) -> dict:
@@ -134,6 +134,12 @@ def test_ui_store_can_select_resumed_task() -> None:
     store.select_task("task-123")
 
     assert store.latest_task_id == "task-123"
+
+
+def test_api_error_payload_has_stable_code_and_message() -> None:
+    assert api_error_payload("bad_request", "invalid") == {
+        "error": {"code": "bad_request", "message": "invalid"}
+    }
 
 
 def test_ui_runtime_config_updates_shared_config(tmp_path: Path) -> None:

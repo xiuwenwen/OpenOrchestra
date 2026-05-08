@@ -72,15 +72,15 @@ def test_artifact_validator_accepts_delivery_return_code_anywhere(tmp_path: Path
     assert errors == []
 
 
-def test_artifact_validator_rejects_bold_delivery_return_code(tmp_path: Path) -> None:
+def test_artifact_validator_accepts_bold_delivery_return_code(tmp_path: Path) -> None:
     validator = ArtifactValidator()
     (tmp_path / "plan.md").write_text(md_ok(), encoding="utf-8")
     (tmp_path / "delivery.md").write_text("**return_code**: 0\n", encoding="utf-8")
 
     ok, errors = validator.validate_required_outputs(tmp_path, ["plan.md", "delivery.md"])
 
-    assert not ok
-    assert errors == ["delivery.md must contain `return_code: <int>`"]
+    assert ok
+    assert errors == []
 
 
 def test_artifact_validator_rejects_return_code_with_extra_text(tmp_path: Path) -> None:
@@ -141,6 +141,17 @@ def test_artifact_validator_rejects_markdown_without_artifact_result_code(tmp_pa
 def test_artifact_validator_accepts_markdown_artifact_result_code_anywhere(tmp_path: Path) -> None:
     validator = ArtifactValidator()
     (tmp_path / "plan.md").write_text("# Plan\n\nartifact_result_code: 0\n\nBody\n", encoding="utf-8")
+    (tmp_path / "delivery.md").write_text("return_code: 0\n", encoding="utf-8")
+
+    ok, errors = validator.validate_required_outputs(tmp_path, ["plan.md", "delivery.md"])
+
+    assert ok
+    assert errors == []
+
+
+def test_artifact_validator_accepts_bold_markdown_artifact_result_code(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    (tmp_path / "plan.md").write_text("# Plan\n\n- **artifact_result_code**: **0**\n\nBody\n", encoding="utf-8")
     (tmp_path / "delivery.md").write_text("return_code: 0\n", encoding="utf-8")
 
     ok, errors = validator.validate_required_outputs(tmp_path, ["plan.md", "delivery.md"])
