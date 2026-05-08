@@ -81,6 +81,27 @@ class HarnessStateView:
     def tasks(self, limit: int = 20) -> list[dict[str, Any]]:
         return self.repository.list_tasks(limit)
 
+    def get_task_config(self, task_id: str) -> dict[str, Any]:
+        task = self.repository.get_task(task_id)
+        task_config = {}
+        if task and task.get("configuration"):
+            try:
+                task_config = json.loads(task["configuration"])
+            except Exception:
+                pass
+
+        merged_config = dict(self.config)
+        if "agent_backend" in task_config:
+            merged_config["agent_backend"] = dict(merged_config.get("agent_backend", {}))
+            merged_config["agent_backend"].update(task_config["agent_backend"])
+        if "roles" in task_config:
+            merged_config["roles"] = dict(merged_config.get("roles", {}))
+            for role, role_cfg in task_config["roles"].items():
+                if role not in merged_config["roles"]:
+                    merged_config["roles"][role] = {}
+                merged_config["roles"][role].update(role_cfg)
+        return {"agent_backend": merged_config.get("agent_backend", {}), "roles": merged_config.get("roles", {})}
+
     def snapshot(self, task_id: str | None = None) -> dict[str, Any]:
         if not task_id:
             task_id = self.event_store.latest_task_id
@@ -471,7 +492,7 @@ class HarnessWebServer:
 
             def do_POST(self) -> None:
                 try:
-                    self._handle_post(translator)
+                    self._handle_post(translator, repository)
                 except Exception as exc:
                     self._send_json({"error": str(exc)}, status=500)
 
@@ -493,6 +514,10 @@ class HarnessWebServer:
                     self._send_json({"tasks": view.tasks(50), "latest_task_id": view.event_store.latest_task_id})
                     return
                 if parsed.path.startswith("/api/tasks/"):
+                    if parsed.path.endswith("/config"):
+                        task_id = parsed.path.split("/")[3]
+                        self._send_json(view.get_task_config(task_id))
+                        return
                     task_id = parsed.path.removeprefix("/api/tasks/").strip("/")
                     self._send_json(view.snapshot(task_id or None))
                     return
@@ -504,8 +529,27 @@ class HarnessWebServer:
                     return
                 self._send_json({"error": "not found"}, status=404)
 
-            def _handle_post(self, translator: DisplayTranslator) -> None:
+            def _handle_post(self, translator: DisplayTranslator, repository: StateRepository) -> None:
                 parsed = urlparse(self.path)
+
+                if parsed.path.startswith("/api/tasks/") and parsed.path.endswith("/config"):
+                    task_id = parsed.path.split("/")[3]
+                    length = int(self.headers.get("Content-Length", "0"))
+                    raw = self.rfile.read(min(length, 250_000))
+                    payload = json.loads(raw.decode("utf-8") or "{}")
+
+                    task = repository.get_task(task_id)
+                    if not task:
+                        self._send_json({"error": "task not found"}, status=404)
+                        return
+                    if task["status"] not in ("CREATED", "PENDING"):
+                        self._send_json({"error": "Task already started, configuration locked"}, status=400)
+                        return
+
+                    repository.update_task_configuration(task_id, json.dumps(payload))
+                    self._send_json({"status": "ok"})
+                    return
+
                 if parsed.path != "/api/translate":
                     self._send_json({"error": "not found"}, status=404)
                     return
@@ -742,6 +786,25 @@ def _html() -> str:
       .detail-left,.detail-right{max-height:none}
       .pipe-node{width:90px;min-width:90px}
     }
+
+    /* === MODAL === */
+    .modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+    .modal.open{display:flex}
+    .modal-content{background:var(--surface);border:1px solid var(--border);border-radius:12px;width:500px;max-width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.5);display:flex;flex-direction:column}
+    .modal-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+    .modal-header h3{margin:0;font-size:16px;color:var(--text)}
+    .modal-close{background:transparent;border:none;color:var(--muted);cursor:pointer;font-size:18px}
+    .modal-close:hover{color:var(--text)}
+    .modal-body{padding:20px;max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px}
+    .modal-footer{padding:16px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;align-items:center}
+    .btn{padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:var(--elevated);color:var(--text);cursor:pointer;font-size:13px;font-weight:600}
+    .btn:hover:not(:disabled){background:var(--border)}
+    .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+    .btn.primary:hover:not(:disabled){background:#4f46e5}
+    .btn:disabled{opacity:0.5;cursor:not-allowed}
+    .cfg-row{display:grid;grid-template-columns:100px 1fr 1fr;gap:10px;align-items:center}
+    .cfg-label{font-size:13px;font-weight:600;color:var(--text)}
+    .cfg-input{background:#010409;border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-size:13px;width:100%}
   </style>
 </head>
 <body>
@@ -784,10 +847,26 @@ def _html() -> str:
       </div>
     </div>
   </div>
+
+  <div id="configModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="configTitle">任务配置 / Task Config</h3>
+        <button class="modal-close" onclick="closeConfig()">✕</button>
+      </div>
+      <div class="modal-body" id="configBody"></div>
+      <div class="modal-footer">
+        <span id="configStatus" style="font-size:12px;color:var(--warn);margin-right:auto;"></span>
+        <button class="btn" onclick="closeConfig()">取消 / Cancel</button>
+        <button class="btn primary" id="configSaveBtn" onclick="saveConfig()">保存 / Save</button>
+      </div>
+    </div>
+  </div>
+
 <script>
 // JS Part 1: State, API, i18n, core rendering
 let currentTask=new URLSearchParams(location.search).get("task"),latestData=null,uiLanguage=localStorage.getItem("harness-ui-lang")||"zh";
-let selectedPhaseIdx=-1,selectedRole=null,selectedRoundKey=null,currentFile=null,translationSeq=0;
+let selectedPhaseIdx=-1,selectedRole=null,selectedRoundKey=null,currentFile=null,translationSeq=0,lastScrolledKey=null;
 let eventSource=null,eventSourceTask=null,lastEventId=0,refreshTimer=null,logOpen=false,fileRefreshTimer=null;
 const translationCache=new Map();
 const rl={planner:"规划者",executor:"执行者",tester:"测试者",reviewer:"审阅者",judge:"裁决者",communicator:"交付者",orchestrator:"编排器"};
@@ -890,6 +969,7 @@ function renderSnapshot(data){
     <div class="sum-sep"></div>
     <div class="sum-item"><span class="sum-label">${uiLanguage==="en"?"Active":"活跃"}</span><span class="sum-val">${running.length}</span></div>
     <div class="sum-sep"></div>
+    <button class="btn" style="margin-right:10px;padding:3px 8px;font-size:11px;flex-shrink:0" onclick="openConfig('${task.task_id}', '${task.status}')">⚙️ ${uiLanguage==="en"?"Config":"配置"}</button>
     <div class="sum-prompt">${esc(task.user_prompt)}</div>`;
   renderPipeline(data.workflow_timeline||data.phases||[],task.current_phase,data.workflow_loop_edges||[]);
   renderRoleBar(data.roles||{},runs);
@@ -924,9 +1004,14 @@ function renderPipeline(phases,curPhase,loopEdges){
     }
   });
   root.innerHTML=html;
-  // auto-scroll to current
+  // auto-scroll to current if changed
   const cur=root.querySelector(".pipe-node.run")||root.querySelector(".pipe-node.sel");
-  if(cur)cur.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"});
+  const curIdx=cur?Array.from(root.children).indexOf(cur):-1;
+  const scrollKey=currentTask+":"+curIdx;
+  if(cur && lastScrolledKey!==scrollKey){
+    cur.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"});
+    lastScrolledKey=scrollKey;
+  }
 }
 
 function buildTimeline(phases,curPhase){
@@ -1125,6 +1210,67 @@ function glossary(t){
   let o=t;for(const[p,v]of r)o=o.replace(p,v);return o;
 }
 function hasCN(t){const c=(t.slice(0,2000).match(/[\u4e00-\u9fff]/g)||[]).length;const l=(t.slice(0,2000).match(/[A-Za-z]/g)||[]).length;return c>0&&c>=l*.25}
+
+async function openConfig(taskId, status){
+  const locked = (status !== "CREATED" && status !== "PENDING");
+  const d = document.getElementById("configModal");
+  d.classList.add("open");
+  const b = document.getElementById("configBody");
+  b.innerHTML = `<div style="text-align:center;padding:20px;color:var(--muted)">加载中 / Loading...</div>`;
+  const stat = document.getElementById("configStatus");
+  stat.textContent = locked ? "任务已开始，配置锁定 / Task started, config locked" : "";
+  stat.style.color = "var(--warn)";
+  document.getElementById("configSaveBtn").disabled = locked;
+
+  try {
+    const cfg = await getJson("/api/tasks/" + taskId + "/config");
+    let html = "";
+    const models = ["codex","claude","gemini","qwen"];
+    const dr = locked ? "disabled" : "";
+    roleOrder.forEach(r => {
+      if(r==="orchestrator") return;
+      const count = (cfg.roles && cfg.roles[r] && cfg.roles[r].count) || 1;
+      const be = (cfg.agent_backend && cfg.agent_backend[r]) || "codex";
+      html += `<div class="cfg-row">
+        <div class="cfg-label">${roleLabel(r)}</div>
+        <input class="cfg-input" type="number" id="cfg-cnt-${r}" value="${count}" min="1" max="10" ${dr}>
+        <select class="cfg-input" id="cfg-be-${r}" ${dr}>
+          ${models.map(m=>`<option value="${m}" ${m===be?'selected':''}>${m}</option>`).join("")}
+        </select>
+      </div>`;
+    });
+    b.innerHTML = html;
+  } catch(e){
+    b.innerHTML = `<div style="color:var(--bad)">加载失败 / Failed to load: ${esc(e.message)}</div>`;
+  }
+}
+function closeConfig(){
+  document.getElementById("configModal").classList.remove("open");
+}
+async function saveConfig(){
+  const payload = {roles:{}, agent_backend:{}};
+  roleOrder.forEach(r => {
+    if(r==="orchestrator") return;
+    const cnt = document.getElementById("cfg-cnt-"+r);
+    const be = document.getElementById("cfg-be-"+r);
+    if(cnt && be){
+      payload.roles[r] = {count: parseInt(cnt.value, 10)};
+      payload.agent_backend[r] = be.value;
+    }
+  });
+  const btn = document.getElementById("configSaveBtn");
+  const stat = document.getElementById("configStatus");
+  try{
+    btn.disabled = true;
+    stat.style.color="var(--text)"; stat.textContent = "保存中 / Saving...";
+    await postJson("/api/tasks/" + currentTask + "/config", payload);
+    stat.style.color="var(--good)"; stat.textContent = "已保存 / Saved";
+    setTimeout(closeConfig, 500);
+  }catch(e){
+    stat.style.color="var(--bad)"; stat.textContent = "保存失败 / Failed: " + String(e.message);
+    btn.disabled = false;
+  }
+}
 
 // Init
 setLang(uiLanguage);clearViewer();refresh();setInterval(refresh,5000);

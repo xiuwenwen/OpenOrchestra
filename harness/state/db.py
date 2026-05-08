@@ -34,6 +34,8 @@ class StateDB:
         task_columns = self._table_columns(conn, "tasks")
         if "workflow_type" not in task_columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN workflow_type TEXT")
+        if "configuration" not in task_columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN configuration TEXT")
 
     def _table_columns(self, conn: sqlite3.Connection, table_name: str) -> set[str]:
         rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()

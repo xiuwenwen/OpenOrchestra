@@ -24,7 +24,7 @@ class ArtifactValidator:
         if delivery_path.exists() and delivery_path.is_file():
             return_code = self.parse_delivery_return_code(delivery_path)
             if return_code is None:
-                errors.append("delivery.md must contain `return_code: <int>` as its first non-empty line")
+                errors.append("delivery.md must contain `return_code: <int>`")
             elif return_code != DELIVERY_SUCCESS_RETURN_CODE:
                 errors.append(f"delivery.md reports non-zero return_code: {return_code}")
         for relative_name in required_outputs:
@@ -36,7 +36,7 @@ class ArtifactValidator:
             artifact_code = self.parse_markdown_artifact_result_code(path)
             if artifact_code is None:
                 errors.append(
-                    f"{relative_name} must contain `artifact_result_code: <int>` as its first non-empty line"
+                    f"{relative_name} must contain `artifact_result_code: <int>`"
                 )
             elif artifact_code != DELIVERY_SUCCESS_RETURN_CODE:
                 errors.append(f"{relative_name} reports non-zero artifact_result_code: {artifact_code}")
@@ -46,24 +46,18 @@ class ArtifactValidator:
         if not delivery_path.exists() or not delivery_path.is_file():
             return None
         for line in delivery_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if not line.strip():
-                continue
             match = RETURN_CODE_FIELD_PATTERN.fullmatch(line.strip())
             if match:
                 return int(match.group(1))
-            return None
         return None
 
     def parse_markdown_artifact_result_code(self, artifact_path: Path) -> int | None:
         if not artifact_path.exists() or not artifact_path.is_file():
             return None
         for line in artifact_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if not line.strip():
-                continue
             match = ARTIFACT_RESULT_CODE_FIELD_PATTERN.fullmatch(line.strip())
             if match:
                 return int(match.group(1))
-            return None
         return None
 
     def parse_delivery_status(self, delivery_path: Path) -> str | None:

@@ -30,8 +30,8 @@ class StateRepository:
         with self._lock, self.db.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO tasks(task_id, user_prompt, workflow_type, status, current_phase, current_role, created_at, updated_at)
-                VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)
+                INSERT INTO tasks(task_id, user_prompt, workflow_type, status, current_phase, current_role, configuration, created_at, updated_at)
+                VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
                 """,
                 (task_id, user_prompt, workflow_type, status, now, now),
             )
@@ -46,7 +46,7 @@ class StateRepository:
         with self.db.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT task_id, user_prompt, workflow_type, status, current_phase, current_role, created_at, updated_at
+                SELECT task_id, user_prompt, workflow_type, status, current_phase, current_role, configuration, created_at, updated_at
                 FROM tasks
                 ORDER BY created_at DESC
                 LIMIT ?
@@ -54,6 +54,14 @@ class StateRepository:
                 (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def update_task_configuration(self, task_id: str, configuration: str) -> None:
+        now = utc_now_iso()
+        with self._lock, self.db.connect() as conn:
+            conn.execute(
+                "UPDATE tasks SET configuration = ?, updated_at = ? WHERE task_id = ?",
+                (configuration, now, task_id),
+            )
 
     def update_task(
         self,

@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     status TEXT NOT NULL,
     current_phase TEXT,
     current_role TEXT,
+    configuration TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

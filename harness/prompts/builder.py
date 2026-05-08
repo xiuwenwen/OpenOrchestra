@@ -351,14 +351,12 @@ class PromptBuilder:
         base = [
             "- Every role and every phase must create `delivery.md`.",
             "- `delivery.md` is the role return envelope, not the task/business verdict.",
-            "- The first non-empty line of `delivery.md` must be exactly `return_code: 0` when the required role files are complete.",
-            "- Do not put a Markdown title, prose, front matter, list item, or code block before the first-line contract code.",
+            "- `delivery.md` must contain `return_code: 0` when the required role files are complete.",
             "- Do not copy phase verdict values into `return_code`.",
         ]
         if markdown_outputs:
-            verb = "must start" if len(markdown_outputs) == 1 else "must each start"
-            base.append(f"- {markdown_list} {verb} with exactly `artifact_result_code: 0` when complete.")
-            base.append("- In those Markdown files, line 1 must be `artifact_result_code: 0`; put headings such as `# Report` only after that line.")
+            verb = "must contain" if len(markdown_outputs) == 1 else "must each contain"
+            base.append(f"- {markdown_list} {verb} `artifact_result_code: 0` somewhere in the file when complete.")
             base.append("- Do not use `artifact_result_code` to report a negative phase verdict.")
         if context.role == "tester":
             return [
@@ -410,7 +408,7 @@ class PromptBuilder:
                     "- `decision.json` must include an `evidence` object summarizing objective gate facts, test command exit codes, changed files, and any blocking findings you relied on.",
                     "- `decision.json.decision` is the test verdict. It must not be copied into the `delivery.md` return code.",
                     "- If you choose `decision: fail` because tests failed, write `return_code: 0` in `delivery.md` as long as `decision.json`, `decision_summary.md`, and `delivery.md` are complete.",
-                    "- `decision_summary.md` must include `artifact_result_code: 0` as its first non-empty line and one machine-readable line: `decision_code: 0` for pass or `decision_code: -1` for fail.",
+                    "- `decision_summary.md` must include `artifact_result_code: 0` and one machine-readable line: `decision_code: 0` for pass or `decision_code: -1` for fail.",
                     "- Do not decide objective facts from natural-language reports. Use structured Harness evidence in `objective_gate.md`, `patch_validation.md`, `materialized_repo.md`, and `test_gate.md`.",
                     "- Use `pass` only when structured evidence shows patch apply check passed, diff check passed, build/test commands passed or were explicitly not required, and the merged patch is coherent and testable.",
                     "- Use `fail` when tests failed, required evidence is missing, `merged_patch.diff` is missing, `merged_patch_metadata.md` is missing or incompatible, any Harness gate reports `status: fail`, or the merged patch is not testable.",
@@ -422,7 +420,7 @@ class PromptBuilder:
                     "- Use `changes_required` when required artifacts are missing, evidence is weak, or unresolved risks block progression.",
                     "- `decision.json.decision` is the phase verdict. It must not be copied into the `delivery.md` return code.",
                     "- If you choose `changes_required`, write `return_code: 0` in `delivery.md` as long as `decision.json`, `decision_summary.md`, and `delivery.md` are complete.",
-                    "- `decision_summary.md` must include `artifact_result_code: 0` as its first non-empty line and one machine-readable line: `decision_code: 0` for approved or `decision_code: 1` for changes_required.",
+                    "- `decision_summary.md` must include `artifact_result_code: 0` and one machine-readable line: `decision_code: 0` for approved or `decision_code: 1` for changes_required.",
                     "- `decision.json` must include an `evidence` object with the structured facts used for the decision; keep semantic judgement separate from objective gate facts.",
                 ]
                 if context.phase in {"REVIEW_JUDGEMENT", "FINAL_JUDGEMENT"}:
@@ -447,7 +445,7 @@ class PromptBuilder:
         if context.role == "executor" and context.phase == "PATCH_MERGE":
             return [
                 "- This is the model-driven PATCH_MERGE phase.",
-                "- `merge_report.md` and `merged_patch_metadata.md` must each start with `artifact_result_code: 0` when complete.",
+                "- `merge_report.md` and `merged_patch_metadata.md` must each contain `artifact_result_code: 0` when complete.",
                 "- Read all candidate `patch.diff`, `fix_patch.diff`, and `patch_metadata.md` artifacts listed in the input manifest.",
                 "- Before selecting any candidate patch, verify its `patch_metadata.md` names the exact patch artifact and declares a baseline/apply target compatible with the current repository directory.",
                 "- Do not select a patch based only on filename, artifact version, model wording, or previous role confidence.",
@@ -464,7 +462,7 @@ class PromptBuilder:
         if context.role == "executor":
             return [
                 "- If the repository is empty, still produce implementation artifacts and a complete unified diff representing the proposed files.",
-                "- All Markdown deliverables you produce, such as `implementation_plan.md`, `changed_files.md`, `patch_metadata.md`, `fix_schedule.md`, `fix_notes.md`, and `self_check.md`, must start with `artifact_result_code: 0` when complete.",
+                "- All Markdown deliverables you produce, such as `implementation_plan.md`, `changed_files.md`, `patch_metadata.md`, `fix_schedule.md`, `fix_notes.md`, and `self_check.md`, must contain `artifact_result_code: 0` when complete.",
                 "- If the repository already contains materialized source from a previous PATCH_MERGE, make fix changes against that repository state.",
                 "- `patch.diff` or `fix_patch.diff` must be a valid unified diff that could create or update implementation files.",
                 "- Produce `patch_metadata.md` next to the patch. It must name the exact patch file, the current repository baseline, the intended apply target, the patch scope, changed files, and the expected apply command.",
@@ -481,7 +479,7 @@ class PromptBuilder:
         if context.role == "tester":
             return [
                 "- Treat the repository directory as the implementation under test.",
-                "- `build_report.md`, `test_report.md`, and `bug_report.md` must each start with `artifact_result_code: 0` when complete.",
+                "- `build_report.md`, `test_report.md`, and `bug_report.md` must each contain `artifact_result_code: 0` when complete.",
                 "- Prefer running build, tests, and smoke checks directly in the repository directory when it contains materialized source.",
                 "- Use staged Harness evidence only when it is explicitly present in the input manifest; otherwise validate by executing or inspecting the repository directory.",
                 "- Do not treat executor planning notes, self-checks, or change summaries as test evidence.",
@@ -495,7 +493,7 @@ class PromptBuilder:
             if context.phase == "PLANNING_PEER_REVIEW":
                 return [
                     "- This is a planner peer-review phase coordinated by Harness artifacts.",
-                    "- `peer_review.md` must start with `artifact_result_code: 0` when complete.",
+                    "- `peer_review.md` must contain `artifact_result_code: 0` when complete.",
                     "- Read the input manifest and review plans from every other planner agent; do not review your own plan as if it were external feedback.",
                     "- Write `peer_review.md` with your `agent_id`, the reviewed planner agent IDs, concrete approval or objection notes, and any blocking issues.",
                     "- `peer_review.md` must include one machine-readable line: `peer_review_code: 0` when all reviewed plans are acceptable, `peer_review_code: 1` when any plan needs revision, or `peer_review_code: -1` for a blocking objection.",
@@ -505,7 +503,7 @@ class PromptBuilder:
             if context.phase == "PLANNING_REVISION":
                 return [
                     "- This is a planner revision phase after peer review or planning merge-review feedback.",
-                    "- `plan.md`, `assumptions.md`, `risk.md`, and `todo_breakdown.md` must each start with `artifact_result_code: 0` when complete.",
+                    "- `plan.md`, `assumptions.md`, `risk.md`, and `todo_breakdown.md` must each contain `artifact_result_code: 0` when complete.",
                     "- If a reviewer `review_report.md` from PLAN_REVIEW is present with `review_decision_code: 1` or `review_decision_code: -1`, treat it as the authoritative revision request and revise only against that feedback.",
                     "- When revising from PLAN_REVIEW feedback, do not re-litigate old planner proposals or peer reviews unless the reviewer explicitly references them.",
                     "- Read all available `peer_review.md` artifacts, especially comments directed at your previous plan.",
@@ -515,7 +513,7 @@ class PromptBuilder:
                 ]
             return [
                 "- `plan.md` must describe the proposed approach, architecture or code areas affected, and acceptance criteria.",
-                "- `plan.md`, `assumptions.md`, `risk.md`, and `todo_breakdown.md` must each start with `artifact_result_code: 0` when complete.",
+                "- `plan.md`, `assumptions.md`, `risk.md`, and `todo_breakdown.md` must each contain `artifact_result_code: 0` when complete.",
                 "- `assumptions.md` must separate verified facts from assumptions.",
                 "- `risk.md` must identify technical, integration, testing, and delivery risks.",
                 *self._todo_breakdown_schema_rules(),
@@ -524,7 +522,7 @@ class PromptBuilder:
             if context.phase == "PLAN_REVIEW":
                 return [
                     "- This is the planning merge-review phase after planner peer-review loops.",
-                    "- `review_report.md` and `selected_plan.md` must each start with `artifact_result_code: 0` when complete.",
+                    "- `review_report.md` and `selected_plan.md` must each contain `artifact_result_code: 0` when complete.",
                     "- Merge the current-round planner `plan.md`, `assumptions.md`, `risk.md`, `todo_breakdown.md`, and `peer_review.md` artifacts into one authoritative executor plan.",
                     "- Do not merely pick one planner proposal when other proposals contain useful compatible details; preserve the strongest compatible requirements, risks, acceptance criteria, and test commands.",
                     "- If planner proposals conflict materially or peer review still contains blocking objections, write `review_decision_code: 1` and explain the required planning revision instead of inventing a compromise.",
@@ -534,7 +532,7 @@ class PromptBuilder:
                     "- `review_decision_code` is the merge-review verdict. It must not be copied into the `delivery.md` return code.",
                 ]
             return [
-                "- `review_report.md` must start with `artifact_result_code: 0` when complete.",
+                "- `review_report.md` must contain `artifact_result_code: 0` when complete.",
                 "- Review `merged_patch.diff` as the authoritative implementation artifact whenever it exists.",
                 "- Review `merged_patch_metadata.md` as required baseline/apply-target evidence for the authoritative patch.",
                 "- Review `patch_validation.md` as Harness-generated apply-check evidence whenever it exists.",
@@ -546,7 +544,7 @@ class PromptBuilder:
             ]
         if context.role == "communicator":
             return [
-                "- `final_delivery.md` and `usage_guide.md` must each start with `artifact_result_code: 0` when complete.",
+                "- `final_delivery.md` and `usage_guide.md` must each contain `artifact_result_code: 0` when complete.",
                 "- `final_delivery.md` must summarize final outcome code, completed work, artifact paths or names, validation result, and known risks.",
                 "- `final_delivery.md` must include one machine-readable line: `final_delivery_code: 0` for accepted final delivery, `final_delivery_code: 1` for partial delivery, `final_delivery_code: 2` for blocked delivery, or `final_delivery_code: -1` for failed delivery.",
                 "- `final_delivery.md` must include a short handoff section with exactly these fields: `project_dir`, `run_command`, and `dependency_install`.",

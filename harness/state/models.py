@@ -10,6 +10,7 @@ class TaskRecord:
     status: str
     current_phase: str | None
     current_role: str | None
+    configuration: dict | None
     created_at: str
     updated_at: str
 

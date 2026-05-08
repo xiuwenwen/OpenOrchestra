@@ -57,7 +57,7 @@ def markdown_artifact_code_meanings_text() -> str:
 
 def markdown_business_code_contract_lines() -> list[str]:
     return [
-        "- Every required Markdown deliverable except `delivery.md` must use `artifact_result_code: <integer>` as its first non-empty line.",
+        "- Every required Markdown deliverable except `delivery.md` must contain `artifact_result_code: <integer>`.",
         f"- Markdown artifact result code meanings: {markdown_artifact_code_meanings_text()}.",
         "- Use `artifact_result_code: 0` when that Markdown file is complete, even if the business verdict described inside it is negative.",
         "- Any business verdict in a Markdown deliverable must use a numeric `*_code` field, not a natural-language enum field.",
@@ -70,7 +70,7 @@ def markdown_business_code_contract_lines() -> list[str]:
 def delivery_return_code_contract_lines() -> list[str]:
     return [
         "- `delivery.md` is the role return envelope, not the task/business verdict.",
-        "- The first non-empty line of `delivery.md` must be exactly `return_code: <integer>`.",
+        "- `delivery.md` must contain `return_code: <integer>`.",
         "- Do not format the return-code line as a heading, list item, bold text, table cell, code block, sentence, JSON, YAML block, or natural-language explanation.",
         f"- Return code meanings: {delivery_return_code_meanings_text()}.",
         "- Use `return_code: 0` only when this role successfully returned all required output files for this phase.",

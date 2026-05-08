@@ -12,13 +12,16 @@ import harness.core.orchestrator as orchestrator_module
 from harness.core.orchestrator import Orchestrator
 from harness.core.progress import ProgressEvent
 from harness.core.state_machine import (
+    DELIVERY,
     EXECUTION,
     FAILED,
+    FINAL_JUDGEMENT,
     FIXING,
     PATCH_MERGE,
     PLAN_REVIEW,
     PLAN_JUDGEMENT,
     PLANNING_DRAFT,
+    PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
     REGRESSION_TESTING,
     REVIEW_FIXING,
@@ -556,6 +559,87 @@ def test_plan_review_only_receives_current_planning_round(tmp_path: Path) -> Non
     assert "current-peer_review.md" in manifest
     assert "old-plan.md" not in manifest
     assert "old-peer_review.md" not in manifest
+
+
+def test_artifact_visibility_rule_table_covers_role_phases() -> None:
+    covered = {(rule.target_role, rule.target_phase) for rule in orchestrator_module.ARTIFACT_VISIBILITY_RULES}
+    intentionally_empty_inputs = {
+        ("executor", "MISC_RESPONSE"),
+        ("tester", TESTING),
+        ("tester", REGRESSION_TESTING),
+    }
+    role_phases = {
+        ("planner", PLANNING_DRAFT),
+        ("planner", PLANNING_PEER_REVIEW),
+        ("planner", PLANNING_REVISION),
+        ("executor", EXECUTION),
+        ("executor", PATCH_MERGE),
+        ("executor", "MISC_RESPONSE"),
+        ("executor", FIXING),
+        ("executor", REVIEW_FIXING),
+        ("tester", TESTING),
+        ("tester", REGRESSION_TESTING),
+        ("reviewer", PLAN_REVIEW),
+        ("reviewer", REVIEWING),
+        ("judge", PLAN_JUDGEMENT),
+        ("judge", TEST_JUDGEMENT),
+        ("judge", REVIEW_JUDGEMENT),
+        ("judge", FINAL_JUDGEMENT),
+        ("communicator", DELIVERY),
+    }
+
+    assert role_phases <= covered | intentionally_empty_inputs
+
+
+def test_planner_peer_review_receives_only_current_round_other_planners(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("peer review latest plans")
+    old_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_DRAFT, "planner", 0)
+    old_peer_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_PEER_REVIEW, "planner", 0)
+    current_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_REVISION, "planner", 1)
+    current_peer_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_PEER_REVIEW, "planner", 1)
+
+    for phase_id, agent_id, label, artifact_names in (
+        (old_phase_id, "planner-1", "old-self", ("plan.md", "risk.md", "todo_breakdown.md", "assumptions.md")),
+        (old_peer_phase_id, "planner-2", "old-peer", ("peer_review.md",)),
+        (current_phase_id, "planner-1", "current-self", ("plan.md", "risk.md", "todo_breakdown.md", "assumptions.md")),
+        (current_phase_id, "planner-2", "current-other", ("plan.md", "risk.md", "todo_breakdown.md", "assumptions.md")),
+    ):
+        for artifact_name in artifact_names:
+            path = tmp_path / f"{label}-{artifact_name}"
+            path.write_text(label, encoding="utf-8")
+            orchestrator.repository.create_artifact(
+                ArtifactRef(
+                    artifact_id=str(uuid.uuid4()),
+                    task_id=task_id,
+                    phase_id=phase_id,
+                    role="planner",
+                    agent_id=agent_id,
+                    artifact_type=artifact_name,
+                    path=path,
+                    version=1,
+                    hash="hash",
+                )
+            )
+
+    staged = orchestrator._stage_input_artifacts(
+        task_id,
+        tmp_path / "peer-review-input",
+        "planner",
+        PLANNING_PEER_REVIEW,
+        exclude_phase_id=current_peer_phase_id,
+        round_id=1,
+        current_agent_id="planner-1",
+    )
+    manifest = staged[0].read_text(encoding="utf-8")
+
+    assert "current-other-plan.md" in manifest
+    assert "current-other-risk.md" in manifest
+    assert "current-other-todo_breakdown.md" in manifest
+    assert "current-other-assumptions.md" in manifest
+    assert "current-self-plan.md" not in manifest
+    assert "old-self-plan.md" not in manifest
+    assert "old-peer-peer_review.md" not in manifest
 
 
 def test_planner_revision_after_plan_review_rejection_reads_only_reviewer_feedback(tmp_path: Path) -> None:
@@ -1641,15 +1725,13 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
     )
     manifest = staged[0].read_text(encoding="utf-8")
 
-    assert "current-merged-metadata.md" in manifest
     assert "current-build-report.md" in manifest
     assert "current-test-report.md" in manifest
     assert "current-bug-report.md" in manifest
     assert "judge-round-1-test_gate.md" in manifest
     assert "judge-round-1-objective_gate.md" in manifest
-    assert "judge-round-1-patch_validation.md" in manifest
-    assert "judge-round-1-materialized_repo.md" in manifest
 
+    assert "current-merged-metadata.md" not in manifest
     assert "current-merged.patch" not in manifest
     assert "current-original.patch" not in manifest
     assert "current-merge-report.md" not in manifest
@@ -1664,8 +1746,188 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
     assert "old-bug-report.md" not in manifest
     assert "judge-round-0-test_gate.md" not in manifest
     assert "judge-round-0-objective_gate.md" not in manifest
+    assert "judge-round-1-patch_validation.md" not in manifest
+    assert "judge-round-1-materialized_repo.md" not in manifest
     assert "judge-round-0-patch_validation.md" not in manifest
     assert "judge-round-0-materialized_repo.md" not in manifest
+
+
+def test_review_judgement_sees_latest_review_and_validation_evidence(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("judge latest review evidence")
+    old_merge_phase_id = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 1)
+    old_test_phase_id = orchestrator.repository.create_phase(task_id, TESTING, "tester", 1)
+    latest_merge_phase_id = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 2)
+    latest_test_phase_id = orchestrator.repository.create_phase(task_id, REGRESSION_TESTING, "tester", 2)
+    review_phase_id = orchestrator.repository.create_phase(task_id, REVIEWING, "reviewer", 0)
+    current_judge_phase_id = orchestrator.repository.create_phase(task_id, REVIEW_JUDGEMENT, "judge", 0)
+
+    artifact_rows = [
+        ("merged_patch_metadata.md", old_merge_phase_id, "executor", "old-merged-metadata.md", "executor-1"),
+        ("build_report.md", old_test_phase_id, "tester", "old-build-report.md", "tester-1"),
+        ("test_report.md", old_test_phase_id, "tester", "old-test-report.md", "tester-1"),
+        ("bug_report.md", old_test_phase_id, "tester", "old-bug-report.md", "tester-1"),
+        ("merged_patch_metadata.md", latest_merge_phase_id, "executor", "latest-merged-metadata.md", "executor-1"),
+        ("build_report.md", latest_test_phase_id, "tester", "latest-build-report.md", "tester-1"),
+        ("test_report.md", latest_test_phase_id, "tester", "latest-test-report.md", "tester-1"),
+        ("bug_report.md", latest_test_phase_id, "tester", "latest-bug-report.md", "tester-1"),
+        ("review_report.md", review_phase_id, "reviewer", "current-review-report.md", "reviewer-1"),
+    ]
+    for artifact_type, phase_id, role, filename, agent_id in artifact_rows:
+        path = tmp_path / filename
+        path.write_text(filename, encoding="utf-8")
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id=phase_id,
+                role=role,
+                agent_id=agent_id,
+                artifact_type=artifact_type,
+                path=path,
+                version=1,
+                hash="hash",
+            )
+        )
+
+    for round_id in (1, 2):
+        for artifact_type in ("test_gate.md", "objective_gate.md", "patch_validation.md", "materialized_repo.md"):
+            filename = f"review-judge-round-{round_id}-{artifact_type}"
+            path = tmp_path / filename
+            path.write_text(f"# {artifact_type}\n\nround_id: {round_id}\n", encoding="utf-8")
+            orchestrator.repository.create_artifact(
+                ArtifactRef(
+                    artifact_id=str(uuid.uuid4()),
+                    task_id=task_id,
+                    phase_id=None,
+                    role="orchestrator",
+                    agent_id="orchestrator",
+                    artifact_type=artifact_type,
+                    path=path,
+                    version=round_id,
+                    hash="hash",
+                )
+            )
+
+    staged = orchestrator._stage_input_artifacts(
+        task_id,
+        tmp_path / "input",
+        "judge",
+        REVIEW_JUDGEMENT,
+        exclude_phase_id=current_judge_phase_id,
+        round_id=0,
+    )
+    manifest = staged[0].read_text(encoding="utf-8")
+
+    assert "latest-merged-metadata.md" in manifest
+    assert "latest-build-report.md" in manifest
+    assert "latest-test-report.md" in manifest
+    assert "latest-bug-report.md" in manifest
+    assert "current-review-report.md" in manifest
+    assert "review-judge-round-2-test_gate.md" in manifest
+    assert "review-judge-round-2-objective_gate.md" in manifest
+    assert "review-judge-round-2-patch_validation.md" in manifest
+    assert "review-judge-round-2-materialized_repo.md" in manifest
+
+    assert "old-merged-metadata.md" not in manifest
+    assert "old-build-report.md" not in manifest
+    assert "old-test-report.md" not in manifest
+    assert "old-bug-report.md" not in manifest
+    assert "review-judge-round-1-test_gate.md" not in manifest
+    assert "review-judge-round-1-objective_gate.md" not in manifest
+    assert "review-judge-round-1-patch_validation.md" not in manifest
+    assert "review-judge-round-1-materialized_repo.md" not in manifest
+
+
+def test_final_handoff_stages_latest_evidence_without_candidate_patches(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("finalize latest evidence")
+    old_plan_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_DRAFT, "planner", 0)
+    latest_plan_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_REVISION, "planner", 2)
+    old_exec_phase_id = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 1)
+    latest_exec_phase_id = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 2)
+    old_test_phase_id = orchestrator.repository.create_phase(task_id, TESTING, "tester", 1)
+    latest_test_phase_id = orchestrator.repository.create_phase(task_id, REGRESSION_TESTING, "tester", 2)
+    old_review_phase_id = orchestrator.repository.create_phase(task_id, REVIEWING, "reviewer", 0)
+    latest_review_phase_id = orchestrator.repository.create_phase(task_id, REVIEWING, "reviewer", 1)
+    old_judge_phase_id = orchestrator.repository.create_phase(task_id, TEST_JUDGEMENT, "judge", 1)
+    latest_judge_phase_id = orchestrator.repository.create_phase(task_id, REVIEW_JUDGEMENT, "judge", 2)
+    current_final_phase_id = orchestrator.repository.create_phase(task_id, FINAL_JUDGEMENT, "judge", 0)
+
+    artifact_rows = [
+        ("plan.md", old_plan_phase_id, "planner", "old-plan.md", "planner-1"),
+        ("plan.md", latest_plan_phase_id, "planner", "latest-plan.md", "planner-1"),
+        ("merged_patch.diff", old_exec_phase_id, "executor", "old-merged.patch", "executor-1"),
+        ("merged_patch.diff", latest_exec_phase_id, "executor", "latest-merged.patch", "executor-1"),
+        ("patch.diff", latest_exec_phase_id, "executor", "latest-candidate.patch", "executor-1"),
+        ("fix_patch.diff", latest_exec_phase_id, "executor", "latest-fix-candidate.patch", "executor-1"),
+        ("test_report.md", old_test_phase_id, "tester", "old-test-report.md", "tester-1"),
+        ("test_report.md", latest_test_phase_id, "tester", "latest-test-report.md", "tester-1"),
+        ("review_report.md", old_review_phase_id, "reviewer", "old-review-report.md", "reviewer-1"),
+        ("review_report.md", latest_review_phase_id, "reviewer", "latest-review-report.md", "reviewer-1"),
+        ("decision.json", old_judge_phase_id, "judge", "old-decision.json", "judge-1"),
+        ("decision.json", latest_judge_phase_id, "judge", "latest-decision.json", "judge-1"),
+    ]
+    for artifact_type, phase_id, role, filename, agent_id in artifact_rows:
+        path = tmp_path / filename
+        path.write_text(filename, encoding="utf-8")
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id=phase_id,
+                role=role,
+                agent_id=agent_id,
+                artifact_type=artifact_type,
+                path=path,
+                version=1,
+                hash="hash",
+            )
+        )
+
+    for round_id in (1, 2):
+        path = tmp_path / f"final-round-{round_id}-test_gate.md"
+        path.write_text(f"# test_gate.md\n\nround_id: {round_id}\n", encoding="utf-8")
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id=None,
+                role="orchestrator",
+                agent_id="orchestrator",
+                artifact_type="test_gate.md",
+                path=path,
+                version=round_id,
+                hash="hash",
+            )
+        )
+
+    for role, phase in (("judge", FINAL_JUDGEMENT), ("communicator", DELIVERY)):
+        staged = orchestrator._stage_input_artifacts(
+            task_id,
+            tmp_path / f"{role}-input",
+            role,
+            phase,
+            exclude_phase_id=current_final_phase_id if role == "judge" else None,
+            round_id=0,
+        )
+        manifest = staged[0].read_text(encoding="utf-8")
+
+        assert "latest-plan.md" in manifest
+        assert "latest-merged.patch" in manifest
+        assert "latest-test-report.md" in manifest
+        assert "latest-review-report.md" in manifest
+        assert "latest-decision.json" in manifest
+        assert "final-round-2-test_gate.md" in manifest
+
+        assert "old-plan.md" not in manifest
+        assert "old-merged.patch" not in manifest
+        assert "latest-candidate.patch" not in manifest
+        assert "latest-fix-candidate.patch" not in manifest
+        assert "old-test-report.md" not in manifest
+        assert "old-review-report.md" not in manifest
+        assert "old-decision.json" not in manifest
+        assert "final-round-1-test_gate.md" not in manifest
 
 
 def test_tester_receives_no_executor_markdown_artifacts(tmp_path: Path) -> None:
@@ -1917,6 +2179,90 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
     assert "round-0-objective_gate.md" not in manifest
     assert "round-0-patch_validation.md" not in manifest
     assert "round-0-materialized_repo.md" not in manifest
+
+
+def test_fixing_falls_back_to_latest_visible_test_evidence_when_previous_test_outputs_invalid(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("fix with missing latest tester artifacts")
+    round0_test_phase_id = orchestrator.repository.create_phase(task_id, TESTING, "tester", 0, status="COMPLETED")
+    round0_judge_phase_id = orchestrator.repository.create_phase(task_id, TEST_JUDGEMENT, "judge", 0, status="COMPLETED")
+    round1_merge_phase_id = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 1, status="COMPLETED")
+    round1_test_phase_id = orchestrator.repository.create_phase(task_id, REGRESSION_TESTING, "tester", 1, status=FAILED)
+    current_fix_phase_id = orchestrator.repository.create_phase(task_id, FIXING, "executor", 2)
+    orchestrator.repository.create_judge_decision(
+        task_id,
+        round0_judge_phase_id,
+        TEST_JUDGEMENT,
+        {"phase": TEST_JUDGEMENT, "decision": "fail", "tests_passed": False},
+    )
+
+    artifact_rows = [
+        ("build_report.md", round0_test_phase_id, "tester", "round0-build-report.md", "tester-1"),
+        ("test_report.md", round0_test_phase_id, "tester", "round0-test-report.md", "tester-1"),
+        ("bug_report.md", round0_test_phase_id, "tester", "round0-bug-report.md", "tester-1"),
+        ("build_report.md", round1_test_phase_id, "tester", "round1-partial-build-report.md", "tester-1"),
+        ("decision.json", round0_judge_phase_id, "judge", "round0-decision.json", "judge-1"),
+        ("decision_summary.md", round0_judge_phase_id, "judge", "round0-decision-summary.md", "judge-1"),
+        ("merged_patch_metadata.md", round1_merge_phase_id, "executor", "round1-merged-metadata.md", "executor-1"),
+        ("merged_patch.diff", round1_merge_phase_id, "executor", "round1-merged.patch", "executor-1"),
+    ]
+    for artifact_type, phase_id, role, filename, agent_id in artifact_rows:
+        path = tmp_path / filename
+        path.write_text(filename, encoding="utf-8")
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id=phase_id,
+                role=role,
+                agent_id=agent_id,
+                artifact_type=artifact_type,
+                path=path,
+                version=1,
+                hash="hash",
+            )
+        )
+
+    for round_id in (0, 1):
+        for artifact_type in ("test_gate.md", "objective_gate.md", "patch_validation.md", "materialized_repo.md"):
+            path = tmp_path / f"round-{round_id}-{artifact_type}"
+            path.write_text(f"# {artifact_type}\n\nround_id: {round_id}\n", encoding="utf-8")
+            orchestrator.repository.create_artifact(
+                ArtifactRef(
+                    artifact_id=str(uuid.uuid4()),
+                    task_id=task_id,
+                    phase_id=round1_merge_phase_id if round_id == 1 else None,
+                    role="orchestrator",
+                    agent_id="orchestrator",
+                    artifact_type=artifact_type,
+                    path=path,
+                    version=round_id + 1,
+                    hash="hash",
+                )
+            )
+
+    staged = orchestrator._stage_input_artifacts(
+        task_id,
+        tmp_path / "input",
+        "executor",
+        FIXING,
+        exclude_phase_id=current_fix_phase_id,
+        round_id=2,
+    )
+    manifest = staged[0].read_text(encoding="utf-8")
+
+    assert "round0-build-report.md" in manifest
+    assert "round0-test-report.md" in manifest
+    assert "round0-bug-report.md" in manifest
+    assert "round1-partial-build-report.md" not in manifest
+    assert "round0-decision.json" in manifest
+    assert "round0-decision-summary.md" in manifest
+    assert "round1-merged-metadata.md" in manifest
+    assert "round1-merged.patch" not in manifest
+    assert "failed_test_round_count_before_current: 2" in manifest
+    assert "failed_test_round_ids_before_current: 0, 1" in manifest
+    assert "latest_visible_complete_test_evidence_round: 0" in manifest
+    assert "failed_test_rounds_without_complete_visible_reports: 1" in manifest
 
 
 def test_invalid_patch_merge_skips_testing_and_enters_fix_round(monkeypatch, tmp_path: Path) -> None:

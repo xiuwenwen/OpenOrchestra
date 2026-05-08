@@ -270,9 +270,9 @@ Used for explanations, analysis, and advice that do not create or modify project
 
 ## Artifact Contract / 交付契约
 
-Every role must write `delivery.md`. Its first non-empty line must be a numeric return code:
+Every role must write `delivery.md`. It must contain a numeric return code field:
 
-每个角色都必须写入 `delivery.md`。第一个非空行必须是 numeric return code：
+每个角色都必须写入 `delivery.md`。文件内必须包含 numeric return code 字段：
 
 ```markdown
 return_code: 0
