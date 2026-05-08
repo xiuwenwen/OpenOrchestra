@@ -1976,10 +1976,17 @@ def test_tester_receives_no_executor_markdown_artifacts(tmp_path: Path) -> None:
             )
         )
 
-    staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input", "tester", "TESTING")
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input", "tester", "TESTING", repo_dir=repo_dir)
     manifest = staged[0].read_text(encoding="utf-8")
 
     assert staged == [tmp_path / "input" / "manifest.md"]
+    assert "## Harness Test Target" in manifest
+    assert f"- repository_dir: {repo_dir}" in manifest
+    assert "- Treat `repository_dir` as the runnable implementation under test." in manifest
+    assert "- app.py" in manifest
     assert "implementation_plan.md" not in manifest
     assert "changed_files.md" not in manifest
     assert "self_check.md" not in manifest
@@ -2013,10 +2020,11 @@ def test_tester_does_not_stage_large_authoritative_patch(tmp_path: Path) -> None
             )
         )
 
-    staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input", "tester", "TESTING")
+    staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input", "tester", "TESTING", repo_dir=tmp_path / "repo")
     manifest = staged[0].read_text(encoding="utf-8")
 
-    assert len(staged) == 1
+    assert staged == [tmp_path / "input" / "manifest.md"]
+    assert "## Harness Test Target" in manifest
     assert "merged_patch.diff" not in manifest
     assert "latest_merged.patch" not in manifest
     assert "old_merged.patch" not in manifest

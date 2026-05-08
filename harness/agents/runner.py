@@ -339,6 +339,7 @@ class AgentPhaseRunner:
                 exclude_phase_id=phase_id,
                 round_id=round_id,
                 current_agent_id=agent_id,
+                repo_dir=workspace.repo_dir,
             )
             task_for_metadata = o.repository.get_task(task_id) or {"task_id": task_id, "user_prompt": user_prompt}
             metadata = o._context_metadata(task_for_metadata, role, phase)

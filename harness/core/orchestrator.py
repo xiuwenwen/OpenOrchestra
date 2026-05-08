@@ -1124,6 +1124,7 @@ class Orchestrator:
         exclude_phase_id: str | None = None,
         round_id: int | None = None,
         current_agent_id: str | None = None,
+        repo_dir: Path | None = None,
     ) -> list[Path]:
         artifacts = self.repository.list_artifacts(task_id)
         phases_by_id = {phase_row["phase_id"]: phase_row for phase_row in self.repository.list_phases(task_id)}
@@ -1131,6 +1132,7 @@ class Orchestrator:
         staged_dir.mkdir(parents=True, exist_ok=True)
         staged_paths: list[Path] = []
         manifest_lines = ["# Input Artifact Manifest", ""]
+        manifest_lines.extend(self._test_target_manifest_lines(task_id, role, phase, round_id, repo_dir))
         target_role = role
         limits = self._artifact_input_limits()
         staged_file_count = 0
@@ -1211,6 +1213,46 @@ class Orchestrator:
         manifest_path = input_dir / "manifest.md"
         manifest_path.write_text("\n".join(manifest_lines), encoding="utf-8")
         return [manifest_path, *staged_paths]
+
+    def _test_target_manifest_lines(
+        self,
+        task_id: str,
+        role: str,
+        phase: str,
+        round_id: int | None,
+        repo_dir: Path | None,
+    ) -> list[str]:
+        if role != "tester" or phase not in {TESTING, REGRESSION_TESTING}:
+            return []
+        task = self.repository.get_task(task_id) or {}
+        repo_metadata = self._repo_context_metadata(task_id, "tester", phase)
+        lines = [
+            "## Harness Test Target",
+            f"- task_id: {task_id}",
+            f"- phase: {phase}",
+            f"- round_id: {round_id if round_id is not None else 'none'}",
+            f"- repository_dir: {repo_dir if repo_dir else 'unavailable'}",
+            f"- repository_source_type: {repo_metadata.get('repository_source_type', 'unknown')}",
+            f"- repository_source_path: {repo_metadata.get('repository_source_path', 'unavailable')}",
+            f"- repository_source_note: {repo_metadata.get('repository_source_note', 'unavailable')}",
+            "",
+            "## What To Test",
+            "",
+            "- Treat `repository_dir` as the runnable implementation under test.",
+            "- Inspect and run build, unit tests, smoke tests, or static checks directly from `repository_dir` when possible.",
+            "- Do not require executor planning notes or patch narrative artifacts to decide the test verdict.",
+            "- Compare observable behavior against the original user request below.",
+            "",
+            "### Original User Request",
+            str(task.get("user_prompt") or "unavailable"),
+        ]
+        if repo_dir and repo_dir.exists():
+            lines.extend(["", "### Repository Snapshot"])
+            for child in sorted(repo_dir.iterdir(), key=lambda item: item.name)[:30]:
+                suffix = "/" if child.is_dir() else ""
+                lines.append(f"- {child.name}{suffix}")
+        lines.append("")
+        return lines
 
     def _testing_failure_context_manifest_lines(
         self,
