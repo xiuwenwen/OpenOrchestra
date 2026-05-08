@@ -63,3 +63,26 @@ def test_state_store_upgrades_existing_tasks_table(tmp_path: Path) -> None:
     assert task is not None
     assert task["workflow_type"] == "new_project"
     assert repo.list_tasks(1)[0]["workflow_type"] == "new_project"
+
+
+def test_repository_task_workflow_and_latest_task_helpers(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    first_task_id = repo.create_task("same prompt")
+    second_task_id = repo.create_task("same prompt")
+
+    repo.set_task_workflow_type(first_task_id, "bugfix")
+
+    assert repo.get_task(first_task_id)["workflow_type"] == "bugfix"
+    assert repo.latest_task_id("same prompt") == second_task_id
+    assert repo.latest_task_id() == second_task_id
+
+
+def test_state_store_creates_query_indexes(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    repo.create_task("indexed")
+
+    with sqlite3.connect(tmp_path / "harness.db") as conn:
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list('artifacts')").fetchall()}
+
+    assert "idx_artifacts_task_type" in indexes
+    assert "idx_artifacts_created_at" in indexes

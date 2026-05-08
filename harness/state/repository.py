@@ -63,6 +63,25 @@ class StateRepository:
                 (configuration, now, task_id),
             )
 
+    def set_task_workflow_type(self, task_id: str, workflow_type: str) -> None:
+        now = utc_now_iso()
+        with self._lock, self.db.connect() as conn:
+            conn.execute(
+                "UPDATE tasks SET workflow_type = ?, updated_at = ? WHERE task_id = ?",
+                (workflow_type, now, task_id),
+            )
+
+    def latest_task_id(self, user_prompt: str | None = None) -> str | None:
+        query = "SELECT task_id FROM tasks"
+        params: list[Any] = []
+        if user_prompt is not None:
+            query += " WHERE user_prompt = ?"
+            params.append(user_prompt)
+        query += " ORDER BY created_at DESC LIMIT 1"
+        with self.db.connect() as conn:
+            row = conn.execute(query, params).fetchone()
+        return row["task_id"] if row else None
+
     def update_task(
         self,
         task_id: str,

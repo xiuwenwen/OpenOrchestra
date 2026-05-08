@@ -56,3 +56,14 @@ CREATE TABLE IF NOT EXISTS judge_decisions (
     created_at TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
+CREATE INDEX IF NOT EXISTS idx_phases_task_id ON phases(task_id);
+CREATE INDEX IF NOT EXISTS idx_phases_task_round ON phases(task_id, round_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_task_id ON agent_runs(task_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_phase_id ON agent_runs(phase_id);
+CREATE INDEX IF NOT EXISTS idx_artifacts_task_id ON artifacts(task_id);
+CREATE INDEX IF NOT EXISTS idx_artifacts_phase_id ON artifacts(phase_id);
+CREATE INDEX IF NOT EXISTS idx_artifacts_task_type ON artifacts(task_id, artifact_type);
+CREATE INDEX IF NOT EXISTS idx_artifacts_created_at ON artifacts(created_at);
+CREATE INDEX IF NOT EXISTS idx_judge_decisions_task_id ON judge_decisions(task_id);
+CREATE INDEX IF NOT EXISTS idx_judge_decisions_phase_id ON judge_decisions(phase_id);

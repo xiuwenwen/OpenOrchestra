@@ -167,10 +167,8 @@ class Orchestrator:
             raise KeyError(f"Task not found: {task_id}")
         workflow_type = normalize_workflow_type(workflow_type or task.get("workflow_type") or NEW_PROJECT)
 
-        # Persist workflow_type if not already set
         if not task.get("workflow_type"):
-            with self.repository._lock, self.repository.db.connect() as conn:
-                conn.execute("UPDATE tasks SET workflow_type = ? WHERE task_id = ?", (workflow_type, task_id))
+            self.repository.set_task_workflow_type(task_id, workflow_type)
 
         user_prompt = self._workflow_prompt(task["user_prompt"], workflow_type)
         self._active_task_id = task_id
@@ -1061,18 +1059,13 @@ class Orchestrator:
         if self._active_task_id:
             return self._active_task_id
         if user_prompt is not None:
-            with self.repository.db.connect() as conn:
-                row = conn.execute(
-                    "SELECT task_id FROM tasks WHERE user_prompt = ? ORDER BY created_at DESC LIMIT 1",
-                    (user_prompt,),
-                ).fetchone()
-            if row:
-                return row["task_id"]
-        with self.repository.db.connect() as conn:
-            row = conn.execute("SELECT task_id FROM tasks ORDER BY created_at DESC LIMIT 1").fetchone()
-        if not row:
+            task_id = self.repository.latest_task_id(user_prompt)
+            if task_id:
+                return task_id
+        task_id = self.repository.latest_task_id()
+        if not task_id:
             raise TaskFailedError("No task exists")
-        return row["task_id"]
+        return task_id
 
     def _emit(self, event: ProgressEvent) -> None:
         if self.progress_callback:
