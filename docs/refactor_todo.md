@@ -35,7 +35,7 @@
 - [x] 迁移 feature change flow。
 - [x] 迁移 misc flow。
 - [x] `Orchestrator.run_task()` 保持 facade，不改变调用方。
-- [ ] 现有 `harness/workflow/*.py` 空壳要么补成真实模块，要么删除。
+- [x] 现有 `harness/workflow/*.py` 空壳要么补成真实模块，要么删除。
 
 ## 4. Agent Run Boundary
 
