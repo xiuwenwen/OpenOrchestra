@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -233,24 +234,29 @@ class StateRepository:
 
     def create_artifact(self, ref: ArtifactRef) -> None:
         with self._lock, self.db.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO artifacts(artifact_id, task_id, phase_id, role, agent_id, artifact_type, version, path, hash, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    ref.artifact_id,
-                    ref.task_id,
-                    ref.phase_id,
-                    ref.role,
-                    ref.agent_id,
-                    ref.artifact_type,
-                    ref.version,
-                    str(ref.path),
-                    ref.hash,
-                    utc_now_iso(),
-                ),
-            )
+            self._insert_artifact(conn, ref)
+
+    def create_artifact_with_next_version(
+        self,
+        task_id: str,
+        artifact_type: str,
+        ref_factory: Callable[[int], ArtifactRef],
+    ) -> ArtifactRef:
+        with self._lock, self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(version) AS max_version FROM artifacts WHERE task_id = ? AND artifact_type = ?",
+                (task_id, artifact_type),
+            ).fetchone()
+            version = int((row["max_version"] if row else None) or 0) + 1
+            ref = ref_factory(version)
+            if ref.task_id != task_id:
+                raise ValueError(f"Artifact task_id mismatch: {ref.task_id!r} != {task_id!r}")
+            if ref.artifact_type != artifact_type:
+                raise ValueError(f"Artifact type mismatch: {ref.artifact_type!r} != {artifact_type!r}")
+            if ref.version != version:
+                raise ValueError(f"Artifact version mismatch: {ref.version!r} != {version!r}")
+            self._insert_artifact(conn, ref)
+            return ref
 
     def list_artifacts(self, task_id: str, artifact_type: str | None = None) -> list[dict[str, Any]]:
         query = "SELECT * FROM artifacts WHERE task_id = ?"
@@ -262,6 +268,26 @@ class StateRepository:
         with self.db.connect() as conn:
             rows = conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
+
+    def _insert_artifact(self, conn: Any, ref: ArtifactRef) -> None:
+        conn.execute(
+            """
+            INSERT INTO artifacts(artifact_id, task_id, phase_id, role, agent_id, artifact_type, version, path, hash, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ref.artifact_id,
+                ref.task_id,
+                ref.phase_id,
+                ref.role,
+                ref.agent_id,
+                ref.artifact_type,
+                ref.version,
+                str(ref.path),
+                ref.hash,
+                utc_now_iso(),
+            ),
+        )
 
     def create_judge_decision(self, task_id: str, phase_id: str | None, decision_type: str, payload: dict[str, Any]) -> str:
         decision_id = str(uuid.uuid4())

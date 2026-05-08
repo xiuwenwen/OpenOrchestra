@@ -23,34 +23,40 @@ class ArtifactManager:
             with self._lock:
                 relative = source.relative_to(output_dir)
                 artifact_type = relative.as_posix()
-                version = self.repository.next_artifact_version(task_id, artifact_type)
                 artifact_id = str(uuid.uuid4())
-                destination = (
-                    self.artifact_root
-                    / task_id
-                    / phase_id
-                    / role
-                    / agent_id
-                    / artifact_type
-                    / f"v{version}"
-                    / source.name
+
+                def build_ref(version: int) -> ArtifactRef:
+                    destination = (
+                        self.artifact_root
+                        / task_id
+                        / phase_id
+                        / role
+                        / agent_id
+                        / artifact_type
+                        / f"v{version}"
+                        / source.name
+                    )
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    if destination.exists():
+                        raise FileExistsError(f"Artifact destination already exists: {destination}")
+                    shutil.copy2(source, destination)
+                    return ArtifactRef(
+                        artifact_id=artifact_id,
+                        task_id=task_id,
+                        phase_id=phase_id,
+                        role=role,
+                        agent_id=agent_id,
+                        artifact_type=artifact_type,
+                        path=destination,
+                        version=version,
+                        hash=sha256_file(destination),
+                    )
+
+                ref = self.repository.create_artifact_with_next_version(
+                    task_id,
+                    artifact_type,
+                    build_ref,
                 )
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                if destination.exists():
-                    raise FileExistsError(f"Artifact destination already exists: {destination}")
-                shutil.copy2(source, destination)
-                ref = ArtifactRef(
-                    artifact_id=artifact_id,
-                    task_id=task_id,
-                    phase_id=phase_id,
-                    role=role,
-                    agent_id=agent_id,
-                    artifact_type=artifact_type,
-                    path=destination,
-                    version=version,
-                    hash=sha256_file(destination),
-                )
-                self.repository.create_artifact(ref)
                 refs.append(ref)
         return refs
 
@@ -64,23 +70,28 @@ class ArtifactManager:
         agent_id: str | None = "harness",
     ) -> ArtifactRef:
         with self._lock:
-            version = self.repository.next_artifact_version(task_id, artifact_type)
             artifact_id = str(uuid.uuid4())
-            destination = self.artifact_root / task_id / "context" / artifact_type / f"v{version}" / Path(artifact_type).name
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists():
-                raise FileExistsError(f"Artifact destination already exists: {destination}")
-            destination.write_text(content, encoding="utf-8")
-            ref = ArtifactRef(
-                artifact_id=artifact_id,
-                task_id=task_id,
-                phase_id=phase_id,
-                role=role,
-                agent_id=agent_id,
-                artifact_type=artifact_type,
-                path=destination,
-                version=version,
-                hash=sha256_file(destination),
+
+            def build_ref(version: int) -> ArtifactRef:
+                destination = self.artifact_root / task_id / "context" / artifact_type / f"v{version}" / Path(artifact_type).name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if destination.exists():
+                    raise FileExistsError(f"Artifact destination already exists: {destination}")
+                destination.write_text(content, encoding="utf-8")
+                return ArtifactRef(
+                    artifact_id=artifact_id,
+                    task_id=task_id,
+                    phase_id=phase_id,
+                    role=role,
+                    agent_id=agent_id,
+                    artifact_type=artifact_type,
+                    path=destination,
+                    version=version,
+                    hash=sha256_file(destination),
+                )
+
+            return self.repository.create_artifact_with_next_version(
+                task_id,
+                artifact_type,
+                build_ref,
             )
-            self.repository.create_artifact(ref)
-            return ref

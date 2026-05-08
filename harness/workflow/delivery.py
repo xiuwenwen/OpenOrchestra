@@ -122,9 +122,9 @@ class DeliveryPublisher:
         o = self.orchestrator
         if not path.exists() or not path.is_file():
             return
-        version = o.repository.next_artifact_version(task_id, artifact_type)
-        o.repository.create_artifact(
-            ArtifactRef(
+
+        def build_ref(version: int) -> ArtifactRef:
+            return ArtifactRef(
                 artifact_id=f"published-{task_id}-{artifact_type}-{version}",
                 task_id=task_id,
                 phase_id=None,
@@ -135,6 +135,11 @@ class DeliveryPublisher:
                 version=version,
                 hash=sha256_file(path),
             )
+
+        o.repository.create_artifact_with_next_version(
+            task_id,
+            artifact_type,
+            build_ref,
         )
 
     def publish_supporting_artifacts(self, task_id: str, project_dir: Path) -> list[tuple[str, Path]]:

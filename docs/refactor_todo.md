@@ -50,7 +50,7 @@
 - [x] Repository 禁止 Orchestrator 访问 `_lock` 和任务查询裸 SQL。
 - [x] 增加语义方法：`set_task_workflow_type()`、`latest_task_id()`。
 - [x] SQLite 增加索引：`task_id`、`phase_id`、`artifact_type`、`created_at`。
-- [ ] 增加唯一约束或事务策略，避免 artifact version 竞争。
+- [x] 增加唯一约束或事务策略，避免 artifact version 竞争。
 - [x] 明确 phase/task/agent 状态机，禁止非法状态跳转。
 
 ## 6. UI Server Boundary

@@ -102,3 +102,28 @@ def test_repository_rejects_invalid_status_values(tmp_path: Path) -> None:
         repo.update_phase_status(phase_id, "OUTPUT_INVALID")
     with pytest.raises(ValueError, match="Invalid agent run status"):
         repo.update_agent_run_status(run_id, "SKIPPED")
+
+
+def test_repository_assigns_artifact_version_inside_insert_lock(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    task_id = repo.create_task("artifact versions")
+    artifact_path = tmp_path / "artifact.md"
+    artifact_path.write_text("ok", encoding="utf-8")
+
+    def build_ref(version: int) -> ArtifactRef:
+        return ArtifactRef(
+            artifact_id=f"artifact-{version}",
+            task_id=task_id,
+            phase_id=None,
+            role="orchestrator",
+            agent_id="harness",
+            artifact_type="artifact.md",
+            path=artifact_path,
+            version=version,
+            hash="hash",
+        )
+
+    first = repo.create_artifact_with_next_version(task_id, "artifact.md", build_ref)
+    second = repo.create_artifact_with_next_version(task_id, "artifact.md", build_ref)
+
+    assert (first.version, second.version) == (1, 2)
