@@ -69,7 +69,7 @@
 
 ## 8. Delivery And Cleanup
 
-- [ ] final delivery 发布逻辑从 Orchestrator 拆出。
+- [x] final delivery 发布逻辑从 Orchestrator 拆出。
 - [ ] 清理 `myHarnessSystem` 旧名称残留。
 - [ ] 清理 pycache、历史生成目录、临时 workspace。
 - [ ] 架构文档同步到真实模块边界。
