@@ -56,7 +56,8 @@
 ## 6. UI Server Boundary
 
 - [x] 文件读取安全策略拆出到 `HarnessFileReader`。
-- [ ] 继续拆分 `HarnessStateView`、API handler、HTML/JS 字符串。
+- [x] API handler 拆出到 `harness/ui/api.py`。
+- [ ] 继续拆分 `HarnessStateView` 和 HTML/JS 字符串。
 - [x] UI API 增加稳定错误码。
 - [x] UI API 增加基础请求 schema validation。
 - [x] 配置 UI 显示当前配置来源：runtime、task override、persisted default。
