@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenOrchestra</title>
+  <style>{{ OPENORCHESTRA_CSS }}</style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <span class="logo">OpenOrchestra</span>
+      <span class="header-task" id="headerTask"></span>
+    </div>
+    <div class="header-right">
+      <button class="btn" style="padding:4px 10px;font-size:12px;margin-right:15px;background:transparent;border-color:var(--border-muted)" onclick="openConfig()"><span data-i18n="settings">设置</span></button>
+      <div class="seg"><button id="langZh" class="on" onclick="setLang('zh')">中</button><button id="langEn" onclick="setLang('en')">EN</button></div>
+      <span id="heartbeat"></span>
+    </div>
+  </div>
+  <div class="shell">
+    <div class="sidebar">
+      <h2 data-i18n="taskHistory">任务历史</h2>
+      <div id="tasks"></div>
+    </div>
+    <div class="content">
+      <div class="summary" id="summary"></div>
+      <div class="pipe-wrap"><div class="pipe" id="pipeline"></div></div>
+      <div class="role-bar" id="roleBar"></div>
+      <div class="detail" id="detail">
+        <div class="detail-left" id="detailLeft"></div>
+        <div class="detail-right" id="detailRight">
+          <div class="viewer-head">
+            <span class="viewer-path" id="viewerPath" data-i18n="selectFile">点击文件按钮查看内容</span>
+            <button class="detail-close" onclick="clearViewer()" data-i18n="clear">清空</button>
+          </div>
+          <div class="viewer-note" id="translationNote"></div>
+          <pre id="fileText"></pre>
+        </div>
+      </div>
+      <div class="logbar" id="logbar">
+        <div class="logbar-head" onclick="toggleLog()">
+          <span class="logbar-title"><span data-i18n="activityLog">活动日志</span><span class="log-badge" id="logBadge">0</span></span>
+          <span class="logbar-preview" id="logPreview"></span>
+        </div>
+        <div class="log-body" id="logBody"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="configModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="configTitle">任务配置 / Task Config</h3>
+        <button class="modal-close" onclick="closeConfig()">✕</button>
+      </div>
+      <div class="modal-body" id="configBody"></div>
+      <div class="modal-footer">
+        <span id="configStatus" style="font-size:12px;color:var(--warn);margin-right:auto;"></span>
+        <button class="btn" onclick="closeConfig()">取消 / Cancel</button>
+        <button class="btn primary" id="configSaveBtn" onclick="saveConfig()">保存 / Save</button>
+      </div>
+    </div>
+  </div>
+
+<script>{{ OPENORCHESTRA_JS }}</script></body></html>

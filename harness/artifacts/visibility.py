@@ -24,6 +24,7 @@ from harness.artifacts.schemas import (
     TEST_REPORT_ARTIFACTS,
     ArtifactVisibilityRule,
     _phases,
+    role_phase_contract_for,
 )
 from harness.core.state_machine import (
     PLAN_REVIEW,
@@ -122,6 +123,9 @@ class ArtifactVisibilityPolicy:
         return filtered
 
     def rules_for(self, role: str, phase: str) -> list[ArtifactVisibilityRule]:
+        contract = role_phase_contract_for(role, phase)
+        if contract.visibility_rules:
+            return list(contract.visibility_rules)
         return [rule for rule in ARTIFACT_VISIBILITY_RULES if rule.target_role == role and rule.target_phase in {phase, ANY_PHASE}]
 
     def allowed_by_table(self, target_role: str, target_phase: str, source_role: str, artifact_type: str) -> bool:

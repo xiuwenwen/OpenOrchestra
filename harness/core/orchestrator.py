@@ -1,11 +1,6 @@
 from __future__ import annotations
 
 import json
-import shlex
-import shutil
-import subprocess
-import sys
-import time
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -15,16 +10,16 @@ from harness.adapters.claude_code_adapter import ClaudeCodeAdapter
 from harness.adapters.codex_cli_adapter import CodexCLIAdapter
 from harness.adapters.headless_cli_adapter import HeadlessCLIAdapter
 from harness.adapters.mock_adapter import MockAgentAdapter
-from harness.agents.result import AgentRunResult, ArtifactRef
+from harness.agents.result import AgentRunResult
 from harness.agents.runner import AgentPhaseRunner
-from harness.artifacts.hashing import sha256_file
 from harness.artifacts.manager import ArtifactManager
 from harness.artifacts.schemas import required_outputs_for
 from harness.artifacts.validator import ArtifactValidator
-from harness.artifacts.visibility import ARTIFACT_VISIBILITY_RULES, TEST_REPORT_ARTIFACTS, ArtifactVisibilityPolicy
+from harness.artifacts.visibility import ARTIFACT_VISIBILITY_RULES, ArtifactVisibilityPolicy
 from harness.communication.communicator import Communicator
 from harness.config.loader import load_config
 from harness.config.runtime import RuntimeConfigService
+from harness.context.staging import InputStagingService
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressCallback, ProgressEvent
 from harness.core.state_machine import (
@@ -37,30 +32,22 @@ from harness.core.state_machine import (
     FIXING,
     MISC_RESPONSE,
     PATCH_MERGE,
-    PLAN_REVIEW,
-    PLAN_JUDGEMENT,
     PLANNING_DRAFT,
     PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
-    REGRESSION_TESTING,
     REVIEW_FIXING,
     REVIEW_JUDGEMENT,
     REVIEWING,
     RUNNING,
     TEST_JUDGEMENT,
-    TESTING,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT, normalize_workflow_type
 from harness.judge.decision_parser import parse_decision_file
 from harness.judge.judge_runner import MockJudge
 from harness.logs.logger import get_logger
-from harness.patch.gate import (
-    PatchGatePolicy,
-    materialized_repo_markdown,
-    objective_gate_markdown,
-    patch_validation_markdown,
-    run_patch_gate,
-)
+from harness.gates.patch_gate import PatchGateService
+from harness.gates.test_gate import TestGateService
+from harness.materialization.service import MaterializedRepoService
 from harness.prompts.builder import PromptBuilder
 from harness.state.db import StateDB
 from harness.state.repository import StateRepository
@@ -116,8 +103,6 @@ ROLE_INSTRUCTIONS = {
     ),
 }
 
-
-MATERIALIZED_SUCCESS_MARKER = ".harness_materialized_success.json"
 SINGLE_EXECUTOR_FIX_PHASES = {FIXING, REVIEW_FIXING}
 FixRoundLimitCallback = Callable[[str, int], str]
 
@@ -144,6 +129,40 @@ class Orchestrator:
         self.judge = MockJudge()
         self.prompt_builder = PromptBuilder()
         self.role_instructions = ROLE_INSTRUCTIONS
+        self.materialized_repo_service = MaterializedRepoService(
+            self.repository,
+            self.workspace_manager,
+            config=self.config,
+            markdown_field=self._markdown_field,
+            active_task_id=lambda: self._active_task_id,
+            active_workflow_type=lambda: self._active_workflow_type,
+        )
+        self.test_gate_service = TestGateService(
+            config=self.config,
+            repository=self.repository,
+            artifact_manager=self.artifact_manager,
+            latest_materialized_repo=self.materialized_repo_service.latest_materialized_repo,
+            markdown_field=self._markdown_field,
+        )
+        self.patch_gate_service = PatchGateService(
+            config=self.config,
+            repository=self.repository,
+            artifact_manager=self.artifact_manager,
+            source_repo_for_task=self.materialized_repo_service.source_repo_for_existing_project_task,
+            materialized_repo_dir=self.materialized_repo_service.materialized_repo_dir,
+            copy_source=self.materialized_repo_service.copy_source_for_patch_validation,
+            write_success_marker=self.materialized_repo_service.write_materialized_success_marker,
+            emit=self._emit,
+            positive_int=self._positive_int,
+        )
+        self.input_staging_service = InputStagingService(
+            config=self.config,
+            repository=self.repository,
+            visibility=self.artifact_visibility,
+            judge=self.judge,
+            repo_context_metadata=self.materialized_repo_service.repo_context_metadata,
+            positive_int=self._positive_int,
+        )
         self.agent_runner = AgentPhaseRunner(self)
         self.delivery_publisher = DeliveryPublisher(self)
         self.workflow_engine = WorkflowEngine(self)
@@ -536,113 +555,23 @@ class Orchestrator:
         return None
 
     def _run_harness_test_gate(self, task_id: str, round_id: int) -> bool:
-        repo_dir = self._latest_materialized_repo(task_id)
-        commands = self._harness_test_commands(repo_dir)
-        log_dir = self.artifact_manager.artifact_root / task_id / "context" / "test_gate_logs" / f"round_{round_id}"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        results: list[dict[str, Any]] = []
-        status = "skipped"
-        if repo_dir is None:
-            status = "fail"
-            results.append({"command": "n/a", "exit_code": None, "stdout": "", "stderr": "No materialized repo exists."})
-        elif commands:
-            status = "pass"
-            for index, command in enumerate(commands, start=1):
-                stdout_path = log_dir / f"command_{index}.stdout.log"
-                stderr_path = log_dir / f"command_{index}.stderr.log"
-                try:
-                    argv = self._harness_test_command_argv(command)
-                    completed = subprocess.run(
-                        argv,
-                        cwd=repo_dir,
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                        timeout=int(self.config.get("testing", {}).get("timeout_seconds", 120)),
-                    )
-                    exit_code: int | str = completed.returncode
-                    stdout = completed.stdout
-                    stderr = completed.stderr
-                except subprocess.TimeoutExpired as exc:
-                    exit_code = "timeout"
-                    stdout = self._timeout_output_to_text(exc.stdout)
-                    stderr = self._timeout_output_to_text(exc.stderr)
-                    stderr = (stderr + "\n" if stderr else "") + f"Command timed out after {exc.timeout}s."
-                stdout_path.write_text(stdout, encoding="utf-8")
-                stderr_path.write_text(stderr, encoding="utf-8")
-                results.append(
-                    {
-                        "command": command,
-                        "exit_code": exit_code,
-                        "stdout": str(stdout_path),
-                        "stderr": str(stderr_path),
-                    }
-                )
-                if exit_code != 0:
-                    status = "fail"
-        elif self._require_harness_test_commands():
-            status = "fail"
-            results.append({"command": "n/a", "exit_code": None, "stdout": "", "stderr": "No Harness test command configured or detected."})
-        report = self._test_gate_report(task_id, round_id, repo_dir, status, results)
-        self.artifact_manager.create_text_artifact(
-            task_id,
-            "test_gate.md",
-            report,
-            role="orchestrator",
-            agent_id="test-gate",
-        )
-        return status == "pass"
+        self.test_gate_service.latest_materialized_repo = self._latest_materialized_repo
+        return self.test_gate_service.run(task_id, round_id)
 
     def _harness_test_command_argv(self, command: str) -> list[str]:
-        try:
-            argv = shlex.split(command)
-        except ValueError as exc:
-            raise TaskFailedError(f"Invalid Harness test command: {command!r}: {exc}") from exc
-        if not argv:
-            raise TaskFailedError("Invalid Harness test command: command is empty")
-        return argv
+        return self.test_gate_service.harness_test_command_argv(command)
 
     def _timeout_output_to_text(self, value: str | bytes | None) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, bytes):
-            return value.decode("utf-8", errors="replace")
-        return value
+        return self.test_gate_service.timeout_output_to_text(value)
 
     def _require_harness_test_commands(self) -> bool:
-        testing = self.config.get("testing", {})
-        return bool(testing.get("require_commands", False)) if isinstance(testing, dict) else False
+        return self.test_gate_service.require_harness_test_commands()
 
     def _harness_test_commands(self, repo_dir: Path | None) -> list[str]:
-        testing = self.config.get("testing", {})
-        configured = testing.get("commands") if isinstance(testing, dict) else None
-        if isinstance(configured, list) and configured:
-            return [str(command) for command in configured if str(command).strip()]
-        if repo_dir is None:
-            return []
-        if (repo_dir / "tests").exists():
-            return [f"{sys.executable} -m pytest -q"]
-        if self._repo_has_python_files(repo_dir):
-            return [f"{sys.executable} -m compileall -q ."]
-        package_json = repo_dir / "package.json"
-        if package_json.exists() and shutil.which("npm"):
-            try:
-                payload = json.loads(package_json.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                return []
-            scripts = payload.get("scripts") if isinstance(payload, dict) else None
-            if isinstance(scripts, dict) and scripts.get("test"):
-                return ["npm test"]
-            if isinstance(scripts, dict) and scripts.get("build"):
-                return ["npm run build"]
-        return []
+        return self.test_gate_service.harness_test_commands(repo_dir)
 
     def _repo_has_python_files(self, repo_dir: Path) -> bool:
-        for path in repo_dir.rglob("*.py"):
-            if any(part in {".venv", "venv", "__pycache__"} for part in path.parts):
-                continue
-            return True
-        return False
+        return self.test_gate_service.repo_has_python_files(repo_dir)
 
     def _test_gate_report(
         self,
@@ -652,67 +581,13 @@ class Orchestrator:
         status: str,
         results: list[dict[str, Any]],
     ) -> str:
-        lines = [
-            "# Harness Test Gate",
-            "",
-            f"status: {status}",
-            f"task_id: {task_id}",
-            f"round_id: {round_id}",
-            f"repo_path: {repo_dir or 'none'}",
-            "",
-            "## Evidence JSON",
-            "",
-            "```json",
-            json.dumps(self._test_gate_evidence(status, results), ensure_ascii=False, indent=2, sort_keys=True),
-            "```",
-            "",
-            "## Commands",
-            "",
-        ]
-        if not results:
-            lines.append("- none")
-        for result in results:
-            lines.extend(
-                [
-                    f"- command: {result['command']}",
-                    f"  exit_code: {result['exit_code'] if result['exit_code'] is not None else 'n/a'}",
-                    f"  stdout: {result['stdout'] or '-'}",
-                    f"  stderr: {result['stderr'] or '-'}",
-                ]
-            )
-        lines.append("")
-        return "\n".join(lines)
+        return self.test_gate_service.test_gate_report(task_id, round_id, repo_dir, status, results)
 
     def _test_gate_evidence(self, status: str, results: list[dict[str, Any]]) -> dict[str, Any]:
-        exit_codes = [result.get("exit_code") for result in results if result.get("exit_code") is not None]
-        numeric_exit_codes = [code for code in exit_codes if isinstance(code, int)]
-        first_exit_code = exit_codes[0] if exit_codes else None
-        return {
-            "status": status,
-            "build_exit_code": first_exit_code,
-            "test_exit_code": 0 if numeric_exit_codes and all(code == 0 for code in numeric_exit_codes) else first_exit_code,
-            "commands": [
-                {
-                    "command": result.get("command"),
-                    "exit_code": result.get("exit_code"),
-                    "stdout": result.get("stdout"),
-                    "stderr": result.get("stderr"),
-                }
-                for result in results
-            ],
-        }
+        return self.test_gate_service.test_gate_evidence(status, results)
 
     def _test_gate_status(self, task_id: str, round_id: int) -> str | None:
-        for artifact in reversed(self.repository.list_artifacts(task_id, "test_gate.md")):
-            path = Path(artifact["path"])
-            if not path.exists() or not path.is_file():
-                continue
-            content = path.read_text(encoding="utf-8", errors="replace")
-            if self._markdown_field(content, "round_id") != str(round_id):
-                continue
-            status = self._markdown_field(content, "status")
-            return status.lower() if status else None
-        return None
+        return self.test_gate_service.status_for_round(task_id, round_id)
 
     def _run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:
         self.run_role_phase(
@@ -726,125 +601,25 @@ class Orchestrator:
         return self._run_patch_validation(task_id, round_id)
 
     def _run_patch_validation(self, task_id: str, round_id: int) -> bool:
-        latest = self._latest_merged_patch_for_round(task_id, round_id)
-        if not latest:
-            return False
-        patch_path = Path(latest["path"])
-        if not patch_path.exists():
-            return False
-        source_repo = self._source_repo_for_existing_project_task(task_id)
-        gate_result = run_patch_gate(
-            patch_path=patch_path,
-            source_repo=source_repo,
-            materialized_repo_dir=self._materialized_repo_dir(task_id, round_id),
-            policy=self._patch_gate_policy(),
-            copy_source=self._copy_source_for_patch_validation,
-        )
-        if gate_result.materialized_repo:
-            self._write_materialized_success_marker(gate_result.materialized_repo, task_id, round_id, patch_path)
-        report = patch_validation_markdown(gate_result)
-        materialize_report = materialized_repo_markdown(gate_result, task_id, round_id)
-        objective_report = objective_gate_markdown(gate_result, task_id, round_id)
-        ref = self.artifact_manager.create_text_artifact(
-            task_id,
-            "patch_validation.md",
-            report,
-            phase_id=latest.get("phase_id"),
-            role="orchestrator",
-            agent_id="patch-validator",
-        )
-        materialized_ref = self.artifact_manager.create_text_artifact(
-            task_id,
-            "materialized_repo.md",
-            materialize_report,
-            phase_id=latest.get("phase_id"),
-            role="orchestrator",
-            agent_id="patch-materializer",
-        )
-        objective_ref = self.artifact_manager.create_text_artifact(
-            task_id,
-            "objective_gate.md",
-            objective_report,
-            phase_id=latest.get("phase_id"),
-            role="orchestrator",
-            agent_id="objective-gate",
-        )
-        self._emit(
-            ProgressEvent(
-                "patch_validated",
-                task_id=task_id,
-                phase=PATCH_MERGE,
-                role="orchestrator",
-                agent_id="patch-validator",
-                round_id=round_id,
-                status=gate_result.status.upper(),
-                message=f"Objective patch gate {gate_result.status}",
-                data={
-                    "artifacts": 3,
-                    "patch_validation": str(ref.path),
-                    "materialized_repo_report": str(materialized_ref.path),
-                    "objective_gate": str(objective_ref.path),
-                    "materialized_repo": str(gate_result.materialized_repo) if gate_result.materialized_repo else "-",
-                },
-            )
-        )
-        return gate_result.status == "pass"
+        return self.patch_gate_service.run_validation(task_id, round_id)
 
-    def _patch_gate_policy(self) -> PatchGatePolicy:
-        configured = self.config.get("patch_gate", {})
-        if not isinstance(configured, dict):
-            return PatchGatePolicy()
-        return PatchGatePolicy(
-            max_changed_lines=self._positive_int(configured.get("max_changed_lines"), 20_000, "patch_gate.max_changed_lines"),
-            max_deleted_files=self._positive_int(configured.get("max_deleted_files"), 50, "patch_gate.max_deleted_files"),
-        )
+    def _patch_gate_policy(self):
+        return self.patch_gate_service.policy()
 
     def _latest_merged_patch_for_round(self, task_id: str, round_id: int) -> dict[str, Any] | None:
-        patch_merge_phase_ids = {
-            phase["phase_id"]
-            for phase in self.repository.list_phases(task_id)
-            if phase["phase_type"] == PATCH_MERGE and phase["round_id"] == round_id
-        }
-        if not patch_merge_phase_ids:
-            return None
-        candidates = [
-            artifact
-            for artifact in self.repository.list_artifacts(task_id, "merged_patch.diff")
-            if artifact.get("phase_id") in patch_merge_phase_ids
-        ]
-        return candidates[-1] if candidates else None
+        return self.patch_gate_service.latest_merged_patch_for_round(task_id, round_id)
 
     def _copy_source_for_patch_validation(self, source_repo: Path, destination: Path) -> None:
-        shutil.copytree(
-            source_repo,
-            destination,
-            ignore=lambda directory, names: {
-                name
-                for name in names
-                if name in WorkspaceManager.DEFAULT_COPY_IGNORE_NAMES
-                or self._is_relative_to((Path(directory) / name).resolve(), self.workspace_manager.workspace_root)
-            },
-        )
+        self.materialized_repo_service.copy_source_for_patch_validation(source_repo, destination)
 
     def _materialized_repo_status(self, report: str) -> str:
-        return self._materialized_repo_field(report, "status") or "unknown"
+        return self.materialized_repo_service.materialized_repo_status(report)
 
     def _materialized_repo_field(self, report: str, field_name: str) -> str | None:
-        prefix = f"{field_name}: "
-        for line in report.splitlines():
-            if line.startswith(prefix):
-                return line.split(":", 1)[1].strip().lower()
-        return None
+        return self.materialized_repo_service.materialized_repo_field(report, field_name)
 
     def _write_materialized_success_marker(self, repo_dir: Path, task_id: str, round_id: int, patch_path: Path) -> None:
-        marker = {
-            "status": "success",
-            "task_id": task_id,
-            "round_id": round_id,
-            "patch_path": str(patch_path),
-            "patch_hash": sha256_file(patch_path) if patch_path.exists() else None,
-        }
-        (repo_dir / MATERIALIZED_SUCCESS_MARKER).write_text(json.dumps(marker, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self.materialized_repo_service.write_materialized_success_marker(repo_dir, task_id, round_id, patch_path)
 
     def _backend_for(self, task_id: str | None, role: str) -> str:
         return self.config_service.backend_for(task_id, role)
@@ -861,73 +636,22 @@ class Orchestrator:
         raise ValueError(f"Unsupported agent backend: {backend}")
 
     def _source_repo_for_workspace(self) -> Path | None:
-        if self._active_task_id:
-            return self._source_repo_for_existing_project_task(self._active_task_id)
-        if self._active_workflow_type in {BUGFIX, FEATURE_CHANGE}:
-            return self._configured_source_repo()
-        return None
+        return self.materialized_repo_service.source_repo_for_workspace()
 
     def _source_repo_for_existing_project_task(self, task_id: str) -> Path | None:
-        if not self._task_uses_existing_project_source(task_id):
-            return None
-        return self._project_context_source_repo(task_id) or self._configured_source_repo()
+        return self.materialized_repo_service.source_repo_for_existing_project_task(task_id)
 
     def _task_uses_existing_project_source(self, task_id: str) -> bool:
-        if self._active_task_id == task_id and self._active_workflow_type:
-            workflow_type = self._active_workflow_type
-        else:
-            task = self.repository.get_task(task_id)
-            workflow_type = str(task.get("workflow_type") or NEW_PROJECT) if task else NEW_PROJECT
-        return normalize_workflow_type(workflow_type) in {BUGFIX, FEATURE_CHANGE}
+        return self.materialized_repo_service.task_uses_existing_project_source(task_id)
 
     def _project_context_source_repo(self, task_id: str) -> Path | None:
-        for artifact in reversed(self.repository.list_artifacts(task_id, "project_context.md")):
-            path = Path(artifact["path"])
-            if not path.exists() or not path.is_file():
-                continue
-            content = path.read_text(encoding="utf-8", errors="replace")
-            for candidate in self._project_context_source_candidates(content):
-                resolved = candidate.expanduser().resolve()
-                if resolved.exists() and resolved.is_dir():
-                    return resolved
-        return None
+        return self.materialized_repo_service.project_context_source_repo(task_id)
 
     def _project_context_source_candidates(self, content: str) -> list[Path]:
-        explicit_source_paths: list[Path] = []
-        success_source_paths: list[Path] = []
-        fallback_repo_paths: list[Path] = []
-        for raw_line in content.splitlines():
-            line = raw_line.strip()
-            for prefix in ("Historical source_repo:", "- source_repo:"):
-                value = self._context_line_value(line, prefix)
-                if value:
-                    explicit_source_paths.append(Path(value))
-            for prefix in (
-                "Historical materialized_source:",
-                "Historical materialized_source_candidate:",
-                "Historical partial_materialized_source:",
-                "- materialized_source:",
-                "- materialized_source_candidate:",
-                "- partial_materialized_source:",
-            ):
-                value = self._context_line_value(line, prefix)
-                if value:
-                    explicit_source_paths.append(Path(value))
-            for prefix in ("Historical success_path:", "- success_path:"):
-                value = self._context_line_value(line, prefix)
-                if value:
-                    success_source_paths.append(Path(value) / "source")
-            for prefix in ("Historical latest_agent_repo_workspace:", "- latest_agent_repo_workspace:"):
-                value = self._context_line_value(line, prefix)
-                if value:
-                    fallback_repo_paths.append(Path(value))
-        return explicit_source_paths + success_source_paths + fallback_repo_paths
+        return self.materialized_repo_service.project_context_source_candidates(content)
 
     def _context_line_value(self, line: str, prefix: str) -> str | None:
-        if not line.startswith(prefix):
-            return None
-        value = line[len(prefix) :].strip()
-        return value or None
+        return self.materialized_repo_service.context_line_value(line, prefix)
 
     def _effective_agent_count(self, task_id: str, role: str, phase: str, agent_count_override: int | None = None) -> int:
         if role == "executor" and phase in SINGLE_EXECUTOR_FIX_PHASES:
@@ -940,80 +664,25 @@ class Orchestrator:
         return self.config_service.role_count(task_id, role)
 
     def _should_use_materialized_repo(self, role: str, phase: str) -> bool:
-        if role == "executor":
-            return phase in {FIXING, REVIEW_FIXING}
-        if role == "tester":
-            return phase in {TESTING, REGRESSION_TESTING}
-        if role == "reviewer":
-            return phase != PLAN_REVIEW
-        if role == "judge":
-            return phase != PLAN_JUDGEMENT
-        if role == "communicator":
-            return True
-        return False
+        return self.materialized_repo_service.should_use_materialized_repo(role, phase)
 
     def _prepare_materialized_workspace_repo(self, task_id: str, role: str, phase: str, repo_dir: Path) -> None:
-        if not self._should_use_materialized_repo(role, phase):
-            return
-        materialized_repo = self._latest_materialized_repo(task_id)
-        if not materialized_repo:
-            return
-        if repo_dir.exists():
-            shutil.rmtree(repo_dir)
-        shutil.copytree(materialized_repo, repo_dir, ignore=self._copy_ignore_for_materialized_workspace)
+        self.materialized_repo_service.prepare_workspace_repo(task_id, role, phase, repo_dir)
 
     def _copy_ignore_for_materialized_workspace(self, directory: str, names: list[str]) -> set[str]:
-        return {
-            name
-            for name in names
-            if name in {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", MATERIALIZED_SUCCESS_MARKER}
-        }
+        return self.materialized_repo_service.copy_ignore_for_materialized_workspace(directory, names)
 
     def _repo_context_metadata(self, task_id: str, role: str, phase: str) -> dict[str, Any]:
-        if self._should_use_materialized_repo(role, phase):
-            materialized_repo = self._latest_materialized_repo(task_id)
-            if materialized_repo:
-                return {
-                    "repository_source_type": "materialized_merged_patch",
-                    "repository_source_path": str(materialized_repo),
-                    "repository_source_note": "This role's repository directory was copied from the latest Harness materialized merged patch.",
-                }
-        project_context_source_repo = (
-            self._project_context_source_repo(task_id)
-            if self._task_uses_existing_project_source(task_id)
-            else None
-        )
-        if project_context_source_repo:
-            return {
-                "repository_source_type": "project_context_source_repo",
-                "repository_source_path": str(project_context_source_repo),
-                "repository_source_note": "This role's repository directory was copied from the source repo selected from project_context.md.",
-            }
-        source_repo = self._source_repo_for_workspace()
-        if source_repo:
-            return {
-                "repository_source_type": "configured_source_repo",
-                "repository_source_path": str(source_repo),
-            }
-        return {"repository_source_type": "empty_workspace_repo"}
+        return self.materialized_repo_service.repo_context_metadata(task_id, role, phase)
 
     def _materialized_root(self, task_id: str) -> Path:
-        return self.workspace_manager.workspace_root / task_id / "_materialized"
+        return self.materialized_repo_service.materialized_root(task_id)
 
     def _materialized_repo_dir(self, task_id: str, round_id: int) -> Path:
-        return self._materialized_root(task_id) / f"round_{round_id}" / "repo"
+        return self.materialized_repo_service.materialized_repo_dir(task_id, round_id)
 
     def _latest_materialized_repo(self, task_id: str) -> Path | None:
-        latest_success_round = self._latest_successful_materialized_round_from_artifacts(task_id)
-        if latest_success_round is None:
-            return None
-        root = self._materialized_root(task_id)
-        if not root.exists():
-            return None
-        candidate = self._materialized_repo_dir(task_id, latest_success_round)
-        if not self._materialized_success_marker_ok(candidate, task_id, latest_success_round):
-            return None
-        return candidate
+        return self.materialized_repo_service.latest_materialized_repo(task_id)
 
     def _materialized_round_number(self, path: Path) -> int:
         try:
@@ -1022,40 +691,13 @@ class Orchestrator:
             return -1
 
     def _latest_successful_materialized_round_from_artifacts(self, task_id: str) -> int | None:
-        artifacts = self.repository.list_artifacts(task_id, "materialized_repo.md")
-        for artifact in reversed(artifacts):
-            path = Path(artifact["path"])
-            if not path.exists():
-                continue
-            text = path.read_text(encoding="utf-8", errors="replace")
-            if self._materialized_repo_status(text) != "success":
-                return None
-            round_id = self._extract_materialized_report_round(text)
-            return round_id
-        return None
+        return self.materialized_repo_service.latest_successful_materialized_round_from_artifacts(task_id)
 
     def _extract_materialized_report_round(self, report: str) -> int | None:
-        for line in report.splitlines():
-            if line.startswith("round_id: "):
-                try:
-                    return int(line.split(":", 1)[1].strip())
-                except ValueError:
-                    return None
-        return None
+        return self.materialized_repo_service.extract_materialized_report_round(report)
 
     def _materialized_success_marker_ok(self, repo_dir: Path, task_id: str, round_id: int) -> bool:
-        marker_path = repo_dir / MATERIALIZED_SUCCESS_MARKER
-        if not repo_dir.is_dir() or not marker_path.is_file():
-            return False
-        try:
-            payload = json.loads(marker_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return False
-        return (
-            payload.get("status") == "success"
-            and payload.get("task_id") == task_id
-            and int(payload.get("round_id", -1)) == round_id
-        )
+        return self.materialized_repo_service.materialized_success_marker_ok(repo_dir, task_id, round_id)
 
     def _single_active_task_id(self, user_prompt: str | None) -> str:
         if self._active_task_id:
@@ -1070,6 +712,18 @@ class Orchestrator:
         return task_id
 
     def _emit(self, event: ProgressEvent) -> None:
+        self.repository.record_event(
+            event_type=event.event_type,
+            task_id=event.task_id,
+            phase=event.phase,
+            role=event.role,
+            agent_id=event.agent_id,
+            round_id=event.round_id,
+            attempt=event.attempt,
+            status=event.status,
+            message=event.message,
+            payload=event.data,
+        )
         if self.progress_callback:
             self.progress_callback(event)
 
@@ -1126,93 +780,16 @@ class Orchestrator:
         current_agent_id: str | None = None,
         repo_dir: Path | None = None,
     ) -> list[Path]:
-        artifacts = self.repository.list_artifacts(task_id)
-        phases_by_id = {phase_row["phase_id"]: phase_row for phase_row in self.repository.list_phases(task_id)}
-        staged_dir = input_dir / "artifacts"
-        staged_dir.mkdir(parents=True, exist_ok=True)
-        staged_paths: list[Path] = []
-        manifest_lines = ["# Input Artifact Manifest", ""]
-        manifest_lines.extend(self._test_target_manifest_lines(task_id, role, phase, round_id, repo_dir))
-        target_role = role
-        limits = self._artifact_input_limits()
-        staged_file_count = 0
-        staged_total_bytes = 0
-        visible_artifacts = [
-            artifact
-            for artifact in artifacts
-            if not (exclude_phase_id and artifact["phase_id"] == exclude_phase_id)
-        ]
-        visible_artifacts = self.artifact_visibility.filter_visible_artifacts(
-            visible_artifacts,
-            phases_by_id,
+        return self.input_staging_service.stage(
+            task_id,
+            input_dir,
             role,
             phase,
-            round_id,
+            exclude_phase_id=exclude_phase_id,
+            round_id=round_id,
             current_agent_id=current_agent_id,
+            repo_dir=repo_dir,
         )
-        manifest_lines.extend(
-            self._testing_failure_context_manifest_lines(
-                task_id,
-                artifacts,
-                phases_by_id,
-                role,
-                phase,
-                round_id,
-            )
-        )
-        for index, artifact in enumerate(reversed(visible_artifacts), start=1):
-            source = Path(artifact["path"])
-            if not source.exists():
-                continue
-            source_size = source.stat().st_size
-            staging_mode = self._artifact_staging_mode(role, phase, artifact, source)
-            if staging_mode == "path_only":
-                self._append_path_only_artifact_manifest(
-                    manifest_lines,
-                    index,
-                    artifact,
-                    source,
-                    "large artifact indexed by path only to avoid repeating full content in model context",
-                )
-                continue
-            if staged_file_count >= limits["max_files"]:
-                self._append_skipped_artifact_manifest(manifest_lines, index, artifact, source, "max_files exceeded")
-                continue
-            remaining_total_bytes = limits["max_total_bytes"] - staged_total_bytes
-            if remaining_total_bytes <= 0:
-                self._append_skipped_artifact_manifest(manifest_lines, index, artifact, source, "max_total_bytes exceeded")
-                continue
-            safe_type = artifact["artifact_type"].replace("/", "__").replace(" ", "_")
-            artifact_role = artifact["role"] or "unknown"
-            agent_id = artifact["agent_id"] or "unknown"
-            version = artifact["version"]
-            destination = staged_dir / f"{index:03d}_{artifact_role}_{agent_id}_{safe_type}_v{version}_{source.name}"
-            copied_bytes, truncated = self._copy_artifact_with_budget(
-                source,
-                destination,
-                max_file_bytes=self._artifact_max_file_bytes(limits["max_file_bytes"], staging_mode),
-                remaining_total_bytes=remaining_total_bytes,
-            )
-            staged_total_bytes += copied_bytes
-            staged_file_count += 1
-            staged_paths.append(destination)
-            manifest_lines.extend(
-                [
-                    f"## {index}. {artifact['artifact_type']} v{version}",
-                    f"- local_path: {destination}",
-                    f"- source_path: {source}",
-                    f"- role: {artifact_role}",
-                    f"- agent_id: {agent_id}",
-                    f"- phase_id: {artifact['phase_id']}",
-                    f"- source_bytes: {source_size}",
-                    f"- staged_bytes: {copied_bytes}",
-                    f"- truncated: {str(truncated).lower()}",
-                    "",
-                ]
-            )
-        manifest_path = input_dir / "manifest.md"
-        manifest_path.write_text("\n".join(manifest_lines), encoding="utf-8")
-        return [manifest_path, *staged_paths]
 
     def _test_target_manifest_lines(
         self,
@@ -1222,37 +799,7 @@ class Orchestrator:
         round_id: int | None,
         repo_dir: Path | None,
     ) -> list[str]:
-        if role != "tester" or phase not in {TESTING, REGRESSION_TESTING}:
-            return []
-        task = self.repository.get_task(task_id) or {}
-        repo_metadata = self._repo_context_metadata(task_id, "tester", phase)
-        lines = [
-            "## Harness Test Target",
-            f"- task_id: {task_id}",
-            f"- phase: {phase}",
-            f"- round_id: {round_id if round_id is not None else 'none'}",
-            f"- repository_dir: {repo_dir if repo_dir else 'unavailable'}",
-            f"- repository_source_type: {repo_metadata.get('repository_source_type', 'unknown')}",
-            f"- repository_source_path: {repo_metadata.get('repository_source_path', 'unavailable')}",
-            f"- repository_source_note: {repo_metadata.get('repository_source_note', 'unavailable')}",
-            "",
-            "## What To Test",
-            "",
-            "- Treat `repository_dir` as the runnable implementation under test.",
-            "- Inspect and run build, unit tests, smoke tests, or static checks directly from `repository_dir` when possible.",
-            "- Do not require executor planning notes or patch narrative artifacts to decide the test verdict.",
-            "- Compare observable behavior against the original user request below.",
-            "",
-            "### Original User Request",
-            str(task.get("user_prompt") or "unavailable"),
-        ]
-        if repo_dir and repo_dir.exists():
-            lines.extend(["", "### Repository Snapshot"])
-            for child in sorted(repo_dir.iterdir(), key=lambda item: item.name)[:30]:
-                suffix = "/" if child.is_dir() else ""
-                lines.append(f"- {child.name}{suffix}")
-        lines.append("")
-        return lines
+        return self.input_staging_service.test_target_manifest_lines(task_id, role, phase, round_id, repo_dir)
 
     def _testing_failure_context_manifest_lines(
         self,
@@ -1263,53 +810,9 @@ class Orchestrator:
         phase: str,
         round_id: int | None,
     ) -> list[str]:
-        if role != "executor" or phase not in {FIXING, REVIEW_FIXING} or round_id is None:
-            return []
-        failed_rounds = self._failed_test_rounds_before(task_id, phases_by_id, round_id)
-        if not failed_rounds:
-            return []
-        tester_artifacts_by_round: dict[int, set[str]] = {}
-        for artifact in artifacts:
-            if (artifact.get("role") or "") != "tester" or artifact.get("artifact_type") not in TEST_REPORT_ARTIFACTS:
-                continue
-            phase_row = phases_by_id.get(artifact.get("phase_id") or "")
-            if not phase_row or phase_row.get("round_id") is None:
-                continue
-            artifact_round = int(phase_row["round_id"])
-            if artifact_round >= round_id:
-                continue
-            tester_artifacts_by_round.setdefault(artifact_round, set()).add(str(artifact["artifact_type"]))
-        complete_visible_rounds = [
-            test_round
-            for test_round, artifact_types in tester_artifacts_by_round.items()
-            if TEST_REPORT_ARTIFACTS <= artifact_types
-        ]
-        latest_visible_round = max(complete_visible_rounds, default=None)
-        unavailable_failed_rounds = [
-            test_round
-            for test_round in failed_rounds
-            if not TEST_REPORT_ARTIFACTS <= tester_artifacts_by_round.get(test_round, set())
-        ]
-        lines = [
-            "## Harness Test Failure Context",
-            f"- failed_test_round_count_before_current: {len(failed_rounds)}",
-            f"- failed_test_round_ids_before_current: {', '.join(str(value) for value in failed_rounds)}",
-        ]
-        if latest_visible_round is not None:
-            lines.append(f"- latest_visible_complete_test_evidence_round: {latest_visible_round}")
-        else:
-            lines.append("- latest_visible_complete_test_evidence_round: none")
-        if unavailable_failed_rounds:
-            lines.append(
-                "- failed_test_rounds_without_complete_visible_reports: "
-                + ", ".join(str(value) for value in unavailable_failed_rounds)
-            )
-            lines.append(
-                "- evidence_note: Some failed test rounds did not publish complete tester report artifacts; "
-                "use the latest visible test reports together with the current repo state."
-            )
-        lines.append("")
-        return lines
+        return self.input_staging_service.testing_failure_context_manifest_lines(
+            task_id, artifacts, phases_by_id, role, phase, round_id
+        )
 
     def _failed_test_rounds_before(
         self,
@@ -1317,45 +820,10 @@ class Orchestrator:
         phases_by_id: dict[str, dict[str, Any]],
         round_id: int,
     ) -> list[int]:
-        failed_rounds: set[int] = set()
-        for phase_row in phases_by_id.values():
-            if phase_row.get("task_id") != task_id:
-                continue
-            if phase_row.get("phase_type") not in {TESTING, REGRESSION_TESTING}:
-                continue
-            if phase_row.get("round_id") is None or int(phase_row["round_id"]) >= round_id:
-                continue
-            if phase_row.get("status") == FAILED:
-                failed_rounds.add(int(phase_row["round_id"]))
-        for decision in self.repository.list_judge_decisions(task_id):
-            if decision.get("decision_type") != TEST_JUDGEMENT:
-                continue
-            phase_row = phases_by_id.get(decision.get("phase_id") or "")
-            if not phase_row or phase_row.get("round_id") is None:
-                continue
-            decision_round = int(phase_row["round_id"])
-            if decision_round >= round_id:
-                continue
-            try:
-                payload = json.loads(decision["decision_payload"])
-            except Exception:
-                failed_rounds.add(decision_round)
-                continue
-            if not self.judge.is_test_pass(payload):
-                failed_rounds.add(decision_round)
-        return sorted(failed_rounds)
+        return self.input_staging_service.failed_test_rounds_before(task_id, phases_by_id, round_id)
 
     def _artifact_input_limits(self) -> dict[str, int]:
-        configured = self.config.get("artifact_input", {})
-        return {
-            "max_files": self._positive_int(configured.get("max_files"), 50, "artifact_input.max_files"),
-            "max_file_bytes": self._positive_int(
-                configured.get("max_file_bytes"), 262_144, "artifact_input.max_file_bytes"
-            ),
-            "max_total_bytes": self._positive_int(
-                configured.get("max_total_bytes"), 1_048_576, "artifact_input.max_total_bytes"
-            ),
-        }
+        return self.input_staging_service.artifact_input_limits()
 
     def _positive_int(self, value: Any, default: int, field_name: str) -> int:
         if value is None:
@@ -1376,22 +844,12 @@ class Orchestrator:
         max_file_bytes: int,
         remaining_total_bytes: int,
     ) -> tuple[int, bool]:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        source_size = source.stat().st_size
-        allowed_bytes = min(max_file_bytes, remaining_total_bytes)
-        if source_size <= allowed_bytes:
-            shutil.copy2(source, destination)
-            return source_size, False
-        raw = source.read_bytes()
-        if allowed_bytes <= 128:
-            selected = raw[:allowed_bytes]
-        else:
-            marker = b"\n\n...[artifact truncated by Harness input budget]...\n\n"
-            head_size = max(1, (allowed_bytes - len(marker)) // 2)
-            tail_size = max(1, allowed_bytes - len(marker) - head_size)
-            selected = raw[:head_size] + marker + raw[-tail_size:]
-        destination.write_text(selected.decode("utf-8", errors="replace"), encoding="utf-8")
-        return destination.stat().st_size, True
+        return self.input_staging_service.copy_artifact_with_budget(
+            source,
+            destination,
+            max_file_bytes=max_file_bytes,
+            remaining_total_bytes=remaining_total_bytes,
+        )
 
     def _append_skipped_artifact_manifest(
         self,
@@ -1401,19 +859,7 @@ class Orchestrator:
         source: Path,
         reason: str,
     ) -> None:
-        manifest_lines.extend(
-            [
-                f"## {index}. {artifact['artifact_type']} v{artifact['version']}",
-                f"- skipped: true",
-                f"- reason: {reason}",
-                f"- source_path: {source}",
-                f"- role: {artifact['role'] or 'unknown'}",
-                f"- agent_id: {artifact['agent_id'] or 'unknown'}",
-                f"- phase_id: {artifact['phase_id']}",
-                f"- source_bytes: {source.stat().st_size}",
-                "",
-            ]
-        )
+        self.input_staging_service.append_skipped_artifact_manifest(manifest_lines, index, artifact, source, reason)
 
     def _append_path_only_artifact_manifest(
         self,
@@ -1423,38 +869,13 @@ class Orchestrator:
         source: Path,
         reason: str,
     ) -> None:
-        manifest_lines.extend(
-            [
-                f"## {index}. {artifact['artifact_type']} v{artifact['version']}",
-                f"- local_path: path_only",
-                f"- full_content_staged: false",
-                f"- reason: {reason}",
-                f"- source_path: {source}",
-                f"- role: {artifact['role'] or 'unknown'}",
-                f"- agent_id: {artifact['agent_id'] or 'unknown'}",
-                f"- phase_id: {artifact['phase_id']}",
-                f"- source_bytes: {source.stat().st_size}",
-                "",
-            ]
-        )
+        self.input_staging_service.append_path_only_artifact_manifest(manifest_lines, index, artifact, source, reason)
 
     def _artifact_staging_mode(self, role: str, phase: str, artifact: dict[str, Any], source: Path) -> str:
-        if artifact["artifact_type"] != "merged_patch.diff":
-            return "copy"
-        if source.stat().st_size < 64_000:
-            return "copy"
-        if role in {"tester", "judge", "communicator"}:
-            return "path_only"
-        if role == "reviewer":
-            return "truncated"
-        if role == "executor" and phase in {FIXING, REVIEW_FIXING}:
-            return "truncated"
-        return "copy"
+        return self.input_staging_service.artifact_staging_mode(role, phase, artifact, source)
 
     def _artifact_max_file_bytes(self, configured_max_file_bytes: int, staging_mode: str) -> int:
-        if staging_mode == "truncated":
-            return min(configured_max_file_bytes, 16_384)
-        return configured_max_file_bytes
+        return self.input_staging_service.artifact_max_file_bytes(configured_max_file_bytes, staging_mode)
 
     def _publish_delivery(self, task_id: str, final_path: Path) -> Path:
         return self.delivery_publisher.publish_delivery(task_id, final_path)

@@ -309,6 +309,56 @@ class StateRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def record_event(
+        self,
+        *,
+        event_type: str,
+        task_id: str | None = None,
+        phase: str | None = None,
+        role: str | None = None,
+        agent_id: str | None = None,
+        round_id: int | None = None,
+        attempt: int | None = None,
+        status: str | None = None,
+        message: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> str:
+        event_id = str(uuid.uuid4())
+        with self._lock, self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO events(event_id, task_id, phase, role, agent_id, round_id, attempt, event_type, status, message, payload, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    task_id,
+                    phase,
+                    role,
+                    agent_id,
+                    round_id,
+                    attempt,
+                    event_type,
+                    status,
+                    message,
+                    json.dumps(payload or {}, ensure_ascii=False),
+                    utc_now_iso(),
+                ),
+            )
+        return event_id
+
+    def list_events(self, task_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        query = "SELECT * FROM events"
+        params: list[Any] = []
+        if task_id is not None:
+            query += " WHERE task_id = ?"
+            params.append(task_id)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        with self.db.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
     def _require_status(self, status: str, allowed: set[str], label: str) -> None:
         if status not in allowed:
             allowed_values = ", ".join(sorted(allowed))

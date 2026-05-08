@@ -127,3 +127,22 @@ def test_repository_assigns_artifact_version_inside_insert_lock(tmp_path: Path) 
     second = repo.create_artifact_with_next_version(task_id, "artifact.md", build_ref)
 
     assert (first.version, second.version) == (1, 2)
+
+
+def test_state_store_records_append_only_events(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    task_id = repo.create_task("eventful")
+
+    event_id = repo.record_event(
+        event_type="phase_started",
+        task_id=task_id,
+        phase="TESTING",
+        role="tester",
+        status="RUNNING",
+        payload={"round_id": 1},
+    )
+
+    events = repo.list_events(task_id)
+    assert events[0]["event_id"] == event_id
+    assert events[0]["event_type"] == "phase_started"
+    assert events[0]["payload"] == '{"round_id": 1}'

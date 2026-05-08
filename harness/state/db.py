@@ -36,6 +36,27 @@ class StateDB:
             conn.execute("ALTER TABLE tasks ADD COLUMN workflow_type TEXT")
         if "configuration" not in task_columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN configuration TEXT")
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                event_id TEXT PRIMARY KEY,
+                task_id TEXT,
+                phase TEXT,
+                role TEXT,
+                agent_id TEXT,
+                round_id INTEGER,
+                attempt INTEGER,
+                event_type TEXT NOT NULL,
+                status TEXT,
+                message TEXT,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id);
+            CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
+            CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+            """
+        )
 
     def _table_columns(self, conn: sqlite3.Connection, table_name: str) -> set[str]:
         rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()

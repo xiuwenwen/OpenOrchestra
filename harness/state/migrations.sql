@@ -56,6 +56,21 @@ CREATE TABLE IF NOT EXISTS judge_decisions (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS events (
+    event_id TEXT PRIMARY KEY,
+    task_id TEXT,
+    phase TEXT,
+    role TEXT,
+    agent_id TEXT,
+    round_id INTEGER,
+    attempt INTEGER,
+    event_type TEXT NOT NULL,
+    status TEXT,
+    message TEXT,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 CREATE INDEX IF NOT EXISTS idx_phases_task_id ON phases(task_id);
 CREATE INDEX IF NOT EXISTS idx_phases_task_round ON phases(task_id, round_id);
@@ -67,3 +82,6 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_task_type ON artifacts(task_id, artifac
 CREATE INDEX IF NOT EXISTS idx_artifacts_created_at ON artifacts(created_at);
 CREATE INDEX IF NOT EXISTS idx_judge_decisions_task_id ON judge_decisions(task_id);
 CREATE INDEX IF NOT EXISTS idx_judge_decisions_phase_id ON judge_decisions(phase_id);
+CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id);
+CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
+CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);

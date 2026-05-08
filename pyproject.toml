@@ -12,7 +12,7 @@ dev = ["pytest"]
 include = ["harness*"]
 
 [tool.setuptools.package-data]
-harness = ["prompts/templates/*.md", "state/migrations.sql"]
+harness = ["prompts/templates/*.md", "state/migrations.sql", "ui/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

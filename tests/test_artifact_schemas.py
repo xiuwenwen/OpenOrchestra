@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from harness.artifacts.schemas import ARTIFACT_VISIBILITY_RULES, output_contract_lines_for, required_outputs_for
+from harness.artifacts.schemas import ARTIFACT_VISIBILITY_RULES, output_contract_lines_for, required_outputs_for, role_phase_contract_for
 
 
 def test_required_outputs_always_include_delivery_envelope() -> None:
@@ -37,3 +37,13 @@ def test_visibility_rules_live_in_artifact_schema_layer() -> None:
     assert ("reviewer", "REVIEWING") in covered
     assert ("executor", "EXECUTION") in covered
     assert ("judge", "TEST_JUDGEMENT") in covered
+
+
+def test_role_phase_contract_binds_outputs_and_visibility() -> None:
+    contract = role_phase_contract_for("judge", "TEST_JUDGEMENT")
+
+    assert contract.required_outputs_with_delivery() == ["decision.json", "decision_summary.md", "delivery.md"]
+    assert {(rule.source_role, tuple(sorted(rule.artifact_types))) for rule in contract.visibility_rules} == {
+        ("orchestrator", ("objective_gate.md", "test_gate.md")),
+        ("tester", ("bug_report.md", "build_report.md", "test_report.md")),
+    }

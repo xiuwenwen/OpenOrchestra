@@ -20,12 +20,20 @@ graph TD
         ORCH
         WF[Workflow Engine]
         RUN[Agent Phase Runner]
+        TG[Test Gate Service]
+        PG[Patch Gate Service]
+        MAT[Materialized Repo Service]
+        STAGE[Input Staging Service]
         WC
         JUDGE[Judge Runner]
     end
 
     ORCH --> WF
     ORCH --> RUN
+    ORCH --> TG
+    ORCH --> PG
+    ORCH --> MAT
+    ORCH --> STAGE
     ORCH --> JUDGE
     
     %% Resource Managers
@@ -36,17 +44,25 @@ graph TD
         WM[Workspace Manager]
         AM[Artifact Manager]
         SR[State Repository]
+        EV[Append-only Event Log]
     end
     
     WF --> SCHEMA
     RUN --> SCHEMA
-    RUN --> VIS
+    RUN --> STAGE
+    STAGE --> VIS
     RUN <--> |Create isolated dirs| WM
     RUN <--> |Validate & Hash| VAL
     RUN <--> |Collect Artifacts| AM
     ORCH <--> |Persist DAG State| SR
+    ORCH --> |Progress events| EV
     AM <--> |Read/Write| SR
     VIS --> SCHEMA
+    TG --> AM
+    TG --> MAT
+    PG --> AM
+    PG --> MAT
+    MAT --> WM
     
     %% Adapters and Agents
     subgraph "Agent Adapters"
@@ -78,13 +94,14 @@ graph TD
     
     %% External Storage
     subgraph "Local File System"
-        DB[(OpenOrchestra SQLite)]
+        DB[(OpenOrchestra SQLite\nstate snapshots + event log)]
         FS_WS[workspaces/ \n Isolated Sandboxes]
         FS_ART[artifacts/ \n Versioned & Hashed]
         FS_DEL[deliver/ \n Final Output]
     end
     
     SR --> DB
+    EV --> DB
     WM --> FS_WS
     AM --> FS_ART
     ORCH --> FS_DEL
@@ -105,7 +122,13 @@ graph TD
 - `harness/agents/runner.py` owns workspace creation, adapter calls, retry/timeout behavior, artifact collection, and output validation.
 - `harness/artifacts/schemas.py` owns required outputs, role output-contract text, and the declarative visibility rule table.
 - `harness/artifacts/visibility.py` interprets the schema visibility table for role/phase/round-specific input staging.
+- `harness/context/staging.py` owns input artifact staging, manifest generation, tester target context, and failed-test-round context.
+- `harness/gates/test_gate.py` owns Harness-run build/test command execution and test gate artifacts.
+- `harness/gates/patch_gate.py` owns patch validation orchestration and patch/objective/materialized gate artifacts.
+- `harness/materialization/service.py` owns source repo selection, materialized repo lookup, materialized workspace preparation, and repo metadata.
+- `harness/state/repository.py` now stores both current state snapshots and append-only progress events for audit/replay diagnostics.
 - `harness/ui/server.py` is only the web-server shell. API routing, state snapshots, HTML, file reads, and translation live in separate `harness/ui/*` modules.
+- `harness/ui/html.py` loads static HTML/CSS/JS assets from `harness/ui/static/` and keeps the route contract unchanged.
 - OpenOrchestra uses `~/.openorchestra.env` and `OO_*` variables as the current user-facing runtime config surface. `~/.myharness.env` and `HARNESS_*` are retained only as documented legacy aliases.
 
 ## 2. Core Workflow Lifecycle (New Project)

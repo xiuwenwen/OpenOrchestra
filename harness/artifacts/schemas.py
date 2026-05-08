@@ -9,6 +9,7 @@ from harness.core.state_machine import (
     EXECUTION,
     FINAL_JUDGEMENT,
     FIXING,
+    MISC_RESPONSE,
     PATCH_MERGE,
     PLAN_REVIEW,
     PLAN_JUDGEMENT,
@@ -52,6 +53,20 @@ class ArtifactVisibilityRule:
     round_policy: str = ROUND_ANY
     self_policy: str = SELF_INCLUDE
     condition: str = CONDITION_ALWAYS
+
+
+@dataclass(frozen=True)
+class RolePhaseContract:
+    role: str
+    phase: str
+    required_outputs: tuple[str, ...]
+    visibility_rules: tuple[ArtifactVisibilityRule, ...] = ()
+
+    def required_outputs_with_delivery(self) -> list[str]:
+        outputs = list(self.required_outputs)
+        if DELIVERY_STATUS_OUTPUT not in outputs:
+            outputs.append(DELIVERY_STATUS_OUTPUT)
+        return outputs
 
 
 def _types(*artifact_types: str) -> frozenset[str]:
@@ -276,38 +291,73 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
 DELIVERY_STATUS_OUTPUT = "delivery.md"
 
 
+ROLE_PHASE_CONTRACTS: dict[tuple[str, str], RolePhaseContract] = {}
+
+
+def _contract(role: str, phase: str, outputs: tuple[str, ...]) -> RolePhaseContract:
+    contract = RolePhaseContract(
+        role=role,
+        phase=phase,
+        required_outputs=outputs,
+        visibility_rules=tuple(rule for rule in ARTIFACT_VISIBILITY_RULES if rule.target_role == role and rule.target_phase in {phase, ANY_PHASE}),
+    )
+    ROLE_PHASE_CONTRACTS[(role, phase)] = contract
+    return contract
+
+
+_contract("planner", PLANNING_DRAFT, ("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md"))
+_contract("planner", PLANNING_PEER_REVIEW, ("peer_review.md",))
+_contract("planner", PLANNING_REVISION, ("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md"))
+_contract("executor", EXECUTION, ("implementation_plan.md", "changed_files.md", "patch.diff", "patch_metadata.md", "self_check.md"))
+_contract("executor", PATCH_MERGE, ("merged_patch.diff", "merged_patch_metadata.md", "merge_report.md"))
+_contract("executor", MISC_RESPONSE, ("response.md", "notes.md"))
+_contract("executor", FIXING, ("fix_schedule.md", "fix_patch.diff", "patch_metadata.md", "fix_notes.md", "self_check.md"))
+_contract("executor", REVIEW_FIXING, ("fix_schedule.md", "fix_patch.diff", "patch_metadata.md", "fix_notes.md", "self_check.md"))
+_contract("tester", TESTING, ("build_report.md", "test_report.md", "bug_report.md"))
+_contract("tester", REGRESSION_TESTING, ("build_report.md", "test_report.md", "bug_report.md"))
+_contract("reviewer", PLAN_REVIEW, ("review_report.md", "selected_plan.md"))
+_contract("reviewer", REVIEWING, ("review_report.md",))
+_contract("judge", PLAN_JUDGEMENT, ("decision.json", "decision_summary.md"))
+_contract("judge", TEST_JUDGEMENT, ("decision.json", "decision_summary.md"))
+_contract("judge", REVIEW_JUDGEMENT, ("decision.json", "decision_summary.md"))
+_contract("judge", FINAL_JUDGEMENT, ("decision.json", "decision_summary.md"))
+_contract("communicator", DELIVERY, ("final_delivery.md", "usage_guide.md"))
+
+
 REQUIRED_OUTPUTS: dict[str, dict[str, list[str]] | list[str]] = {
     "planner": {
-        "PLANNING_DRAFT": ["plan.md", "assumptions.md", "risk.md", "todo_breakdown.md"],
-        "PLANNING_PEER_REVIEW": ["peer_review.md"],
-        "PLANNING_REVISION": ["plan.md", "assumptions.md", "risk.md", "todo_breakdown.md"],
+        PLANNING_DRAFT: list(ROLE_PHASE_CONTRACTS[("planner", PLANNING_DRAFT)].required_outputs),
+        PLANNING_PEER_REVIEW: list(ROLE_PHASE_CONTRACTS[("planner", PLANNING_PEER_REVIEW)].required_outputs),
+        PLANNING_REVISION: list(ROLE_PHASE_CONTRACTS[("planner", PLANNING_REVISION)].required_outputs),
     },
     "executor": {
-        "EXECUTION": ["implementation_plan.md", "changed_files.md", "patch.diff", "patch_metadata.md", "self_check.md"],
-        "PATCH_MERGE": ["merged_patch.diff", "merged_patch_metadata.md", "merge_report.md"],
-        "MISC_RESPONSE": ["response.md", "notes.md"],
-        "FIXING": ["fix_schedule.md", "fix_patch.diff", "patch_metadata.md", "fix_notes.md", "self_check.md"],
-        "REVIEW_FIXING": ["fix_schedule.md", "fix_patch.diff", "patch_metadata.md", "fix_notes.md", "self_check.md"],
+        EXECUTION: list(ROLE_PHASE_CONTRACTS[("executor", EXECUTION)].required_outputs),
+        PATCH_MERGE: list(ROLE_PHASE_CONTRACTS[("executor", PATCH_MERGE)].required_outputs),
+        MISC_RESPONSE: list(ROLE_PHASE_CONTRACTS[("executor", MISC_RESPONSE)].required_outputs),
+        FIXING: list(ROLE_PHASE_CONTRACTS[("executor", FIXING)].required_outputs),
+        REVIEW_FIXING: list(ROLE_PHASE_CONTRACTS[("executor", REVIEW_FIXING)].required_outputs),
     },
-    "tester": ["build_report.md", "test_report.md", "bug_report.md"],
+    "tester": list(ROLE_PHASE_CONTRACTS[("tester", TESTING)].required_outputs),
     "reviewer": {
-        "PLAN_REVIEW": ["review_report.md", "selected_plan.md"],
-        "REVIEWING": ["review_report.md"],
+        PLAN_REVIEW: list(ROLE_PHASE_CONTRACTS[("reviewer", PLAN_REVIEW)].required_outputs),
+        REVIEWING: list(ROLE_PHASE_CONTRACTS[("reviewer", REVIEWING)].required_outputs),
     },
-    "judge": ["decision.json", "decision_summary.md"],
-    "communicator": ["final_delivery.md", "usage_guide.md"],
+    "judge": list(ROLE_PHASE_CONTRACTS[("judge", TEST_JUDGEMENT)].required_outputs),
+    "communicator": list(ROLE_PHASE_CONTRACTS[("communicator", DELIVERY)].required_outputs),
 }
 
 
-def required_outputs_for(role: str, phase: str) -> list[str]:
+def role_phase_contract_for(role: str, phase: str) -> RolePhaseContract:
+    contract = ROLE_PHASE_CONTRACTS.get((role, phase))
+    if contract:
+        return contract
     spec = REQUIRED_OUTPUTS[role]
-    if isinstance(spec, dict):
-        outputs = list(spec[phase])
-    else:
-        outputs = list(spec)
-    if DELIVERY_STATUS_OUTPUT not in outputs:
-        outputs.append(DELIVERY_STATUS_OUTPUT)
-    return outputs
+    outputs = tuple(spec[phase] if isinstance(spec, dict) else spec)
+    return RolePhaseContract(role=role, phase=phase, required_outputs=outputs)
+
+
+def required_outputs_for(role: str, phase: str) -> list[str]:
+    return role_phase_contract_for(role, phase).required_outputs_with_delivery()
 
 
 def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]) -> list[str]:

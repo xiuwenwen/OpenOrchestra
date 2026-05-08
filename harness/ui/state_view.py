@@ -142,6 +142,7 @@ class HarnessStateView:
             "agent_runs": agent_runs,
             "artifacts": artifacts,
             "events": self.event_store.events_for(task_id),
+            "event_log": list(reversed(self.repository.list_events(task_id, limit=200))),
             "roles": self._role_summary(agent_runs, phases),
             "role_rounds": self._role_rounds(agent_runs),
             "success_path": str(success_path) if success_path and success_path.exists() else None,
