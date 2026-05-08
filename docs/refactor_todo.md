@@ -39,10 +39,10 @@
 
 ## 4. Agent Run Boundary
 
-- [ ] 新建 `harness/agents/runner.py`。
-- [ ] 迁移 workspace 创建、adapter 调用、heartbeat、retry、timeout、artifact collection。
-- [ ] `run_role_phase()` 只负责 phase 生命周期和结果汇总。
-- [ ] timeout 语义统一：attempt timeout、phase timeout、cancel late result 分开记录。
+- [x] 新建 `harness/agents/runner.py`。
+- [x] 迁移 workspace 创建、adapter 调用、heartbeat、retry、timeout、artifact collection。
+- [x] `run_role_phase()` 只负责兼容 facade，实际 phase 生命周期由 runner 承载。
+- [x] timeout 语义统一：attempt timeout、phase timeout、cancel late result 分开记录。
 - [ ] OUTPUT_INVALID 产物是否登记要有显式策略，而不是混在 retry 逻辑里。
 
 ## 5. State Layer Hardening

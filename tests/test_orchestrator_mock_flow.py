@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from concurrent.futures import wait as real_wait
 
+from harness.agents import runner as agent_runner_module
 from harness.agents.result import AgentRunResult, ArtifactRef
 from harness.artifacts.schemas import required_outputs_for
 import harness.core.orchestrator as orchestrator_module
@@ -800,7 +801,7 @@ def test_concurrent_phase_timeout_budget_includes_agent_retries(monkeypatch, tmp
         captured_timeouts.append(timeout)
         return real_wait(futures, timeout=timeout)
 
-    monkeypatch.setattr(orchestrator_module, "wait", tracking_wait)
+    monkeypatch.setattr(agent_runner_module, "wait", tracking_wait)
 
     orchestrator.run_role_phase("planner", PLANNING_DRAFT, 0, required_outputs_for("planner", PLANNING_DRAFT), "plan retry budget")
 
@@ -818,7 +819,7 @@ def test_concurrent_phase_has_no_wait_timeout_when_role_timeout_is_zero(monkeypa
         captured_timeouts.append(timeout)
         return real_wait(futures, timeout=timeout)
 
-    monkeypatch.setattr(orchestrator_module, "wait", tracking_wait)
+    monkeypatch.setattr(agent_runner_module, "wait", tracking_wait)
 
     orchestrator.run_role_phase("planner", PLANNING_DRAFT, 0, required_outputs_for("planner", PLANNING_DRAFT), "plan without timeout")
 
