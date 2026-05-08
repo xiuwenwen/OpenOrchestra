@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -59,3 +60,38 @@ def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
         raise FileNotFoundError(f"Config file not found: {config_path}")
     return _minimal_yaml_load(config_path.read_text(encoding="utf-8"))
 
+
+def dump_config(config: dict[str, Any]) -> str:
+    return "\n".join(_dump_mapping(config, 0)) + "\n"
+
+
+def write_config_atomic(config: dict[str, Any], path: str | Path) -> None:
+    config_path = Path(path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = config_path.with_name(f".{config_path.name}.tmp")
+    temp_path.write_text(dump_config(config), encoding="utf-8")
+    os.replace(temp_path, config_path)
+
+
+def _dump_mapping(mapping: dict[str, Any], indent: int) -> list[str]:
+    lines: list[str] = []
+    prefix = " " * indent
+    for key, value in mapping.items():
+        if isinstance(value, dict):
+            lines.append(f"{prefix}{key}:")
+            lines.extend(_dump_mapping(value, indent + 2))
+        else:
+            lines.append(f"{prefix}{key}: {_dump_scalar(value)}")
+    return lines
+
+
+def _dump_scalar(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if value is None:
+        return '""'
+    text = str(value)
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'

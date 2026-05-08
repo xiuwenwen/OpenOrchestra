@@ -16,8 +16,8 @@
 - [x] 把 UI 直接改 YAML 的逻辑收敛到 `RuntimeConfigService`。
 - [x] Orchestrator 通过配置服务读取 backend、role count、timeout。
 - [x] 任务运行中锁定运行配置，避免执行中漂移。
-- [ ] 增加显式持久化选项：`persist=true` 时由配置服务原子写入配置文件。
-- [ ] 为持久化配置增加结构化 YAML writer，禁止 UI 字符串替换配置文件。
+- [x] 增加显式持久化选项：`persist=true` 时由配置服务原子写入配置文件。
+- [x] 为持久化配置增加结构化 YAML writer，禁止 UI 字符串替换配置文件。
 
 ## 2. Artifact Visibility Boundary
 
@@ -57,8 +57,8 @@
 
 - [ ] 拆分 `HarnessStateView`、API handler、HTML/JS 字符串、file reader。
 - [ ] UI API 增加 schema validation 和稳定错误码。
-- [ ] 配置 UI 显示当前配置来源：runtime、task override、persisted default。
-- [ ] 配置 UI 明确保存范围：仅当前运行时、未来任务默认值、或指定任务。
+- [x] 配置 UI 显示当前配置来源：runtime、task override、persisted default。
+- [x] 配置 UI 明确保存范围：仅当前运行时、未来任务默认值、或指定任务。
 
 ## 7. Artifact Contract Boundary
 

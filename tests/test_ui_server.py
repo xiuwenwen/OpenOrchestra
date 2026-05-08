@@ -6,6 +6,7 @@ import pytest
 
 from harness.agents.result import ArtifactRef
 from harness.artifacts.hashing import sha256_file
+from harness.config.loader import load_config
 from harness.core.progress import ProgressEvent
 from harness.core.state_machine import FIXING, PATCH_MERGE, PLANNING_DRAFT, TESTING
 from harness.state.db import StateDB
@@ -151,6 +152,27 @@ def test_ui_runtime_config_updates_shared_config(tmp_path: Path) -> None:
     assert config["roles"]["planner"]["count"] == 3
     assert updated["agent_backend"]["planner"] == "claude"
     assert updated["roles"]["planner"]["count"] == 3
+    assert updated["persist_supported"] is False
+
+
+def test_ui_runtime_config_can_persist_to_config_file(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config_path = tmp_path / "config.yaml"
+    repo = StateRepository(StateDB(config["system"]["state_db"]))
+    view = HarnessStateView(config, repo, UiEventStore(), config_path=config_path)
+
+    updated = view.update_runtime_config(
+        {
+            "agent_backend": {"planner": "claude"},
+            "roles": {"planner": {"count": 4}},
+            "persist": True,
+        }
+    )
+
+    persisted = load_config(config_path)
+    assert updated["persist_supported"] is True
+    assert persisted["agent_backend"]["planner"] == "claude"
+    assert persisted["roles"]["planner"]["count"] == 4
 
 
 def test_ui_runtime_config_rejects_unknown_backend(tmp_path: Path) -> None:

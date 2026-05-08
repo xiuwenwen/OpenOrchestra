@@ -535,7 +535,7 @@ def main() -> int:
     ui_store = UiEventStore()
     progress_callback = ProgressMultiplexer([progress_reporter, ui_store])
     orchestrator = Orchestrator(config, progress_callback=progress_callback)
-    ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port) if args.ui else None
+    ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port, args.config) if args.ui else None
     prompt = " ".join(args.prompt).strip()
     if prompt:
         workflow_type, fallback_answer = (args.workflow, None) if args.workflow else classify_workflow(prompt, backend, config)
@@ -553,6 +553,7 @@ def main() -> int:
         ui_store=ui_store,
         ui_server=ui_server,
         orchestrator=orchestrator,
+        config_path=args.config,
     ).run()
 
 
@@ -561,6 +562,7 @@ def start_ui_server(
     orchestrator: Orchestrator,
     ui_store: UiEventStore,
     port: int | None = None,
+    config_path: str | Path | None = None,
 ) -> HarnessWebServer:
     visualization = config.get("visualization", {})
     server = HarnessWebServer(
@@ -569,6 +571,7 @@ def start_ui_server(
         ui_store,
         host=str(visualization.get("host", "127.0.0.1")),
         port=int(port if port is not None else visualization.get("port", 8765)),
+        config_path=config_path,
     ).start()
     print(f"[ui] OpenOrchestra Execution Viewer: {server.url}")
     return server
@@ -946,6 +949,7 @@ class InteractiveCLI:
         ui_store: UiEventStore | None = None,
         ui_server: HarnessWebServer | None = None,
         orchestrator: Orchestrator | None = None,
+        config_path: str | Path | None = None,
     ):
         self.config = config
         self.backend = backend
@@ -953,6 +957,7 @@ class InteractiveCLI:
         self.default_workflow = default_workflow
         self.ui_store = ui_store or UiEventStore()
         self.ui_server = ui_server
+        self.config_path = config_path
         self.orchestrator = orchestrator or Orchestrator(self.config, progress_callback=self.progress_callback)
         self.orchestrator.fix_round_limit_callback = self._choose_test_fix_limit_action
         self.history_rows: list[dict[str, Any]] = []
@@ -1160,7 +1165,7 @@ class InteractiveCLI:
             print("cleared active history context")
         elif command == "/ui":
             if not self.ui_server:
-                self.ui_server = start_ui_server(self.config, self.orchestrator, self.ui_store)
+                self.ui_server = start_ui_server(self.config, self.orchestrator, self.ui_store, config_path=self.config_path)
             print(f"execution viewer: {self.ui_server.url}")
         else:
             print(f"unknown command: {command}. Type /help.")

@@ -74,11 +74,17 @@ class UiEventStore:
 
 
 class HarnessStateView:
-    def __init__(self, config: dict[str, Any], repository: StateRepository, event_store: UiEventStore):
+    def __init__(
+        self,
+        config: dict[str, Any],
+        repository: StateRepository,
+        event_store: UiEventStore,
+        config_path: str | Path | None = None,
+    ):
         self.config = config
         self.repository = repository
         self.event_store = event_store
-        self.config_service = RuntimeConfigService(config, repository)
+        self.config_service = RuntimeConfigService(config, repository, config_path)
 
     def tasks(self, limit: int = 20) -> list[dict[str, Any]]:
         return self.repository.list_tasks(limit)
@@ -453,13 +459,14 @@ class HarnessWebServer:
         event_store: UiEventStore,
         host: str = "127.0.0.1",
         port: int = 8765,
+        config_path: str | Path | None = None,
     ):
         self.config = config
         self.repository = repository
         self.event_store = event_store
         self.host = host
         self.port = port
-        self.state_view = HarnessStateView(config, repository, event_store)
+        self.state_view = HarnessStateView(config, repository, event_store, config_path)
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -1205,10 +1212,20 @@ async function openConfig(){
   stat.textContent = "";
   document.getElementById("configSaveBtn").disabled = false;
 
-  try {
+    try {
     const cfg = await getJson("/api/config");
     let html = "";
     const models = cfg.backend_options || ["codex","claude","gemini","qwen"];
+    html += `<div class="cfg-row">
+      <div class="cfg-label">${uiLanguage==="en"?"Save scope":"保存范围"}</div>
+      <label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px">
+        <input type="checkbox" id="cfg-persist" ${cfg.persist_supported ? "" : "disabled"}>
+        ${uiLanguage==="en"?"Persist to config file":"写入配置文件"}
+      </label>
+    </div>`;
+    if(cfg.config_path){
+      html += `<div style="color:var(--muted);font-size:11px;margin:0 0 10px 0">${esc(cfg.config_path)}</div>`;
+    }
     roleOrder.forEach(r => {
       if(r==="orchestrator") return;
       const count = (cfg.roles && cfg.roles[r] && cfg.roles[r].count) || 1;
@@ -1230,7 +1247,8 @@ function closeConfig(){
   document.getElementById("configModal").classList.remove("open");
 }
 async function saveConfig(){
-  const payload = {roles:{}, agent_backend:{}};
+  const persist = !!(document.getElementById("cfg-persist") && document.getElementById("cfg-persist").checked);
+  const payload = {roles:{}, agent_backend:{}, persist:persist};
   roleOrder.forEach(r => {
     if(r==="orchestrator") return;
     const cnt = document.getElementById("cfg-cnt-"+r);

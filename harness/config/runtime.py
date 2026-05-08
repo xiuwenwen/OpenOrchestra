@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 from typing import Any
 
+from harness.config.loader import write_config_atomic
 from harness.state.repository import StateRepository
 
 
@@ -13,9 +15,15 @@ MAX_ROLE_COUNT = 10
 
 
 class RuntimeConfigService:
-    def __init__(self, config: dict[str, Any], repository: StateRepository | None = None):
+    def __init__(
+        self,
+        config: dict[str, Any],
+        repository: StateRepository | None = None,
+        config_path: str | Path | None = None,
+    ):
         self.config = config
         self.repository = repository
+        self.config_path = Path(config_path) if config_path else None
 
     def role_runtime_config(self) -> dict[str, Any]:
         return {
@@ -28,6 +36,8 @@ class RuntimeConfigService:
             "backend_options": list(CONFIGURABLE_BACKENDS),
             "max_role_count": MAX_ROLE_COUNT,
             "scope": "runtime",
+            "persist_supported": self.config_path is not None,
+            "config_path": str(self.config_path) if self.config_path else None,
         }
 
     def apply_role_runtime_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -36,6 +46,10 @@ class RuntimeConfigService:
         roles = self.config.setdefault("roles", {})
         for role, role_config in normalized["roles"].items():
             roles.setdefault(role, {})["count"] = role_config["count"]
+        if bool(payload.get("persist")):
+            if not self.config_path:
+                raise ValueError("persist=true requires a config_path")
+            write_config_atomic(self.config, self.config_path)
         return self.role_runtime_config()
 
     def config_for_task(self, task_id: str | None) -> dict[str, Any]:
