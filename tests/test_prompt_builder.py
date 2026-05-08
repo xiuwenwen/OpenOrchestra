@@ -126,6 +126,17 @@ def test_prompt_builder_has_model_driven_patch_merge_contract(tmp_path: Path) ->
     assert "`merged_patch_metadata.md`" in prompt
     assert "Do not select a patch based only on filename" in prompt
     assert "Prior `merged_patch.diff` artifacts are historical evidence" in prompt
+    assert "## Role Specialization" not in prompt
+    assert "No additional role specialization" not in prompt
+
+
+def test_prompt_builder_keeps_role_specialization_when_configured(tmp_path: Path) -> None:
+    context = make_context(tmp_path, role="planner", agent_id="planner-1", role_count=1)
+
+    prompt = PromptBuilder().build(context)
+
+    assert "## Role Specialization" in prompt
+    assert "Specialization:" in prompt
 
 
 def test_executor_patch_outputs_require_baseline_metadata(tmp_path: Path) -> None:

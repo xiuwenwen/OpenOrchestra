@@ -264,26 +264,27 @@ class PromptBuilder:
         required_outputs = "\n".join(f"- {name}" for name in context.required_outputs) or "- none"
         role_specialization = self._role_specialization(context)
         metadata_lines = self._metadata_lines(context)
-        return "\n".join(
+        sections = [
+            "# Harness Agent Contract",
+            "",
+            f"Role: {context.role}",
+            f"Phase: {context.phase}",
+            f"Task ID: {context.task_id}",
+            f"Phase ID: {context.phase_id}",
+            f"Agent ID: {context.agent_id}",
+            f"Round: {context.round_id}",
+            "",
+            "## User Request",
+            context.user_prompt,
+            "",
+            "## Role Responsibility",
+            context.role_instruction,
+            "",
+        ]
+        if role_specialization:
+            sections.extend(["## Role Specialization", *role_specialization, ""])
+        sections.extend(
             [
-                "# Harness Agent Contract",
-                "",
-                f"Role: {context.role}",
-                f"Phase: {context.phase}",
-                f"Task ID: {context.task_id}",
-                f"Phase ID: {context.phase_id}",
-                f"Agent ID: {context.agent_id}",
-                f"Round: {context.round_id}",
-                "",
-                "## User Request",
-                context.user_prompt,
-                "",
-                "## Role Responsibility",
-                context.role_instruction,
-                "",
-                "## Role Specialization",
-                *role_specialization,
-                "",
                 "## Harness Metadata",
                 *metadata_lines,
                 "",
@@ -340,6 +341,7 @@ class PromptBuilder:
                 "- Do not claim completion unless the required output files exist in the output directory.",
             ]
         )
+        return "\n".join(sections)
 
     def _output_contract_lines(self, context: AgentRunContext) -> list[str]:
         markdown_outputs = [
@@ -596,7 +598,7 @@ class PromptBuilder:
             "tester": TESTER_SPECIALIZATIONS,
         }.get(context.role)
         if not specializations_by_role:
-            return ["- No additional role specialization for this agent."]
+            return []
 
         configured_count = self._configured_role_count(context)
         profile_count = min(max(configured_count, 1), 4)

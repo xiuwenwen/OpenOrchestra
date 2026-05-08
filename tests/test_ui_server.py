@@ -17,11 +17,9 @@ from harness.ui.api import (
     require_string_field,
     validate_runtime_config_payload,
 )
-from harness.ui.server import (
-    DisplayTranslator,
-    _html,
-)
+from harness.ui.server import _html
 from harness.ui.state_view import HarnessStateView, UiEventStore
+from harness.ui.translation import DisplayTranslator
 
 
 def _config(tmp_path: Path) -> dict:

@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
 if TYPE_CHECKING:
-    from harness.ui.server import DisplayTranslator
     from harness.ui.state_view import HarnessStateView, UiEventStore
+    from harness.ui.translation import DisplayTranslator
 
 
 def api_error_payload(code: str, message: str) -> dict[str, dict[str, str]]:
