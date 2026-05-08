@@ -9,6 +9,7 @@ from typing import Any
 from harness.adapters.base import AgentAdapter
 from harness.adapters.claude_code_adapter import REQUEST_SIZE_ERROR_PATTERNS
 from harness.agents.context import AgentRunContext
+from harness.agents.output_policy import AgentOutputPolicy
 from harness.agents.result import AgentRunResult, ArtifactRef
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressEvent
@@ -21,6 +22,7 @@ class NonRetryableAgentError(TaskFailedError):
 class AgentPhaseRunner:
     def __init__(self, orchestrator: Any):
         self.orchestrator = orchestrator
+        self.output_policy = AgentOutputPolicy()
 
     def run_role_phase(
         self,
@@ -392,7 +394,10 @@ class AgentPhaseRunner:
                 delivery_status = o.validator.parse_delivery_status(workspace.output_dir / "delivery.md")
                 result.validation_ok = ok
                 result.validation_errors = errors
-                if result.status == "COMPLETED" and result.exit_code == 0 and ok:
+                if result.exit_code == 0 and self.output_policy.should_collect_artifacts(
+                    agent_status=result.status,
+                    validation_ok=ok,
+                ):
                     result.artifacts = o.artifact_manager.collect_output_dir(
                         task_id, phase_id, role, agent_id, workspace.output_dir
                     )
@@ -417,7 +422,7 @@ class AgentPhaseRunner:
                         )
                     )
                     return result
-                status = "OUTPUT_INVALID" if not ok else "FAILED"
+                status = self.output_policy.invalid_output_status(validation_ok=ok, agent_status=result.status)
                 message = "; ".join(errors) if errors else f"Agent exit_code={result.exit_code} status={result.status}"
                 terminal_failure = self.is_request_size_failure(result, context, message)
                 if terminal_failure:
