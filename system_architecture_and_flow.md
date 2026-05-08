@@ -4,7 +4,7 @@ This document provides a comprehensive overview of the `OpenOrchestra` architect
 
 ## 1. System Architecture
 
-The following diagram illustrates the static relationship between the core components, resource managers, agent adapters, and the local file system.
+The following diagram illustrates the current component boundaries after the orchestration refactor.
 
 ```mermaid
 graph TD
@@ -13,44 +13,72 @@ graph TD
     
     %% Core Orchestration
     CLI --> |Classify Prompt| WC[Workflow Classifier]
-    CLI --> |Create Task| ORCH[Orchestrator]
+    CLI --> |Create Task| ORCH[Orchestrator Facade]
+    CLI --> |Optional Web UI| UI[UI Server]
     
-    subgraph "Core Harness Engine"
+    subgraph "Core Orchestration"
         ORCH
+        WF[Workflow Engine]
+        RUN[Agent Phase Runner]
         WC
-        VAL[Artifact Validator]
         JUDGE[Judge Runner]
-        COMM[Communicator]
     end
+
+    ORCH --> WF
+    ORCH --> RUN
+    ORCH --> JUDGE
     
     %% Resource Managers
-    subgraph "Resource Managers"
+    subgraph "Artifacts, State, and Contracts"
+        SCHEMA[Artifact Schemas\nrequired outputs, output contracts, visibility rules]
+        VIS[Visibility Policy]
+        VAL[Artifact Validator]
         WM[Workspace Manager]
         AM[Artifact Manager]
         SR[State Repository]
     end
     
-    ORCH <--> |Create isolated dirs| WM
-    ORCH <--> |Validate & Hash| AM
+    WF --> SCHEMA
+    RUN --> SCHEMA
+    RUN --> VIS
+    RUN <--> |Create isolated dirs| WM
+    RUN <--> |Validate & Hash| VAL
+    RUN <--> |Collect Artifacts| AM
     ORCH <--> |Persist DAG State| SR
     AM <--> |Read/Write| SR
+    VIS --> SCHEMA
     
     %% Adapters and Agents
     subgraph "Agent Adapters"
         AA_BASE{AgentAdapter}
         AA_CLAUDE[ClaudeCodeAdapter]
         AA_CODEX[CodexCLIAdapter]
+        AA_HEADLESS[HeadlessCliAdapter]
         AA_MOCK[MockAgentAdapter]
         AA_BASE <|-- AA_CLAUDE
         AA_BASE <|-- AA_CODEX
+        AA_BASE <|-- AA_HEADLESS
         AA_BASE <|-- AA_MOCK
     end
     
-    ORCH --> |Run Context| AA_BASE
+    RUN --> |Run Context| AA_BASE
+
+    %% UI
+    subgraph "UI Boundary"
+        UI_API[ui/api.py]
+        UI_STATE[ui/state_view.py]
+        UI_HTML[ui/html.py]
+        UI_TRANSLATE[ui/translation.py]
+        UI --> UI_API
+        UI_API --> UI_STATE
+        UI_API --> UI_HTML
+        UI_API --> UI_TRANSLATE
+    end
+    UI_STATE --> SR
     
     %% External Storage
     subgraph "Local File System"
-        DB[(harness.db SQLite)]
+        DB[(OpenOrchestra SQLite)]
         FS_WS[workspaces/ \n Isolated Sandboxes]
         FS_ART[artifacts/ \n Versioned & Hashed]
         FS_DEL[deliver/ \n Final Output]
@@ -59,17 +87,26 @@ graph TD
     SR --> DB
     WM --> FS_WS
     AM --> FS_ART
-    COMM --> FS_DEL
+    ORCH --> FS_DEL
     AA_BASE --> |Subprocess execution| FS_WS
 
     %% Styling
     classDef core fill:#f9f,stroke:#333,stroke-width:2px;
     classDef manager fill:#bbf,stroke:#333,stroke-width:1px;
     classDef storage fill:#ddd,stroke:#333,stroke-width:1px;
-    class ORCH,WC,VAL,JUDGE,COMM core;
-    class WM,AM,SR manager;
+    class ORCH,WF,RUN,WC,VAL,JUDGE core;
+    class WM,AM,SR,SCHEMA,VIS manager;
     class DB,FS_WS,FS_ART,FS_DEL storage;
 ```
+
+### Boundary Notes
+
+- `harness/workflow/engine.py` owns phase sequencing for new-project, bugfix, feature-change, and misc workflows.
+- `harness/agents/runner.py` owns workspace creation, adapter calls, retry/timeout behavior, artifact collection, and output validation.
+- `harness/artifacts/schemas.py` owns required outputs, role output-contract text, and the declarative visibility rule table.
+- `harness/artifacts/visibility.py` interprets the schema visibility table for role/phase/round-specific input staging.
+- `harness/ui/server.py` is only the web-server shell. API routing, state snapshots, HTML, file reads, and translation live in separate `harness/ui/*` modules.
+- OpenOrchestra uses `~/.openorchestra.env` and `OO_*` variables as the current user-facing runtime config surface. `~/.myharness.env` and `HARNESS_*` are retained only as documented legacy aliases.
 
 ## 2. Core Workflow Lifecycle (New Project)
 
@@ -83,14 +120,17 @@ stateDiagram-v2
     
     state "Planning Block" as PB {
         CREATED --> PLANNING_DRAFT: Planner Agents
-        PLANNING_DRAFT --> PLAN_JUDGEMENT: Judge evaluates plan.md
-        PLAN_JUDGEMENT --> PLANNING_DRAFT: Rejected (Changes Required)
+        PLANNING_DRAFT --> PLANNING_PEER_REVIEW: Peer review when configured
+        PLANNING_PEER_REVIEW --> PLANNING_REVISION: Revision requested
+        PLANNING_REVISION --> PLAN_REVIEW: Reviewer merges selected_plan.md
+        PLANNING_DRAFT --> PLAN_REVIEW: No peer loop configured
+        PLAN_REVIEW --> PLANNING_REVISION: Reviewer requests changes
     }
     
     state "Execution & Testing Loop" as ETL {
-        PLAN_JUDGEMENT --> EXECUTION: Approved
+        PLAN_REVIEW --> EXECUTION: Selected plan accepted
         EXECUTION --> PATCH_MERGE: Executor Agents output patch.diff
-        PATCH_MERGE --> TESTING: Merge 1 optimal patch
+        PATCH_MERGE --> TESTING: merged_patch.diff materialized
         
         TESTING --> TEST_JUDGEMENT: Tester outputs reports
         TEST_JUDGEMENT --> FIXING: Failed (Bugs found)
@@ -110,7 +150,7 @@ stateDiagram-v2
     }
     
     state "Delivery Block" as DB {
-        REVIEW_JUDGEMENT --> FINAL_JUDGEMENT: Review Approved
+        REVIEW_JUDGEMENT --> FINAL_JUDGEMENT: Review approved
         FINAL_JUDGEMENT --> DELIVERY: Final Sanity Check Passed
         DELIVERY --> COMPLETED: Communicator generates final_delivery.md
     }

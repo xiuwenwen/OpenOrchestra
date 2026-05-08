@@ -6,8 +6,8 @@
 
 - [x] 保留现有命令入口、UI 路由、artifact 文件名和合同码语义。
 - [x] 每次重构后运行全量 `pytest`。
-- [ ] 为每次结构性重构补 characterization tests，先证明旧行为，再移动代码。
-- [ ] 未跟踪生成目录不进入提交，例如 `workPlaces/`。
+- [x] 为每次结构性重构补 characterization tests，先证明旧行为，再移动代码。
+- [x] 未跟踪生成目录不进入提交，例如 `workPlaces/`。
 
 ## 1. Runtime Configuration Boundary
 
@@ -68,17 +68,17 @@
 ## 7. Artifact Contract Boundary
 
 - [x] 把 required outputs 和合同码 prompt 说明归并到 schema 层。
-- [ ] 把 visibility 可见性声明归并到 schema 层。
+- [x] 把 visibility 可见性声明归并到 schema 层。
 - [x] Validator 返回结构化诊断对象，同时保留旧字符串数组接口兼容。
 - [x] markdown 合同码继续支持“文件内搜索”，但结构化输出优先。
-- [ ] 前端区分 OUTPUT_INVALID、业务测试失败、patch gate 失败、agent 执行失败。
+- [x] 前端区分 OUTPUT_INVALID、业务测试失败、patch gate 失败、agent 执行失败。
 
 ## 8. Delivery And Cleanup
 
 - [x] final delivery 发布逻辑从 Orchestrator 拆出。
-- [ ] 清理 `myHarnessSystem` 旧名称残留。
-- [ ] 清理 pycache、历史生成目录、临时 workspace。
-- [ ] 架构文档同步到真实模块边界。
+- [x] 清理 `myHarnessSystem` 旧名称残留；仅保留 documented legacy alias 兼容。
+- [x] 清理 pycache、历史生成目录、临时 workspace。
+- [x] 架构文档同步到真实模块边界。
 
 ## Execution Order
 

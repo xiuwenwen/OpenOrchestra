@@ -1,277 +1,39 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from harness.artifacts.schemas import (
+    ANY_PHASE,
+    ARTIFACT_VISIBILITY_RULES,
+    CONDITION_HAS_REJECTED_PLAN_REVIEW,
+    CONDITION_NO_REJECTED_PLAN_REVIEW,
+    JUDGE_DECISION_ARTIFACTS,
+    ROUND_ANY,
+    ROUND_BEFORE_CURRENT,
+    ROUND_CURRENT,
+    ROUND_LATEST_BEFORE_CURRENT_PER_TYPE,
+    ROUND_LATEST_COMPLETE_JUDGE_BEFORE_CURRENT,
+    ROUND_LATEST_COMPLETE_TEST_BEFORE_CURRENT,
+    ROUND_LATEST_PER_TYPE,
+    ROUND_LATEST_PLANNING,
+    ROUND_PREVIOUS,
+    ROUND_REJECTED_PLAN_REVIEW,
+    SELF_EXCLUDE,
+    TEST_REPORT_ARTIFACTS,
+    ArtifactVisibilityRule,
+    _phases,
+)
 from harness.core.state_machine import (
-    DELIVERY,
-    EXECUTION,
-    FINAL_JUDGEMENT,
-    FIXING,
-    PATCH_MERGE,
     PLAN_REVIEW,
-    PLAN_JUDGEMENT,
     PLANNING_DRAFT,
     PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
     REGRESSION_TESTING,
-    REVIEW_FIXING,
     REVIEW_JUDGEMENT,
-    REVIEWING,
     TEST_JUDGEMENT,
     TESTING,
-)
-
-
-ANY_PHASE = "*"
-ROUND_ANY = "any"
-ROUND_CURRENT = "current"
-ROUND_PREVIOUS = "previous"
-ROUND_BEFORE_CURRENT = "before_current"
-ROUND_LATEST_PER_TYPE = "latest_per_type"
-ROUND_LATEST_BEFORE_CURRENT_PER_TYPE = "latest_before_current_per_type"
-ROUND_LATEST_COMPLETE_TEST_BEFORE_CURRENT = "latest_complete_test_before_current"
-ROUND_LATEST_COMPLETE_JUDGE_BEFORE_CURRENT = "latest_complete_judge_before_current"
-ROUND_LATEST_PLANNING = "latest_planning_round"
-ROUND_REJECTED_PLAN_REVIEW = "latest_rejected_plan_review"
-SELF_INCLUDE = "include"
-SELF_EXCLUDE = "exclude"
-CONDITION_ALWAYS = "always"
-CONDITION_NO_REJECTED_PLAN_REVIEW = "no_rejected_plan_review"
-CONDITION_HAS_REJECTED_PLAN_REVIEW = "has_rejected_plan_review"
-
-
-@dataclass(frozen=True)
-class ArtifactVisibilityRule:
-    target_role: str
-    target_phase: str
-    source_role: str
-    artifact_types: frozenset[str]
-    source_phases: frozenset[str] | None = None
-    round_policy: str = ROUND_ANY
-    self_policy: str = SELF_INCLUDE
-    condition: str = CONDITION_ALWAYS
-
-
-def _types(*artifact_types: str) -> frozenset[str]:
-    return frozenset(artifact_types)
-
-
-def _phases(*phases: str) -> frozenset[str]:
-    return frozenset(phases)
-
-
-PLANNING_ARTIFACTS = _types("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md")
-TEST_REPORT_ARTIFACTS = _types("build_report.md", "test_report.md", "bug_report.md")
-JUDGE_DECISION_ARTIFACTS = _types("decision.json", "decision_summary.md")
-PATCH_GATE_ARTIFACTS = _types("test_gate.md", "objective_gate.md", "patch_validation.md", "materialized_repo.md")
-TEST_JUDGE_GATE_ARTIFACTS = _types("test_gate.md", "objective_gate.md")
-EXECUTOR_REVIEW_ARTIFACTS = _types(
-    "implementation_plan.md",
-    "changed_files.md",
-    "merged_patch.diff",
-    "merged_patch_metadata.md",
-    "patch_metadata.md",
-    "fix_schedule.md",
-    "fix_notes.md",
-    "self_check.md",
-    "merge_report.md",
-)
-FINAL_EXECUTOR_ARTIFACTS = _types(
-    "implementation_plan.md",
-    "changed_files.md",
-    "merged_patch.diff",
-    "merged_patch_metadata.md",
-    "patch_metadata.md",
-    "fix_schedule.md",
-    "fix_notes.md",
-    "self_check.md",
-    "merge_report.md",
-)
-FINAL_PLANNER_ARTIFACTS = _types("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md", "peer_review.md")
-FINAL_REVIEWER_ARTIFACTS = _types("selected_plan.md", "review_report.md")
-
-
-ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
-    ArtifactVisibilityRule("planner", PLANNING_DRAFT, "planner", PLANNING_ARTIFACTS, round_policy=ROUND_BEFORE_CURRENT),
-    ArtifactVisibilityRule("planner", PLANNING_DRAFT, "judge", JUDGE_DECISION_ARTIFACTS, round_policy=ROUND_BEFORE_CURRENT),
-    ArtifactVisibilityRule(
-        "planner",
-        PLANNING_PEER_REVIEW,
-        "planner",
-        PLANNING_ARTIFACTS,
-        source_phases=_phases(PLANNING_DRAFT, PLANNING_REVISION),
-        round_policy=ROUND_CURRENT,
-        self_policy=SELF_EXCLUDE,
-    ),
-    ArtifactVisibilityRule(
-        "planner",
-        PLANNING_REVISION,
-        "planner",
-        PLANNING_ARTIFACTS | _types("peer_review.md"),
-        round_policy=ROUND_BEFORE_CURRENT,
-        condition=CONDITION_NO_REJECTED_PLAN_REVIEW,
-    ),
-    ArtifactVisibilityRule(
-        "planner",
-        PLANNING_REVISION,
-        "judge",
-        JUDGE_DECISION_ARTIFACTS,
-        round_policy=ROUND_BEFORE_CURRENT,
-        condition=CONDITION_NO_REJECTED_PLAN_REVIEW,
-    ),
-    ArtifactVisibilityRule(
-        "planner",
-        PLANNING_REVISION,
-        "reviewer",
-        _types("review_report.md"),
-        source_phases=_phases(PLAN_REVIEW),
-        round_policy=ROUND_REJECTED_PLAN_REVIEW,
-        condition=CONDITION_HAS_REJECTED_PLAN_REVIEW,
-    ),
-    ArtifactVisibilityRule(
-        "reviewer",
-        PLAN_REVIEW,
-        "planner",
-        PLANNING_ARTIFACTS | _types("peer_review.md"),
-        source_phases=_phases(PLANNING_DRAFT, PLANNING_REVISION, PLANNING_PEER_REVIEW),
-        round_policy=ROUND_CURRENT,
-    ),
-    ArtifactVisibilityRule(
-        "judge",
-        PLAN_JUDGEMENT,
-        "planner",
-        PLANNING_ARTIFACTS | _types("peer_review.md"),
-        source_phases=_phases(PLANNING_DRAFT, PLANNING_REVISION, PLANNING_PEER_REVIEW),
-        round_policy=ROUND_CURRENT,
-    ),
-    ArtifactVisibilityRule(
-        "judge",
-        PLAN_JUDGEMENT,
-        "reviewer",
-        _types("selected_plan.md", "review_report.md"),
-        source_phases=_phases(PLAN_REVIEW),
-        round_policy=ROUND_CURRENT,
-    ),
-    ArtifactVisibilityRule(
-        "executor",
-        EXECUTION,
-        "reviewer",
-        _types("selected_plan.md"),
-        source_phases=_phases(PLAN_REVIEW),
-        round_policy=ROUND_LATEST_PLANNING,
-    ),
-    ArtifactVisibilityRule(
-        "executor",
-        PATCH_MERGE,
-        "executor",
-        _types("patch.diff", "fix_patch.diff", "patch_metadata.md"),
-        source_phases=_phases(EXECUTION, FIXING, REVIEW_FIXING),
-        round_policy=ROUND_CURRENT,
-    ),
-    ArtifactVisibilityRule(
-        "executor",
-        PATCH_MERGE,
-        "executor",
-        _types("merged_patch.diff", "merged_patch_metadata.md"),
-        source_phases=_phases(PATCH_MERGE),
-        round_policy=ROUND_LATEST_BEFORE_CURRENT_PER_TYPE,
-    ),
-    ArtifactVisibilityRule("executor", FIXING, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_PREVIOUS),
-    ArtifactVisibilityRule(
-        "executor",
-        FIXING,
-        "executor",
-        _types("merged_patch_metadata.md"),
-        source_phases=_phases(PATCH_MERGE),
-        round_policy=ROUND_PREVIOUS,
-    ),
-    ArtifactVisibilityRule(
-        "executor",
-        FIXING,
-        "tester",
-        TEST_REPORT_ARTIFACTS,
-        source_phases=_phases(TESTING, REGRESSION_TESTING),
-        round_policy=ROUND_LATEST_COMPLETE_TEST_BEFORE_CURRENT,
-    ),
-    ArtifactVisibilityRule(
-        "executor",
-        FIXING,
-        "judge",
-        JUDGE_DECISION_ARTIFACTS,
-        source_phases=_phases(TEST_JUDGEMENT, REVIEW_JUDGEMENT),
-        round_policy=ROUND_LATEST_COMPLETE_JUDGE_BEFORE_CURRENT,
-    ),
-    ArtifactVisibilityRule("executor", REVIEW_FIXING, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_PREVIOUS),
-    ArtifactVisibilityRule(
-        "executor",
-        REVIEW_FIXING,
-        "executor",
-        _types("merged_patch_metadata.md"),
-        source_phases=_phases(PATCH_MERGE),
-        round_policy=ROUND_PREVIOUS,
-    ),
-    ArtifactVisibilityRule(
-        "executor",
-        REVIEW_FIXING,
-        "tester",
-        TEST_REPORT_ARTIFACTS,
-        source_phases=_phases(TESTING, REGRESSION_TESTING),
-        round_policy=ROUND_LATEST_COMPLETE_TEST_BEFORE_CURRENT,
-    ),
-    ArtifactVisibilityRule(
-        "executor",
-        REVIEW_FIXING,
-        "judge",
-        JUDGE_DECISION_ARTIFACTS,
-        source_phases=_phases(TEST_JUDGEMENT, REVIEW_JUDGEMENT),
-        round_policy=ROUND_LATEST_COMPLETE_JUDGE_BEFORE_CURRENT,
-    ),
-    ArtifactVisibilityRule("reviewer", REVIEWING, "executor", EXECUTOR_REVIEW_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("reviewer", REVIEWING, "tester", TEST_REPORT_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("reviewer", REVIEWING, "judge", JUDGE_DECISION_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("reviewer", REVIEWING, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("judge", TEST_JUDGEMENT, "orchestrator", TEST_JUDGE_GATE_ARTIFACTS, round_policy=ROUND_CURRENT),
-    ArtifactVisibilityRule(
-        "judge",
-        TEST_JUDGEMENT,
-        "tester",
-        TEST_REPORT_ARTIFACTS,
-        source_phases=_phases(TESTING, REGRESSION_TESTING),
-        round_policy=ROUND_CURRENT,
-    ),
-    ArtifactVisibilityRule("judge", REVIEW_JUDGEMENT, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule(
-        "judge",
-        REVIEW_JUDGEMENT,
-        "executor",
-        _types("merged_patch_metadata.md"),
-        source_phases=_phases(PATCH_MERGE),
-        round_policy=ROUND_LATEST_PER_TYPE,
-    ),
-    ArtifactVisibilityRule("judge", REVIEW_JUDGEMENT, "tester", TEST_REPORT_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule(
-        "judge",
-        REVIEW_JUDGEMENT,
-        "reviewer",
-        _types("review_report.md"),
-        source_phases=_phases(REVIEWING),
-        round_policy=ROUND_CURRENT,
-    ),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "planner", FINAL_PLANNER_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "executor", FINAL_EXECUTOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "tester", TEST_REPORT_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "reviewer", FINAL_REVIEWER_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "judge", JUDGE_DECISION_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("communicator", DELIVERY, "planner", FINAL_PLANNER_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("communicator", DELIVERY, "executor", FINAL_EXECUTOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("communicator", DELIVERY, "tester", TEST_REPORT_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("communicator", DELIVERY, "reviewer", FINAL_REVIEWER_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("communicator", DELIVERY, "judge", JUDGE_DECISION_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("communicator", DELIVERY, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
 )
 
 

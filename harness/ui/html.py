@@ -270,8 +270,14 @@ function statusLabel(st){
 }
 function statusHelp(st){
   const s=String(st||"PENDING");
-  const zh={OUTPUT_INVALID:"Agent 没有产出符合角色合同的必需文件或 return_code，不代表测试结论失败。测试结论请看 build_result_code、test_result_code、bug_result_code 或 test_gate。"};
-  const en={OUTPUT_INVALID:"The agent did not produce the required role-contract files or return_code. This is not the test verdict; check build_result_code, test_result_code, bug_result_code, or test_gate for test results."};
+  const zh={
+    OUTPUT_INVALID:"Agent 没有产出符合角色合同的必需文件或 return_code，不代表测试结论失败。测试结论请看 build_result_code、test_result_code、bug_result_code 或 test_gate。",
+    FAILED:"执行失败表示 Agent 进程、阶段编排或门禁失败；业务测试失败请看 test_result_code/test_gate，patch gate 失败请看 patch_validated/objective_gate。"
+  };
+  const en={
+    OUTPUT_INVALID:"The agent did not produce the required role-contract files or return_code. This is not the test verdict; check build_result_code, test_result_code, bug_result_code, or test_gate for test results.",
+    FAILED:"Failed means an agent process, orchestration phase, or gate failed. Business test failures are in test_result_code/test_gate; patch gate failures are in patch_validated/objective_gate."
+  };
   return (uiLanguage==="en"?en[s]:zh[s])||s;
 }
 function pill(st){let s=st||"PENDING";return `<span class="pill ${esc(s)}" title="${esc(statusHelp(s))}">${esc(statusLabel(s))}</span>`}
@@ -560,8 +566,16 @@ function renderLog(events){
   if(flow.length){const last=flow[flow.length-1];document.getElementById("logPreview").textContent=`${flowLabel(last.event_type)} · ${labelPhase(last.phase||"")} · ${last.role?roleLabel(last.role):""}`}
   document.getElementById("logBody").innerHTML=flow.slice().reverse().map(e=>{
     const st=String(e.status||"");
-    return`<div class="log-item"><span class="log-time">${esc(dateFmt.format(new Date(Number(e.ts||0)*1000)))}</span><span class="log-type ${esc(st)}">${esc(flowLabel(e.event_type))}</span><span class="log-msg">${esc(labelPhase(e.phase||""))} ${e.role?esc(roleLabel(e.role)):""} ${esc(e.agent_id||"")} ${esc(e.message||"")}</span></div>`;
+    return`<div class="log-item"><span class="log-time">${esc(dateFmt.format(new Date(Number(e.ts||0)*1000)))}</span><span class="log-type ${esc(st)}">${esc(flowLabel(e.event_type))}</span><span class="log-msg">${esc(failureKind(e))} ${esc(labelPhase(e.phase||""))} ${e.role?esc(roleLabel(e.role)):""} ${esc(e.agent_id||"")} ${esc(e.message||"")}</span></div>`;
   }).join("");
+}
+function failureKind(e){
+  const et=String(e.event_type||""),st=String(e.status||"");
+  if(et==="patch_validated"&&(st==="FAILED"||st==="fail"))return uiLanguage==="en"?"[Patch gate failed]":"[patch gate失败]";
+  if(et==="test_gate"&&(st==="FAILED"||st==="fail"))return uiLanguage==="en"?"[Business tests failed]":"[业务测试失败]";
+  if(et==="agent_failed")return uiLanguage==="en"?"[Agent execution failed]":"[Agent执行失败]";
+  if(st==="OUTPUT_INVALID")return uiLanguage==="en"?"[Output contract invalid]":"[产物合同无效]";
+  return "";
 }
 function flowLabel(et){
   const zh={task_created:"任务创建",task_started:"任务启动",task_completed:"任务完成",task_failed:"任务失败",phase_started:"阶段开始",phase_completed:"阶段完成",phase_skipped:"阶段跳过",agent_started:"Agent启动",agent_heartbeat:"Agent运行",agent_completed:"Agent完成",agent_failed:"Agent失败",agent_retryable_failure:"Agent重试",patch_validated:"补丁门禁",test_gate:"测试门禁",delivery_published:"交付发布",judge_decision:"裁决"};

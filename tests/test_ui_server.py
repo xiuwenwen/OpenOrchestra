@@ -333,6 +333,12 @@ def test_ui_labels_output_invalid_as_contract_issue_not_test_failure() -> None:
     assert "Output Contract Invalid" in html
     assert "不代表测试结论失败" in html
     assert "This is not the test verdict" in html
+    assert "业务测试失败" in html
+    assert "patch gate失败" in html
+    assert "Agent执行失败" in html
+    assert "Business tests failed" in html
+    assert "Patch gate failed" in html
+    assert "Agent execution failed" in html
     assert ".pill.OUTPUT_INVALID{background:var(--warn-soft)" in html
 
 

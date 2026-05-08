@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from harness.artifacts.schemas import output_contract_lines_for, required_outputs_for
+from harness.artifacts.schemas import ARTIFACT_VISIBILITY_RULES, output_contract_lines_for, required_outputs_for
 
 
 def test_required_outputs_always_include_delivery_envelope() -> None:
@@ -29,3 +29,11 @@ def test_output_contract_lines_for_executor_do_not_define_test_verdicts() -> Non
     assert "For executor Markdown notes and metadata" in text
     assert "build_result_code" not in text
     assert "review_decision_code" not in text
+
+
+def test_visibility_rules_live_in_artifact_schema_layer() -> None:
+    covered = {(rule.target_role, rule.target_phase) for rule in ARTIFACT_VISIBILITY_RULES}
+
+    assert ("reviewer", "REVIEWING") in covered
+    assert ("executor", "EXECUTION") in covered
+    assert ("judge", "TEST_JUDGEMENT") in covered
