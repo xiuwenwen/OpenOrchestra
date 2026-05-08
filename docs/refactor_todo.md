@@ -29,12 +29,12 @@
 
 ## 3. Workflow Engine Boundary
 
-- [ ] 新建 `harness/workflow/engine.py`。
-- [ ] 迁移 new project flow：planning -> execution/test -> review -> final judgement -> delivery。
-- [ ] 迁移 bugfix flow。
-- [ ] 迁移 feature change flow。
-- [ ] 迁移 misc flow。
-- [ ] `Orchestrator.run_task()` 保持 facade，不改变调用方。
+- [x] 新建 `harness/workflow/engine.py`。
+- [x] 迁移 new project flow：planning -> execution/test -> review -> final judgement -> delivery。
+- [x] 迁移 bugfix flow。
+- [x] 迁移 feature change flow。
+- [x] 迁移 misc flow。
+- [x] `Orchestrator.run_task()` 保持 facade，不改变调用方。
 - [ ] 现有 `harness/workflow/*.py` 空壳要么补成真实模块，要么删除。
 
 ## 4. Agent Run Boundary
