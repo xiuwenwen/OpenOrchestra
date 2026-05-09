@@ -69,15 +69,15 @@ def markdown_business_code_contract_lines() -> list[str]:
 
 def delivery_return_code_contract_lines() -> list[str]:
     return [
-        "- `delivery.md` is the role return envelope, not the task/business verdict.",
-        "- `delivery.md` must contain `return_code: <integer>`.",
-        "- Do not format the return-code line as a heading, list item, bold text, table cell, code block, sentence, JSON, YAML block, or natural-language explanation.",
+        "- `delivery.md` is the JSON role return envelope, not the task/business verdict.",
+        "- `delivery.md` must be exactly one JSON object with no Markdown, prose, code fence, YAML, table, or bullet text.",
+        '- Required JSON shape: `{"return_code":0,"task_status":"success","role_return_code":0,"produced_files":["delivery.md"],"known_risks":[]}`.',
+        "- `return_code` must be a JSON integer.",
         f"- Return code meanings: {delivery_return_code_meanings_text()}.",
-        "- Use `return_code: 0` only when this role successfully returned all required output files for this phase.",
+        "- Use JSON `return_code: 0` only when this role successfully returned all required output files for this phase.",
         "- Use a non-zero return code when the role output contract is not cleanly satisfied.",
-        "- Do not use natural-language delivery status values such as `status: success`, `status: failed`, `pass`, `fail`, `approved`, `rejected`, `ok`, or `complete` in `delivery.md`.",
-        "- Business outcomes must use separate machine fields in the phase artifacts, never the `delivery.md` return code. Examples: `decision.json.decision: fail`, `test_result: fail`, `review_decision: changes_required`, `peer_review_status: changes_requested`.",
-        "- If you rendered a clear negative business verdict, such as tests failed or changes are required, still write `return_code: 0` in `delivery.md` when the required role files are complete.",
-        "- After the return-code line, `delivery.md` must state `task_status`, `role_return_code`, `produced_files`, and `known_risks` using concise structured bullets or fields.",
+        "- Do not use natural-language delivery status text such as `status: success`, `status: failed`, `pass`, `fail`, `approved`, `rejected`, `ok`, or `complete` as a replacement for JSON `return_code`.",
+        "- Business outcomes must use separate machine fields in the phase artifacts, never the `delivery.md` return code. Examples: `decision.json.decision: fail`, `test_result_code: -1`, `review_decision_code: 1`, `peer_review_code: 1`.",
+        "- If you rendered a clear negative business verdict, such as tests failed or changes are required, still write JSON `return_code: 0` in `delivery.md` when the required role files are complete.",
         "- Harness validates `delivery.md`; any return code other than `0` prevents the run from advancing.",
     ]

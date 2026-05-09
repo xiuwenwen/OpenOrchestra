@@ -60,45 +60,45 @@ ROLE_INSTRUCTIONS = {
     "planner": (
         "Create planning artifacts only. Analyze the request, existing artifacts, assumptions, risks, "
         "compatibility constraints, and an actionable task breakdown. Do not modify source files. "
-        "delivery.md is a role return envelope. It must contain `return_code: 0` "
-        "when you produced the required planning files, even if you identify high risks. "
+        "delivery.md is a JSON role return envelope. It must be exactly one JSON object with "
+        "`return_code` set to `0` when you produced the required planning files, even if you identify high risks. "
         "Complete planning Markdown artifacts must contain `artifact_result_code: 0`."
     ),
     "executor": (
         "Create the artifacts required by the current executor phase. For implementation and fix phases, "
         "express code changes as unified diff files and supporting notes. For miscellaneous response phases, "
         "answer the request without modifying project files. Do not decide workflow progression or communicate "
-        "with the user outside required artifacts. delivery.md is a role return envelope. It must contain "
-        "`return_code: 0` when you produced the required files, regardless of the "
+        "with the user outside required artifacts. delivery.md is a JSON role return envelope. It must be exactly one "
+        "JSON object with `return_code` set to `0` when you produced the required files, regardless of the "
         "implementation complexity. Complete executor Markdown artifacts must contain `artifact_result_code: 0`."
     ),
     "tester": (
         "Evaluate executor artifacts and available repository state. Produce build, test, and bug reports "
         "with an explicit pass/fail assessment and reproducible evidence. "
-        "IMPORTANT: delivery.md is a role return envelope, not the test verdict. It must contain "
-        "`return_code: 0` as long as you completed the evaluation and produced the required reports, "
+        "IMPORTANT: delivery.md is a JSON role return envelope, not the test verdict. It must be exactly one "
+        "JSON object with `return_code` set to `0` as long as you completed the evaluation and produced the required reports, "
         "even if the test verdict is `test_result_code: -1` or you find critical bugs. "
         "`artifact_result_code` must be `0` for complete tester reports; put build/test/bug outcomes only in "
         "`build_result_code`, `test_result_code`, and `bug_result_code`."
     ),
     "reviewer": (
         "Review executor and tester artifacts for correctness, scope control, regressions, maintainability, "
-        "and missing validation. Produce review findings only. delivery.md is a role return envelope. It must "
-        "contain `return_code: 0` if you completed the review, regardless of whether "
+        "and missing validation. Produce review findings only. delivery.md is a JSON role return envelope. It must "
+        "be exactly one JSON object with `return_code` set to `0` if you completed the review, regardless of whether "
         "the review verdict is `review_decision_code: 0` or `review_decision_code: 1`. "
         "`review_report.md` must contain `artifact_result_code: 0` when complete."
     ),
     "judge": (
         "Make the phase decision from collected artifacts only. Produce a strict machine-readable decision "
-        "and a concise rationale. Do not create implementation changes. delivery.md is a role return envelope, "
-        "not the phase verdict. It must contain `return_code: 0` if you rendered a "
+        "and a concise rationale. Do not create implementation changes. delivery.md is a JSON role return envelope, "
+        "not the phase verdict. It must be exactly one JSON object with `return_code` set to `0` if you rendered a "
         "clear decision, even when `decision.json` contains `decision: fail` or `decision: changes_required`. "
         "`decision_summary.md` must contain `artifact_result_code: 0` when complete."
     ),
     "communicator": (
         "Create the final delivery artifact only. Summarize outcome, status, produced artifacts, residual "
-        "risks, and next steps using the accepted artifact set. delivery.md is a role return envelope. It must "
-        "contain `return_code: 0` if the final delivery documentation is complete. "
+        "risks, and next steps using the accepted artifact set. delivery.md is a JSON role return envelope. It must "
+        "be exactly one JSON object with `return_code` set to `0` if the final delivery documentation is complete. "
         "`final_delivery.md` and `usage_guide.md` must contain `artifact_result_code: 0` when complete."
     ),
 }

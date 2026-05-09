@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from harness.artifacts.delivery_codes import DELIVERY_RETURN_CODE_BY_CODE, DELIVERY_RETURN_CODES
-from harness.artifacts.validator import ArtifactValidator
+from harness.artifacts.validator import ArtifactValidator, delivery_issue_is_contract_only
 
 
 def md_ok(text: str = "ok") -> str:
@@ -31,6 +32,28 @@ def test_artifact_validator_accepts_complete_outputs(tmp_path: Path) -> None:
     (tmp_path / "delivery.md").write_text("return_code: 0\n", encoding="utf-8")
 
     ok, errors = validator.validate_required_outputs(tmp_path, ["plan.md", "risk.md", "delivery.md"])
+
+    assert ok
+    assert errors == []
+
+
+def test_artifact_validator_accepts_json_delivery_return_code(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    (tmp_path / "plan.md").write_text(md_ok(), encoding="utf-8")
+    (tmp_path / "delivery.md").write_text(
+        json.dumps(
+            {
+                "return_code": 0,
+                "task_status": "success",
+                "role_return_code": 0,
+                "produced_files": ["plan.md", "delivery.md"],
+                "known_risks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ok, errors = validator.validate_required_outputs(tmp_path, ["plan.md", "delivery.md"])
 
     assert ok
     assert errors == []
@@ -110,10 +133,12 @@ def test_artifact_validator_rejects_legacy_delivery_status(tmp_path: Path) -> No
     (tmp_path / "plan.md").write_text(md_ok(), encoding="utf-8")
     (tmp_path / "delivery.md").write_text("status: success\n", encoding="utf-8")
 
-    ok, errors = validator.validate_required_outputs(tmp_path, ["plan.md", "delivery.md"])
+    result = validator.validate_required_outputs_result(tmp_path, ["plan.md", "delivery.md"])
+    ok, errors = result.ok, result.errors
 
     assert not ok
     assert errors == ["delivery.md must contain `return_code: <int>`"]
+    assert delivery_issue_is_contract_only(result)
 
 
 def test_artifact_validator_rejects_delivery_without_return_code(tmp_path: Path) -> None:

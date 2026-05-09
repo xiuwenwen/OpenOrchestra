@@ -16,7 +16,8 @@ def test_output_contract_lines_for_tester_keep_verdict_codes_separate() -> None:
     lines = output_contract_lines_for("tester", "TESTING", required_outputs_for("tester", "TESTING"))
     text = "\n".join(lines)
 
-    assert "`delivery.md` must contain `return_code: 0`" in text
+    assert "`delivery.md` must be exactly one JSON object" in text
+    assert "JSON `return_code` must be `0`" in text
     assert "Do not copy `build_result_code`, `test_result_code`, or `bug_result_code` values" in text
     assert "build_result_code: -1" in text
     assert "`artifact_result_code: 0` somewhere in the file" in text

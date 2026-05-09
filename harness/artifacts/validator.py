@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import re
 
@@ -95,10 +96,36 @@ class ArtifactValidator:
     def parse_delivery_return_code(self, delivery_path: Path) -> int | None:
         if not delivery_path.exists() or not delivery_path.is_file():
             return None
-        for line in delivery_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        content = delivery_path.read_text(encoding="utf-8", errors="replace")
+        json_return_code = self.parse_delivery_json_return_code(content)
+        if json_return_code is not None:
+            return json_return_code
+        for line in content.splitlines():
             match = RETURN_CODE_FIELD_PATTERN.fullmatch(line.strip())
             if match:
                 return int(match.group(1))
+        return None
+
+    def parse_delivery_json_return_code(self, content: str) -> int | None:
+        text = content.strip()
+        if not text:
+            return None
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get("return_code")
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                return None
         return None
 
     def parse_markdown_artifact_result_code(self, artifact_path: Path) -> int | None:
@@ -115,3 +142,11 @@ class ArtifactValidator:
         if return_code is None:
             return None
         return delivery_status_for_return_code(return_code)
+
+
+def delivery_issue_is_contract_only(result: ValidationResult) -> bool:
+    errors = [issue for issue in result.issues if issue.severity == "error"]
+    if not errors:
+        return False
+    delivery_contract_codes = {"missing_return_code", "nonzero_return_code"}
+    return all(issue.artifact == "delivery.md" and issue.code in delivery_contract_codes for issue in errors)

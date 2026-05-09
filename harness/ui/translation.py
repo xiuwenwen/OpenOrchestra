@@ -157,7 +157,7 @@ class DisplayTranslator:
             (r"Create planning artifacts only\.", "只创建规划产物。"),
             (r"Analyze the request, existing artifacts, assumptions, risks, compatibility constraints, and an actionable task breakdown\.", "分析请求、现有产物、假设、风险、兼容性约束，并给出可执行的任务拆解。"),
             (r"Do not modify source files\.", "不要修改源码文件。"),
-            (r"Your delivery\.md status must be 'success' if you produced a complete plan, even if you identify high risks\.", "如果你产出了完整计划，即使识别出高风险，delivery.md 的状态也必须是 'success'。"),
+            (r"delivery\.md is a JSON role return envelope", "delivery.md 是 JSON 角色返回信封"),
             (r"Specialization: Pragmatic Planner\.", "专长：务实规划者。"),
             (r"Preference: MVP-first, implementation-oriented, complexity-minimizing\.", "偏好：MVP 优先、面向实现、最小化复杂度。"),
             (r"Focus:", "关注点："),

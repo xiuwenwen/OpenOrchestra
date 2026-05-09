@@ -369,8 +369,10 @@ def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]
     markdown_list = ", ".join(f"`{name}`" for name in markdown_outputs)
     base = [
         "- Every role and every phase must create `delivery.md`.",
-        "- `delivery.md` is the role return envelope, not the task/business verdict.",
-        "- `delivery.md` must contain `return_code: 0` when the required role files are complete.",
+        "- `delivery.md` is the JSON role return envelope, not the task/business verdict.",
+        "- `delivery.md` must be exactly one JSON object with no Markdown, prose, code fence, YAML, table, or bullet text.",
+        '- Required JSON shape: `{"return_code":0,"task_status":"success","role_return_code":0,"produced_files":["delivery.md"],"known_risks":[]}`.',
+        "- JSON `return_code` must be `0` when the required role files are complete.",
         "- Do not copy phase verdict values into `return_code`.",
     ]
     if markdown_outputs:

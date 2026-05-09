@@ -354,7 +354,7 @@ class PromptBuilder:
                     "- For TEST_JUDGEMENT, `decision.json` must contain a top-level `decision` string with value `pass` or `fail`; this JSON enum is state-machine data and is the only exception to the Markdown numeric-code rule.",
                     "- `decision.json` must include an `evidence` object summarizing objective gate facts, test command exit codes, changed files, and any blocking findings you relied on.",
                     "- `decision.json.decision` is the test verdict. It must not be copied into the `delivery.md` return code.",
-                    "- If you choose `decision: fail` because tests failed, write `return_code: 0` in `delivery.md` as long as `decision.json`, `decision_summary.md`, and `delivery.md` are complete.",
+                    "- If you choose `decision: fail` because tests failed, write JSON `return_code: 0` in `delivery.md` as long as `decision.json`, `decision_summary.md`, and `delivery.md` are complete.",
                     "- `decision_summary.md` must include `artifact_result_code: 0` and one machine-readable line: `decision_code: 0` for pass or `decision_code: -1` for fail.",
                     "- Do not decide objective facts from natural-language reports. Use structured Harness evidence in `objective_gate.md`, `patch_validation.md`, `materialized_repo.md`, and `test_gate.md`.",
                     "- Use `pass` only when structured evidence shows patch apply check passed, diff check passed, build/test commands passed or were explicitly not required, and the merged patch is coherent and testable.",
@@ -366,7 +366,7 @@ class PromptBuilder:
                     "- Use `approved` only when the artifact set satisfies the current phase contract.",
                     "- Use `changes_required` when required artifacts are missing, evidence is weak, or unresolved risks block progression.",
                     "- `decision.json.decision` is the phase verdict. It must not be copied into the `delivery.md` return code.",
-                    "- If you choose `changes_required`, write `return_code: 0` in `delivery.md` as long as `decision.json`, `decision_summary.md`, and `delivery.md` are complete.",
+                    "- If you choose `changes_required`, write JSON `return_code: 0` in `delivery.md` as long as `decision.json`, `decision_summary.md`, and `delivery.md` are complete.",
                     "- `decision_summary.md` must include `artifact_result_code: 0` and one machine-readable line: `decision_code: 0` for approved or `decision_code: 1` for changes_required.",
                     "- `decision.json` must include an `evidence` object with the structured facts used for the decision; keep semantic judgement separate from objective gate facts.",
                 ]
@@ -419,7 +419,7 @@ class PromptBuilder:
                 "- If the repository is not a git worktree, initialize a temporary git baseline or use a script/diff command that writes unified diff output directly to the required patch file.",
                 "- Do not paste a large patch into a Write-tool payload, and do not `cat` or print the full patch to stdout. Verify large patches with `wc -c`, file counts, and diff stats.",
                 "- Avoid duplicating full source code in markdown deliverables; summarize file-level changes and reference paths instead.",
-                "- Create `delivery.md` and `self_check.md` early with the current return code, then update them before exit.",
+                "- Create `delivery.md` as the required JSON role return envelope and create `self_check.md` early, then update both before exit.",
                 "- `changed_files.md` or `fix_notes.md` must list the intended file-level changes and rationale.",
                 "- `self_check.md` must describe verification performed, unverified assumptions, and remaining risks.",
             ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -9,8 +10,10 @@ from typing import Any
 from harness.adapters.base import AgentAdapter
 from harness.adapters.claude_code_adapter import REQUEST_SIZE_ERROR_PATTERNS
 from harness.agents.context import AgentRunContext
+from harness.agents.delivery_review import DeliveryContractReviewer
 from harness.agents.output_policy import AgentOutputPolicy
 from harness.agents.result import AgentRunResult, ArtifactRef
+from harness.artifacts.validator import ValidationResult, delivery_issue_is_contract_only
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressEvent
 
@@ -23,6 +26,7 @@ class AgentPhaseRunner:
     def __init__(self, orchestrator: Any):
         self.orchestrator = orchestrator
         self.output_policy = AgentOutputPolicy()
+        self.delivery_reviewer = DeliveryContractReviewer()
 
     def run_role_phase(
         self,
@@ -391,7 +395,18 @@ class AgentPhaseRunner:
                     message = "Phase timed out before this agent result was accepted; ignoring late result"
                     o.repository.update_agent_run_status(run_id, "TIMEOUT", message)
                     raise TaskFailedError(message)
-                ok, errors = o.validator.validate_required_outputs(workspace.output_dir, required_outputs)
+                validation_result = o.validator.validate_required_outputs_result(workspace.output_dir, required_outputs)
+                review_data: dict[str, Any] = {}
+                if result.exit_code == 0 and not validation_result.ok and delivery_issue_is_contract_only(validation_result):
+                    review_data = self._review_delivery_contract(
+                        context=context,
+                        validation_result=validation_result,
+                        backend=o._backend_for(task_id, role),
+                    )
+                    if review_data.get("delivery_contract_review_decision") == "accept":
+                        validation_result = o.validator.validate_required_outputs_result(workspace.output_dir, required_outputs)
+                ok = validation_result.ok
+                errors = validation_result.errors
                 delivery_status = o.validator.parse_delivery_status(workspace.output_dir / "delivery.md")
                 result.validation_ok = ok
                 result.validation_errors = errors
@@ -419,6 +434,7 @@ class AgentPhaseRunner:
                                 "artifacts": len(result.artifacts),
                                 "delivery_status": delivery_status or "-",
                                 "elapsed_seconds": elapsed_seconds,
+                                **review_data,
                             },
                         )
                     )
@@ -437,6 +453,7 @@ class AgentPhaseRunner:
                     "logs": str(context.log_dir),
                     "delivery_status": delivery_status or "-",
                     "elapsed_seconds": elapsed_seconds,
+                    **review_data,
                 }
                 if diagnostics_path.exists():
                     event_data["diagnostics"] = str(diagnostics_path)
@@ -498,6 +515,37 @@ class AgentPhaseRunner:
             details = last_result.validation_errors or ([last_error_message] if last_error_message else [])
             raise TaskFailedError(f"Agent {agent_id} failed after {max_retry + 1} attempt(s): {details}")
         raise TaskFailedError(f"Agent {agent_id} failed before producing a result")
+
+    def _review_delivery_contract(
+        self,
+        *,
+        context: AgentRunContext,
+        validation_result: ValidationResult,
+        backend: str,
+    ) -> dict[str, Any]:
+        review = self.delivery_reviewer.review(
+            backend=backend,
+            context=context,
+            validation_result=validation_result,
+        )
+        data: dict[str, Any] = {
+            "delivery_contract_review": str(review.prompt_path),
+            "delivery_contract_review_decision": review.decision,
+            "delivery_contract_review_reason": review.reason,
+        }
+        if review.stdout_path:
+            data["delivery_contract_review_stdout"] = str(review.stdout_path)
+        if review.stderr_path:
+            data["delivery_contract_review_stderr"] = str(review.stderr_path)
+        if not review.accepts:
+            return data
+        delivery_path = context.output_dir / "delivery.md"
+        original_path = review.prompt_path.parent / "delivery.original.md"
+        if delivery_path.exists():
+            shutil.copy2(delivery_path, original_path)
+            data["delivery_contract_review_original"] = str(original_path)
+        delivery_path.write_text(self.delivery_reviewer.normalized_delivery_json(context, review), encoding="utf-8")
+        return data
 
     def is_request_size_failure(self, result: AgentRunResult, context: AgentRunContext, message: str) -> bool:
         if self.text_contains_request_size_error(message):

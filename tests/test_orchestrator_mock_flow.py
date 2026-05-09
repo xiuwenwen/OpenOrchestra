@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import uuid
 import re
@@ -1532,6 +1533,58 @@ def test_missing_delivery_md_is_output_invalid_not_file_error(monkeypatch, tmp_p
     runs = orchestrator.repository.list_agent_runs(task_id)
     assert runs[-1]["status"] == "OUTPUT_INVALID"
     assert runs[-1]["error_message"] == "Missing required output: delivery.md"
+
+
+def test_delivery_contract_review_accepts_format_only_failure(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["roles"]["executor"]["count"] = 1
+    config["limits"]["max_agent_retry"] = 0
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("merge with malformed delivery")
+
+    class MalformedDeliveryAdapter:
+        def run(self, context):
+            context.output_dir.mkdir(parents=True, exist_ok=True)
+            context.log_dir.mkdir(parents=True, exist_ok=True)
+            (context.output_dir / "merged_patch.diff").write_text("diff --git a/a b/a\n", encoding="utf-8")
+            (context.output_dir / "merged_patch_metadata.md").write_text(
+                "artifact_result_code: 0\n\npatch_artifact: merged_patch.diff\n", encoding="utf-8"
+            )
+            (context.output_dir / "merge_report.md").write_text("artifact_result_code: 0\n\nmerged", encoding="utf-8")
+            (context.output_dir / "delivery.md").write_text("status: success\nsummary: completed\n", encoding="utf-8")
+            stdout = context.log_dir / "stdout.log"
+            stderr = context.log_dir / "stderr.log"
+            stdout.write_text("ok", encoding="utf-8")
+            stderr.write_text("", encoding="utf-8")
+            return AgentRunResult(
+                task_id=context.task_id,
+                phase_id=context.phase_id,
+                role=context.role,
+                agent_id=context.agent_id,
+                status="COMPLETED",
+                exit_code=0,
+                stdout_path=stdout,
+                stderr_path=stderr,
+            )
+
+    monkeypatch.setattr(orchestrator, "_adapter_for_backend", lambda backend: MalformedDeliveryAdapter())
+
+    results = orchestrator.run_role_phase(
+        "executor",
+        PATCH_MERGE,
+        0,
+        required_outputs_for("executor", PATCH_MERGE),
+        "merge with malformed delivery",
+    )
+
+    delivery_artifact = next(artifact for artifact in results[0].artifacts if artifact.artifact_type == "delivery.md")
+    payload = json.loads(delivery_artifact.path.read_text(encoding="utf-8"))
+    runs = orchestrator.repository.list_agent_runs(task_id)
+
+    assert runs[-1]["status"] == "COMPLETED"
+    assert payload["return_code"] == 0
+    assert payload["contract_review"]["decision"] == "accept"
+    assert (Path(payload["contract_review"]["prompt_path"]).parent / "delivery.original.md").exists()
 
 
 def test_context_window_failure_is_not_retried(monkeypatch, tmp_path: Path) -> None:

@@ -50,16 +50,21 @@ class MockAgentAdapter(AgentAdapter):
 
     def _content_for(self, context: AgentRunContext, name: str) -> str:
         if name == "delivery.md":
-            return (
-                "return_code: 0\n\n"
-                "# Role Delivery\n\n"
-                f"role: {context.role}\n"
-                f"phase: {context.phase}\n"
-                f"agent_id: {context.agent_id}\n\n"
-                "role_return_code: 0\n"
-                "summary: Mock agent completed the required output contract.\n"
-                "known_risks: none\n"
-            )
+            return json.dumps(
+                {
+                    "return_code": 0,
+                    "task_status": "success",
+                    "role_return_code": 0,
+                    "role": context.role,
+                    "phase": context.phase,
+                    "agent_id": context.agent_id,
+                    "produced_files": list(context.required_outputs),
+                    "known_risks": [],
+                    "summary": "Mock agent completed the required output contract.",
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
         if context.role == "tester" and name == "test_report.md":
             return "artifact_result_code: 0\n\n# Test Report\n\ntest_result_code: 0\nAll mock tests passed.\n"
         if context.role == "tester" and name == "bug_report.md":
