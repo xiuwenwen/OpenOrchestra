@@ -12,7 +12,6 @@ from harness.core.state_machine import (
     DELIVERY,
     EXECUTION,
     FAILED,
-    FINAL_JUDGEMENT,
     FIXING,
     MISC_RESPONSE,
     PATCH_MERGE,
@@ -47,7 +46,6 @@ class WorkflowEngine:
         self.run_planning_block(task_id, user_prompt)
         self.run_execution_test_loop(task_id, user_prompt)
         self.run_review_loop(task_id, user_prompt)
-        self.run_final_judgement(task_id, user_prompt)
         return self.run_delivery(task_id, user_prompt)
 
     def run_bugfix_flow(self, task_id: str, user_prompt: str) -> Path:
@@ -78,7 +76,6 @@ class WorkflowEngine:
             if o.judge.is_test_pass(test_decision):
                 break
         o._run_review_loop(task_id, user_prompt)
-        o._run_final_judgement(task_id, user_prompt)
         return o._run_delivery(task_id, user_prompt)
 
     def bugfix_resume_start_round(self, task_id: str) -> int:
@@ -108,7 +105,6 @@ class WorkflowEngine:
         self.run_planning_block(task_id, user_prompt)
         self.run_execution_test_loop(task_id, user_prompt)
         self.run_review_loop(task_id, user_prompt)
-        self.run_final_judgement(task_id, user_prompt)
         return self.run_delivery(task_id, user_prompt)
 
     def run_misc_flow(self, task_id: str, user_prompt: str) -> Path:
@@ -371,12 +367,6 @@ class WorkflowEngine:
 
     def regression_phase_round_id(self, review_round_id: int, test_round_id: int, max_rounds: int | None) -> int:
         return (review_round_id + test_round_id) if max_rounds is None else (review_round_id * max_rounds) + test_round_id
-
-    def run_final_judgement(self, task_id: str, user_prompt: str) -> None:
-        o = self.orchestrator
-        final_decision = o._run_judge_phase(task_id, FINAL_JUDGEMENT, 0, user_prompt)
-        if o.config["policy"].get("require_judge_final_approval", True) and not o.judge.is_final_approved(final_decision):
-            raise TaskFailedError("Final judge approval was not granted")
 
     def run_delivery(self, task_id: str, user_prompt: str) -> Path:
         o = self.orchestrator

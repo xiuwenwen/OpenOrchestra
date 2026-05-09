@@ -225,9 +225,9 @@ OpenOrchestra 支持四类工作流。
 
 ### `new_project`
 
-用于从零创建项目。流程包含规划互审、方案合并审阅、执行、patch merge、测试、审查、最终裁决和交付。
+用于从零创建项目。流程包含规划互审、方案合并审阅、执行、patch merge、测试、审查裁决和交付。
 
-Used to create a project from scratch. The flow includes planning peer review, plan merge review, execution, patch merge, testing, review, final judgement, and delivery.
+Used to create a project from scratch. The flow includes planning peer review, plan merge review, execution, patch merge, testing, review judgement, and delivery.
 
 ```text
 PLANNING_DRAFT
@@ -237,22 +237,21 @@ EXECUTION
 PATCH_MERGE
 TESTING / TEST_JUDGEMENT / FIXING loop
 REVIEWING / REVIEW_JUDGEMENT / REVIEW_FIXING loop
-FINAL_JUDGEMENT
 DELIVERY
 ```
 
 ### `bugfix`
 
-用于修复已有项目。它跳过完整规划，只在修复、patch merge、测试和测试裁决之间循环。
+用于修复已有项目。它跳过完整规划，先在修复、patch merge、测试和测试裁决之间循环，通过后进入审查裁决和交付。
 
-Used to repair an existing project. It skips full planning and loops over fixing, patch merge, testing, and test judgement.
+Used to repair an existing project. It skips full planning, loops over fixing, patch merge, testing, and test judgement, then runs review judgement before delivery.
 
 ```text
 FIXING
 PATCH_MERGE
 TESTING
 TEST_JUDGEMENT
-FINAL_JUDGEMENT
+REVIEWING / REVIEW_JUDGEMENT / REVIEW_FIXING loop
 DELIVERY
 ```
 

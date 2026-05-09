@@ -139,7 +139,6 @@ ENV_CONFIG_SPECS: dict[str, tuple[tuple[str, ...], type]] = {
     "OO_ARTIFACT_INPUT_MAX_TOTAL_BYTES": (("artifact_input", "max_total_bytes"), int),
     "OO_POLICY_DIFFERENT_ROLES_CAN_RUN_CONCURRENTLY": (("policy", "different_roles_can_run_concurrently"), bool),
     "OO_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY": (("policy", "same_role_can_run_concurrently"), bool),
-    "OO_POLICY_REQUIRE_JUDGE_FINAL_APPROVAL": (("policy", "require_judge_final_approval"), bool),
     "OO_POLICY_ALLOW_MEDIUM_BUG_DELIVERY": (("policy", "allow_medium_bug_delivery"), bool),
     "OO_POLICY_REQUIRE_ALL_TESTS_PASS": (("policy", "require_all_tests_pass"), bool),
 }

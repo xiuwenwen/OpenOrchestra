@@ -57,7 +57,6 @@ def _config(tmp_path: Path) -> dict:
         "policy": {
             "different_roles_can_run_concurrently": False,
             "same_role_can_run_concurrently": True,
-            "require_judge_final_approval": True,
             "allow_medium_bug_delivery": False,
             "require_all_tests_pass": True,
         },

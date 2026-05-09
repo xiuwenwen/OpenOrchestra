@@ -28,7 +28,6 @@ from harness.core.state_machine import (
     DELIVERY,
     EXECUTION,
     FAILED,
-    FINAL_JUDGEMENT,
     FIXING,
     MISC_RESPONSE,
     PATCH_MERGE,
@@ -288,9 +287,6 @@ class Orchestrator:
 
     def _regression_phase_round_id(self, review_round_id: int, test_round_id: int, max_rounds: int | None) -> int:
         return self.workflow_engine.regression_phase_round_id(review_round_id, test_round_id, max_rounds)
-
-    def _run_final_judgement(self, task_id: str, user_prompt: str) -> None:
-        self.workflow_engine.run_final_judgement(task_id, user_prompt)
 
     def _run_delivery(self, task_id: str, user_prompt: str) -> Path:
         return self.workflow_engine.run_delivery(task_id, user_prompt)

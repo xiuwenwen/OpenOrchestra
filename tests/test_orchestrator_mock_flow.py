@@ -79,7 +79,6 @@ def _config(tmp_path: Path) -> dict:
         "policy": {
             "different_roles_can_run_concurrently": False,
             "same_role_can_run_concurrently": True,
-            "require_judge_final_approval": True,
             "allow_medium_bug_delivery": False,
             "require_all_tests_pass": True,
         },
@@ -101,6 +100,8 @@ def test_orchestrator_mock_flow_completes_and_generates_delivery(tmp_path: Path)
     assert final_delivery.exists()
     assert final_delivery.name == "final_delivery.md"
     assert "completed" in final_delivery.read_text(encoding="utf-8")
+    phases = [phase["phase_type"] for phase in orchestrator.repository.list_phases(task_id)]
+    assert FINAL_JUDGEMENT not in phases
     assert orchestrator.repository.list_artifacts(task_id, "final_delivery.md")
     usage_guides = orchestrator.repository.list_artifacts(task_id, "usage_guide.md")
     assert usage_guides
@@ -135,6 +136,8 @@ def test_orchestrator_bugfix_flow_uses_persisted_workflow_and_runs_review(tmp_pa
     assert "FIXING" in phases
     assert "TESTING" in phases
     assert "REVIEWING" in phases
+    assert "REVIEW_JUDGEMENT" in phases
+    assert FINAL_JUDGEMENT not in phases
     assert final_delivery.exists()
 
 
@@ -282,7 +285,6 @@ def test_unlimited_bugfix_rounds_continue_until_pass(monkeypatch, tmp_path: Path
     monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
     monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: len(fix_rounds) >= 7)
     monkeypatch.setattr(orchestrator, "_run_review_loop", lambda *args, **kwargs: None)
-    monkeypatch.setattr(orchestrator, "_run_final_judgement", lambda *args, **kwargs: None)
     delivery = tmp_path / "final_delivery.md"
     delivery.write_text("ok", encoding="utf-8")
     monkeypatch.setattr(orchestrator, "_run_delivery", lambda *args, **kwargs: delivery)
@@ -346,6 +348,8 @@ def test_orchestrator_feature_change_flow_completes(tmp_path: Path) -> None:
     assert phases[0] == "PLANNING_DRAFT"
     assert "EXECUTION" in phases
     assert "REVIEWING" in phases
+    assert "REVIEW_JUDGEMENT" in phases
+    assert FINAL_JUDGEMENT not in phases
     assert final_delivery.exists()
 
 
@@ -705,6 +709,75 @@ def test_planner_revision_after_plan_review_rejection_reads_only_reviewer_feedba
     assert "risk.md" not in manifest
     assert "todo_breakdown.md" not in manifest
     assert "peer_review.md" not in manifest
+
+
+def test_planning_revision_only_receives_previous_round_artifacts(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("revise only against prior round")
+
+    round0_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_DRAFT, "planner", 0)
+    round0_peer_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_PEER_REVIEW, "planner", 0)
+    round0_judge_phase_id = orchestrator.repository.create_phase(task_id, PLAN_JUDGEMENT, "judge", 0)
+    round1_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_REVISION, "planner", 1)
+    round1_peer_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_PEER_REVIEW, "planner", 1)
+    round1_judge_phase_id = orchestrator.repository.create_phase(task_id, PLAN_JUDGEMENT, "judge", 1)
+    current_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_REVISION, "planner", 2)
+
+    artifact_rows = [
+        (round0_phase_id, "planner", "planner-1", "plan.md", "round0-plan.md"),
+        (round0_phase_id, "planner", "planner-1", "risk.md", "round0-risk.md"),
+        (round0_peer_phase_id, "planner", "planner-2", "peer_review.md", "round0-peer-review.md"),
+        (round0_judge_phase_id, "judge", "judge-1", "decision.json", "round0-decision.json"),
+        (round0_judge_phase_id, "judge", "judge-1", "decision_summary.md", "round0-decision-summary.md"),
+        (round1_phase_id, "planner", "planner-1", "plan.md", "round1-plan.md"),
+        (round1_phase_id, "planner", "planner-1", "risk.md", "round1-risk.md"),
+        (round1_phase_id, "planner", "planner-1", "todo_breakdown.md", "round1-todo.md"),
+        (round1_phase_id, "planner", "planner-1", "assumptions.md", "round1-assumptions.md"),
+        (round1_peer_phase_id, "planner", "planner-2", "peer_review.md", "round1-peer-review.md"),
+        (round1_judge_phase_id, "judge", "judge-1", "decision.json", "round1-decision.json"),
+        (round1_judge_phase_id, "judge", "judge-1", "decision_summary.md", "round1-decision-summary.md"),
+    ]
+    for phase_id, role, agent_id, artifact_type, filename in artifact_rows:
+        path = tmp_path / filename
+        path.write_text(filename, encoding="utf-8")
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id=phase_id,
+                role=role,
+                agent_id=agent_id,
+                artifact_type=artifact_type,
+                path=path,
+                version=1,
+                hash="hash",
+            )
+        )
+
+    staged = orchestrator._stage_input_artifacts(
+        task_id,
+        tmp_path / "planner-revision-round-2-input",
+        "planner",
+        PLANNING_REVISION,
+        exclude_phase_id=current_phase_id,
+        round_id=2,
+        current_agent_id="planner-1",
+    )
+    manifest = staged[0].read_text(encoding="utf-8")
+
+    assert "round1-plan.md" in manifest
+    assert "round1-risk.md" in manifest
+    assert "round1-todo.md" in manifest
+    assert "round1-assumptions.md" in manifest
+    assert "round1-peer-review.md" in manifest
+    assert "round1-decision.json" in manifest
+    assert "round1-decision-summary.md" in manifest
+
+    assert "round0-plan.md" not in manifest
+    assert "round0-risk.md" not in manifest
+    assert "round0-peer-review.md" not in manifest
+    assert "round0-decision.json" not in manifest
+    assert "round0-decision-summary.md" not in manifest
 
 
 def test_orchestrator_misc_flow_uses_executor_response_only(tmp_path: Path) -> None:

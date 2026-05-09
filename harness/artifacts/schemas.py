@@ -123,7 +123,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         PLANNING_REVISION,
         "planner",
         PLANNING_ARTIFACTS | _types("peer_review.md"),
-        round_policy=ROUND_BEFORE_CURRENT,
+        round_policy=ROUND_PREVIOUS,
         condition=CONDITION_NO_REJECTED_PLAN_REVIEW,
     ),
     ArtifactVisibilityRule(
@@ -131,7 +131,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         PLANNING_REVISION,
         "judge",
         JUDGE_DECISION_ARTIFACTS,
-        round_policy=ROUND_BEFORE_CURRENT,
+        round_policy=ROUND_PREVIOUS,
         condition=CONDITION_NO_REJECTED_PLAN_REVIEW,
     ),
     ArtifactVisibilityRule(

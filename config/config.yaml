@@ -75,6 +75,5 @@ testing:
 policy:
   different_roles_can_run_concurrently: false
   same_role_can_run_concurrently: true
-  require_judge_final_approval: true
   allow_medium_bug_delivery: false
   require_all_tests_pass: true
