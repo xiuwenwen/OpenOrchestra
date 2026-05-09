@@ -263,6 +263,9 @@ class PromptBuilder:
     def build(self, context: AgentRunContext) -> str:
         input_artifacts = "\n".join(f"- {path}" for path in context.input_artifacts) or "- none"
         required_outputs = "\n".join(f"- {name}" for name in context.required_outputs) or "- none"
+        required_output_paths = "\n".join(
+            f"- `{name}`: `{context.output_dir / name}`" for name in context.required_outputs
+        ) or "- none"
         role_specialization = self._role_specialization(context)
         metadata_lines = self._metadata_lines(context)
         sections = [
@@ -311,16 +314,21 @@ class PromptBuilder:
                 "- `patch_validation.md`, when present, is Harness-generated evidence about whether `merged_patch.diff` can be applied with `git apply --check`.",
                 "- `materialized_repo.md`, when present, records the Harness materialized repository path used for downstream role workspaces.",
                 "- `objective_gate.md` and `test_gate.md`, when present, are Harness-generated hard-gate evidence that LLM roles cannot override.",
-                "- Every `patch.diff` and `fix_patch.diff` patch artifact must have sibling `patch_metadata.md`; every `merged_patch.diff` artifact must have sibling `merged_patch_metadata.md`.",
-                "- Patch metadata must declare `patch_artifact`, `base_source_type`, `base_source_path`, `base_round`, `base_task_id`, `apply_target`, `patch_scope`, `changed_files`, `expected_apply_command`, and `compatibility_notes`.",
-                "- Valid `patch_scope` values are `full_project`, `incremental_fix`, and `merged_authoritative`.",
-                "- Treat any patch artifact as invalid evidence when its metadata is missing, does not name that patch artifact, or declares a baseline/apply target incompatible with the current repository.",
+                "- Every `merged_patch.diff` artifact must have sibling `merged_patch_metadata.md`.",
+                "- Merged patch metadata must declare `patch_artifact`, `base_source_type`, `base_source_path`, `base_round`, `base_task_id`, `apply_target`, `patch_scope`, `changed_files`, `expected_apply_command`, and `compatibility_notes`.",
+                "- Valid merged `patch_scope` value is `merged_authoritative`.",
                 "- `patch.diff` and `fix_patch.diff` are candidate inputs for PATCH_MERGE only; tester, reviewer, judge, and communicator roles must not treat them as final deliverables.",
                 "- Tester roles must evaluate the runnable repository directory directly; do not depend on executor narrative reports.",
                 "- Reviewer and judge roles must evaluate the repository directory, `merged_patch.diff`, `merge_report.md`, Harness gate reports, role reports, and summaries.",
                 "",
                 "## Required Output Files",
                 required_outputs,
+                "",
+                "## Required Output Paths",
+                "Write these exact files. Copy paths exactly.",
+                required_output_paths,
+                "- Before exiting, verify every exact path above exists.",
+                "- A similarly named file under any other path is invalid.",
                 "",
                 "## Output Contract",
                 f"- Write every required deliverable under this exact output directory: `{context.output_dir}`.",
@@ -393,27 +401,26 @@ class PromptBuilder:
             return [
                 "- This is the model-driven PATCH_MERGE phase.",
                 "- `merge_report.md` and `merged_patch_metadata.md` must each contain `artifact_result_code: 0` when complete.",
-                "- Read all candidate `patch.diff`, `fix_patch.diff`, and `patch_metadata.md` artifacts listed in the input manifest.",
-                "- Before selecting any candidate patch, verify its `patch_metadata.md` names the exact patch artifact and declares a baseline/apply target compatible with the current repository directory.",
+                "- Read all candidate `patch.diff` and `fix_patch.diff` artifacts listed in the input manifest.",
+                "- Before selecting any candidate patch, verify it can be applied or safely translated against the current repository directory.",
                 "- Do not select a patch based only on filename, artifact version, model wording, or previous role confidence.",
                 "- Prior `merged_patch.diff` artifacts are historical evidence, not candidates to reuse, unless `merged_patch_metadata.md` proves they target the same baseline and apply target as the current repository.",
-                "- Reject or omit candidates whose metadata is missing, names a different patch, has stale `base_round` or `base_task_id`, uses a `full_project` scope against an already materialized project, or otherwise conflicts with the current repository baseline.",
+                "- Reject or omit candidates that conflict with the current repository baseline or cannot be reconciled into one coherent merged patch.",
                 "- Produce exactly one authoritative `merged_patch.diff` that represents the implementation candidate downstream roles must test, review, judge, and deliver.",
-                "- Produce `merged_patch_metadata.md` next to `merged_patch.diff`; it must declare `patch_artifact: merged_patch.diff`, selected candidate metadata, baseline compatibility decision, current `apply_target`, and `patch_scope: merged_authoritative`.",
+                "- Produce `merged_patch_metadata.md` next to `merged_patch.diff`; it must declare `patch_artifact: merged_patch.diff`, selected candidate patch artifacts, baseline compatibility decision, current `apply_target`, and `patch_scope: merged_authoritative`.",
                 "- Do not concatenate blindly. Resolve overlaps, choose compatible changes, and explain any omitted or adjusted candidate patch in `merge_report.md`.",
                 "- `merged_patch.diff` must be a valid unified diff. If the candidate patches cannot be merged into a coherent diff, still write the best safe subset when possible and describe unresolved merge risk in `merge_report.md`.",
                 "- Generate `merged_patch.diff` into the output directory via shell redirection or file operations; do not paste a large merged diff as a Write-tool payload.",
                 "- Do not print full candidate patches or the full merged patch to stdout. Use `wc -c`, diff stats, and short excerpts only when verifying.",
-                "- `merge_report.md` must state selected candidate artifacts, rejected candidate artifacts, metadata compatibility checks, conflict handling, known risks, and whether the merged patch is ready for testing.",
+                "- `merge_report.md` must state selected candidate artifacts, rejected candidate artifacts, compatibility checks, conflict handling, known risks, and whether the merged patch is ready for testing.",
             ]
         if context.role == "executor":
             return [
                 "- If the repository is empty, still produce implementation artifacts and a complete unified diff representing the proposed files.",
-                "- All Markdown deliverables you produce, such as `implementation_plan.md`, `changed_files.md`, `patch_metadata.md`, `fix_schedule.md`, `fix_notes.md`, and `self_check.md`, must contain `artifact_result_code: 0` when complete.",
+                "- All Markdown deliverables you produce, such as `implementation_plan.md`, `changed_files.md`, `fix_schedule.md`, `fix_notes.md`, and `self_check.md`, must contain `artifact_result_code: 0` when complete.",
                 "- If the repository already contains materialized source from a previous PATCH_MERGE, make fix changes against that repository state.",
                 "- `patch.diff` or `fix_patch.diff` must be a valid unified diff that could create or update implementation files.",
-                "- Produce `patch_metadata.md` next to the patch. It must name the exact patch file, the current repository baseline, the intended apply target, the patch scope, changed files, and the expected apply command.",
-                "- For FIXING and REVIEW_FIXING, prefer `patch_scope: incremental_fix` and target the current materialized/source repository; do not describe a historical empty project baseline unless the current repository is actually empty.",
+                "- For FIXING and REVIEW_FIXING, target the current materialized/source repository; do not describe a historical empty project baseline unless the current repository is actually empty.",
                 "- Create or update implementation files under the repository directory first, then generate `patch.diff` or `fix_patch.diff` mechanically from repository changes.",
                 f"- Prefer command-generated diffs written directly to the output directory. For git repositories, use `git add -N . && git diff --no-ext-diff -- . > {context.output_dir / 'patch.diff'}` or the corresponding `fix_patch.diff` path.",
                 "- If the repository is not a git worktree, initialize a temporary git baseline or use a script/diff command that writes unified diff output directly to the required patch file.",
@@ -425,14 +432,29 @@ class PromptBuilder:
             ]
         if context.role == "tester":
             return [
+                "## Test Target",
+                f"- Test this exact repository directory: `{context.repo_dir}`.",
+                "- Treat the repository directory as the runnable implementation produced by Harness.",
+                "- Compare observable behavior against the original user request in `## User Request` and the `## Harness Test Target` section of the input manifest.",
+                "- Read the input manifest for repository source metadata, but do not require executor planning notes or patch narrative artifacts to decide the test verdict.",
+                "",
+                "## Required Test Work",
+                "- Inspect project structure and identify the likely build, install, startup, and test commands from files in the repository.",
+                "- Run the safest available build/import/static checks and existing automated tests when possible.",
+                "- Run at least one smoke or CLI-level check when the repository exposes an entry point and doing so is safe.",
+                "- Verify the core user-facing requirements from the original request by execution when possible, otherwise by direct code/config inspection with explicit evidence.",
+                "- Record exact commands run, exit codes, and important output excerpts in `bug_report.md`.",
+                "",
+                "## Tester Output",
                 "- Treat the repository directory as the implementation under test.",
-                "- `build_report.md`, `test_report.md`, and `bug_report.md` must each contain `artifact_result_code: 0` when complete.",
+                "- `bug_report.md` must contain `artifact_result_code: 0` when complete.",
+                "- `bug_report.md` is the single tester report. Include build, test, bug, evidence, and reproduction sections in this one file.",
                 "- Prefer running build, tests, and smoke checks directly in the repository directory when it contains materialized source.",
                 "- Use staged Harness evidence only when it is explicitly present in the input manifest; otherwise validate by executing or inspecting the repository directory.",
                 "- Do not treat executor planning notes, self-checks, or change summaries as test evidence.",
                 "- If no merged repository exists, report that the implementation is not ready for testing unless the current phase explicitly predates PATCH_MERGE.",
-                "- `build_report.md` must describe setup/build outcome or explain why build execution was not possible, and include `build_result_code: 0` for build passed/not required, `build_result_code: -1` for build failed, or `build_result_code: 2` for blocked/not run.",
-                "- `test_report.md` must include one machine-readable line: `test_result_code: 0` for tests passed, `test_result_code: -1` for tests failed, or `test_result_code: 2` for blocked/not testable.",
+                "- In `bug_report.md`, describe setup/build outcome or explain why build execution was not possible, and include `build_result_code: 0` for build passed/not required, `build_result_code: -1` for build failed, or `build_result_code: 2` for blocked/not run.",
+                "- In `bug_report.md`, include one machine-readable line: `test_result_code: 0` for tests passed, `test_result_code: -1` for tests failed, or `test_result_code: 2` for blocked/not testable.",
                 "- `test_result_code` is the test verdict. It must not be copied into the `delivery.md` return code.",
                 "- `bug_report.md` must list blocking bugs, non-blocking issues, and reproduction details when available, and include `bug_result_code: 0` for no blocking bugs, `bug_result_code: 1` for non-blocking issues only, or `bug_result_code: -1` for blocking bugs.",
             ]

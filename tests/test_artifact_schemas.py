@@ -5,8 +5,6 @@ from harness.artifacts.schemas import ARTIFACT_VISIBILITY_RULES, output_contract
 
 def test_required_outputs_always_include_delivery_envelope() -> None:
     assert required_outputs_for("tester", "TESTING") == [
-        "build_report.md",
-        "test_report.md",
         "bug_report.md",
         "delivery.md",
     ]
@@ -46,5 +44,5 @@ def test_role_phase_contract_binds_outputs_and_visibility() -> None:
     assert contract.required_outputs_with_delivery() == ["decision.json", "decision_summary.md", "delivery.md"]
     assert {(rule.source_role, tuple(sorted(rule.artifact_types))) for rule in contract.visibility_rules} == {
         ("orchestrator", ("objective_gate.md", "test_gate.md")),
-        ("tester", ("bug_report.md", "build_report.md", "test_report.md")),
+        ("tester", ("bug_report.md",)),
     }

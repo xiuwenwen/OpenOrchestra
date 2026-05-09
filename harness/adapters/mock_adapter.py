@@ -65,10 +65,15 @@ class MockAgentAdapter(AgentAdapter):
                 ensure_ascii=False,
                 indent=2,
             ) + "\n"
-        if context.role == "tester" and name == "test_report.md":
-            return "artifact_result_code: 0\n\n# Test Report\n\ntest_result_code: 0\nAll mock tests passed.\n"
         if context.role == "tester" and name == "bug_report.md":
-            return "artifact_result_code: 0\n\n# Bug Report\n\nbug_result_code: 0\nNo blocking bugs found.\n"
+            return (
+                "artifact_result_code: 0\n\n"
+                "# Tester Report\n\n"
+                "build_result_code: 0\n"
+                "test_result_code: 0\n"
+                "bug_result_code: 0\n\n"
+                "Mock build and tests passed. No blocking bugs found.\n"
+            )
         if context.role == "executor" and name == "response.md":
             return "artifact_result_code: 0\n\n# Response\n\nMock informational response for the user's request.\n"
         if context.role == "executor" and name == "notes.md":
@@ -119,8 +124,6 @@ class MockAgentAdapter(AgentAdapter):
                 "decision_source: decision.json\n"
                 f"Reason: {payload['reason']}\n"
             )
-        if context.role == "executor" and name == "patch_metadata.md":
-            return self._patch_metadata(context)
         if context.role == "executor" and name == "merged_patch_metadata.md":
             return self._merged_patch_metadata(context)
         if name.endswith(".diff"):
@@ -129,30 +132,6 @@ class MockAgentAdapter(AgentAdapter):
         if name.endswith(".md"):
             return f"artifact_result_code: 0\n\n# {title}\n\nMock output for role `{context.role}` in phase `{context.phase}`.\n"
         return f"# {title}\n\nMock output for role `{context.role}` in phase `{context.phase}`.\n"
-
-    def _patch_metadata(self, context: AgentRunContext) -> str:
-        patch_artifact = "fix_patch.diff" if context.phase in {"FIXING", "REVIEW_FIXING"} else "patch.diff"
-        patch_scope = "incremental_fix" if patch_artifact == "fix_patch.diff" else "full_project"
-        source_type = context.config.get("repository_source_type") or context.config.get("project_context", {}).get(
-            "repository_source_type", "mock_repo"
-        )
-        source_path = context.config.get("repository_source_path") or context.config.get("project_context", {}).get(
-            "repository_source_path", str(context.repo_dir)
-        )
-        return (
-            "artifact_result_code: 0\n\n"
-            "# Patch Metadata\n\n"
-            f"patch_artifact: {patch_artifact}\n"
-            f"base_source_type: {source_type}\n"
-            f"base_source_path: {source_path}\n"
-            f"base_round: {context.round_id}\n"
-            f"base_task_id: {context.task_id}\n"
-            f"apply_target: {context.repo_dir}\n"
-            f"patch_scope: {patch_scope}\n"
-            "changed_files: mock.txt\n"
-            f"expected_apply_command: git apply --check {patch_artifact}\n"
-            "compatibility_notes: Mock metadata targets the current role repository workspace.\n"
-        )
 
     def _merged_patch_metadata(self, context: AgentRunContext) -> str:
         source_type = context.config.get("repository_source_type") or context.config.get("project_context", {}).get(
@@ -172,7 +151,7 @@ class MockAgentAdapter(AgentAdapter):
             f"apply_target: {context.repo_dir}\n"
             "patch_scope: merged_authoritative\n"
             "changed_files: mock.txt\n"
-            "selected_candidate_metadata: patch_metadata.md\n"
+            "selected_candidate_artifacts: patch.diff, fix_patch.diff\n"
             "expected_apply_command: git apply --check merged_patch.diff\n"
             "compatibility_notes: Mock merged patch metadata matches the current PATCH_MERGE workspace.\n"
         )

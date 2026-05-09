@@ -86,27 +86,24 @@ def test_test_judge_visibility_is_current_test_reports_and_current_gate_only(tmp
         _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="test-gate", artifact_type="test_gate.md", phase_type="TEST_GATE", round_id=0, label="old-gate"),
     ]
     for round_id, label in ((0, "old"), (1, "current")):
-        for artifact_type in ("build_report.md", "test_report.md", "bug_report.md"):
-            artifacts.append(
-                _artifact(
-                    tmp_path,
-                    phases_by_id,
-                    role="tester",
-                    agent_id="tester-1",
-                    artifact_type=artifact_type,
-                    phase_type=TESTING,
-                    round_id=round_id,
-                    label=f"{label}-{artifact_type}",
-                )
+        artifacts.append(
+            _artifact(
+                tmp_path,
+                phases_by_id,
+                role="tester",
+                agent_id="tester-1",
+                artifact_type="bug_report.md",
+                phase_type=TESTING,
+                round_id=round_id,
+                label=f"{label}-bug_report.md",
             )
+        )
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "judge", TEST_JUDGEMENT, 1)
 
     assert _names(visible) == {
         "current-gate-test_gate.md",
         "current-objective-objective_gate.md",
-        "current-build_report.md-build_report.md",
-        "current-test_report.md-test_report.md",
         "current-bug_report.md-bug_report.md",
     }
 
@@ -114,16 +111,13 @@ def test_test_judge_visibility_is_current_test_reports_and_current_gate_only(tmp
 def test_fixing_visibility_uses_latest_complete_test_round_before_current(tmp_path: Path) -> None:
     phases_by_id: dict[str, dict] = {}
     artifacts = [
-        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="build_report.md", phase_type=TESTING, round_id=0, label="r0-build"),
-        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="test_report.md", phase_type=TESTING, round_id=0, label="r0-test"),
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=0, label="r0-bug"),
-        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="build_report.md", phase_type=REGRESSION_TESTING, round_id=1, label="r1-build-only"),
-        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="test_report.md", phase_type=REGRESSION_TESTING, round_id=1, label="r1-test-only"),
+        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="review_report.md", phase_type=REGRESSION_TESTING, round_id=1, label="r1-non-test-report"),
     ]
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "executor", FIXING, 2)
 
-    assert _names(visible) == {"r0-build-build_report.md", "r0-test-test_report.md", "r0-bug-bug_report.md"}
+    assert _names(visible) == {"r0-bug-bug_report.md"}
 
 
 def test_planner_peer_review_visibility_is_current_round_other_planners_only(tmp_path: Path) -> None:

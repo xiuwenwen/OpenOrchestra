@@ -55,6 +55,9 @@ def test_prompt_builder_outputs_precise_english_contract(tmp_path: Path) -> None
 
     assert "# Harness Agent Contract" in prompt
     assert "## Output Contract" in prompt
+    assert "## Required Output Paths" in prompt
+    assert f"`patch.diff`: `{tmp_path / 'workspace' / 'output' / 'patch.diff'}`" in prompt
+    assert "A similarly named file under any other path is invalid." in prompt
     assert "## Prohibited Actions" in prompt
     assert "valid unified diff" in prompt
     assert "git add -N . && git diff --no-ext-diff" in prompt
@@ -67,6 +70,11 @@ def test_prompt_builder_marks_merged_patch_as_authoritative(tmp_path: Path) -> N
 
     prompt = PromptBuilder().build(context)
 
+    assert "## Test Target" in prompt
+    assert "Test this exact repository directory" in prompt
+    assert "## Required Test Work" in prompt
+    assert "Record exact commands run, exit codes" in prompt
+    assert "## Tester Output" in prompt
     assert "Treat the repository directory as the implementation under test" in prompt
     assert "Do not treat executor planning notes, self-checks, or change summaries as test evidence" in prompt
 
@@ -84,7 +92,8 @@ def test_prompt_builder_hides_generic_error_code_tables_from_tester(tmp_path: Pa
 
     assert "Return code meanings:" not in prompt
     assert "Markdown artifact result code meanings:" not in prompt
-    assert "must each contain `artifact_result_code: 0` somewhere in the file" in prompt
+    assert "`bug_report.md` must contain `artifact_result_code: 0` somewhere in the file" in prompt
+    assert "single tester report" in prompt
     assert "line 1 must be `artifact_result_code: 0`" not in prompt
     assert "put headings such as `# Report` only after that line" not in prompt
     assert "Do not copy `build_result_code`, `test_result_code`, or `bug_result_code` values" in prompt
@@ -122,7 +131,7 @@ def test_prompt_builder_has_model_driven_patch_merge_contract(tmp_path: Path) ->
     assert "Do not concatenate blindly" in prompt
     assert "exactly one authoritative `merged_patch.diff`" in prompt
     assert "do not paste a large merged diff as a Write-tool payload" in prompt
-    assert "`patch_metadata.md`" in prompt
+    assert "`patch_metadata.md`" not in prompt
     assert "`merged_patch_metadata.md`" in prompt
     assert "Do not select a patch based only on filename" in prompt
     assert "Prior `merged_patch.diff` artifacts are historical evidence" in prompt
@@ -139,7 +148,7 @@ def test_prompt_builder_keeps_role_specialization_when_configured(tmp_path: Path
     assert "Specialization:" in prompt
 
 
-def test_executor_patch_outputs_require_baseline_metadata(tmp_path: Path) -> None:
+def test_executor_patch_outputs_do_not_require_candidate_patch_metadata(tmp_path: Path) -> None:
     context = AgentRunContext(
         task_id="task-1",
         phase_id="phase-1",
@@ -162,9 +171,9 @@ def test_executor_patch_outputs_require_baseline_metadata(tmp_path: Path) -> Non
 
     prompt = PromptBuilder().build(context)
 
-    assert "Produce `patch_metadata.md` next to the patch" in prompt
-    assert "`base_source_path`" in prompt
-    assert "For FIXING and REVIEW_FIXING, prefer `patch_scope: incremental_fix`" in prompt
+    assert "`patch_metadata.md`" not in prompt
+    assert "Produce `patch_metadata.md` next to the patch" not in prompt
+    assert "target the current materialized/source repository" in prompt
     assert "historical empty project baseline" in prompt
 
 

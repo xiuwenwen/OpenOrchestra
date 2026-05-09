@@ -1643,7 +1643,7 @@ def test_current_phase_artifacts_are_excluded_from_agent_inputs(tmp_path: Path) 
     task_id = orchestrator.create_task("review work")
     previous_phase_id = orchestrator.repository.create_phase(task_id, "TESTING", "tester", 0)
     current_phase_id = orchestrator.repository.create_phase(task_id, "REVIEWING", "reviewer", 0)
-    previous_artifact = tmp_path / "test_report.md"
+    previous_artifact = tmp_path / "bug_report.md"
     current_artifact = tmp_path / "review_report.md"
     previous_artifact.write_text("previous", encoding="utf-8")
     current_artifact.write_text("current", encoding="utf-8")
@@ -1668,7 +1668,7 @@ def test_current_phase_artifacts_are_excluded_from_agent_inputs(tmp_path: Path) 
     staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input", "reviewer", "REVIEWING", exclude_phase_id=current_phase_id)
     manifest = staged[0].read_text(encoding="utf-8")
 
-    assert "test_report.md" in manifest
+    assert "bug_report.md" in manifest
     assert "review_report.md" not in manifest
 
 
@@ -1731,8 +1731,6 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
 
     artifact_rows = [
         ("merged_patch_metadata.md", old_merge_phase_id, "executor", "old-merged-metadata.md", "executor-1"),
-        ("build_report.md", old_test_phase_id, "tester", "old-build-report.md", "tester-1"),
-        ("test_report.md", old_test_phase_id, "tester", "old-test-report.md", "tester-1"),
         ("bug_report.md", old_test_phase_id, "tester", "old-bug-report.md", "tester-1"),
         ("merged_patch_metadata.md", current_merge_phase_id, "executor", "current-merged-metadata.md", "executor-1"),
         ("merged_patch.diff", current_merge_phase_id, "executor", "current-merged.patch", "executor-1"),
@@ -1742,8 +1740,6 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
         ("self_check.md", current_merge_phase_id, "executor", "current-self-check.md", "executor-1"),
         ("fix_schedule.md", current_merge_phase_id, "executor", "current-fix-schedule.md", "executor-1"),
         ("fix_notes.md", current_merge_phase_id, "executor", "current-fix-notes.md", "executor-1"),
-        ("build_report.md", current_test_phase_id, "tester", "current-build-report.md", "tester-1"),
-        ("test_report.md", current_test_phase_id, "tester", "current-test-report.md", "tester-1"),
         ("bug_report.md", current_test_phase_id, "tester", "current-bug-report.md", "tester-1"),
         ("delivery.md", current_test_phase_id, "tester", "tester-delivery.md", "tester-1"),
     ]
@@ -1793,8 +1789,6 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
     )
     manifest = staged[0].read_text(encoding="utf-8")
 
-    assert "current-build-report.md" in manifest
-    assert "current-test-report.md" in manifest
     assert "current-bug-report.md" in manifest
     assert "judge-round-1-test_gate.md" in manifest
     assert "judge-round-1-objective_gate.md" in manifest
@@ -1809,8 +1803,6 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
     assert "current-fix-notes.md" not in manifest
     assert "tester-delivery.md" not in manifest
     assert "old-merged-metadata.md" not in manifest
-    assert "old-build-report.md" not in manifest
-    assert "old-test-report.md" not in manifest
     assert "old-bug-report.md" not in manifest
     assert "judge-round-0-test_gate.md" not in manifest
     assert "judge-round-0-objective_gate.md" not in manifest
@@ -1832,12 +1824,8 @@ def test_review_judgement_sees_latest_review_and_validation_evidence(tmp_path: P
 
     artifact_rows = [
         ("merged_patch_metadata.md", old_merge_phase_id, "executor", "old-merged-metadata.md", "executor-1"),
-        ("build_report.md", old_test_phase_id, "tester", "old-build-report.md", "tester-1"),
-        ("test_report.md", old_test_phase_id, "tester", "old-test-report.md", "tester-1"),
         ("bug_report.md", old_test_phase_id, "tester", "old-bug-report.md", "tester-1"),
         ("merged_patch_metadata.md", latest_merge_phase_id, "executor", "latest-merged-metadata.md", "executor-1"),
-        ("build_report.md", latest_test_phase_id, "tester", "latest-build-report.md", "tester-1"),
-        ("test_report.md", latest_test_phase_id, "tester", "latest-test-report.md", "tester-1"),
         ("bug_report.md", latest_test_phase_id, "tester", "latest-bug-report.md", "tester-1"),
         ("review_report.md", review_phase_id, "reviewer", "current-review-report.md", "reviewer-1"),
     ]
@@ -1888,8 +1876,6 @@ def test_review_judgement_sees_latest_review_and_validation_evidence(tmp_path: P
     manifest = staged[0].read_text(encoding="utf-8")
 
     assert "latest-merged-metadata.md" in manifest
-    assert "latest-build-report.md" in manifest
-    assert "latest-test-report.md" in manifest
     assert "latest-bug-report.md" in manifest
     assert "current-review-report.md" in manifest
     assert "review-judge-round-2-test_gate.md" in manifest
@@ -1898,8 +1884,6 @@ def test_review_judgement_sees_latest_review_and_validation_evidence(tmp_path: P
     assert "review-judge-round-2-materialized_repo.md" in manifest
 
     assert "old-merged-metadata.md" not in manifest
-    assert "old-build-report.md" not in manifest
-    assert "old-test-report.md" not in manifest
     assert "old-bug-report.md" not in manifest
     assert "review-judge-round-1-test_gate.md" not in manifest
     assert "review-judge-round-1-objective_gate.md" not in manifest
@@ -1929,8 +1913,8 @@ def test_final_handoff_stages_latest_evidence_without_candidate_patches(tmp_path
         ("merged_patch.diff", latest_exec_phase_id, "executor", "latest-merged.patch", "executor-1"),
         ("patch.diff", latest_exec_phase_id, "executor", "latest-candidate.patch", "executor-1"),
         ("fix_patch.diff", latest_exec_phase_id, "executor", "latest-fix-candidate.patch", "executor-1"),
-        ("test_report.md", old_test_phase_id, "tester", "old-test-report.md", "tester-1"),
-        ("test_report.md", latest_test_phase_id, "tester", "latest-test-report.md", "tester-1"),
+        ("bug_report.md", old_test_phase_id, "tester", "old-bug-report.md", "tester-1"),
+        ("bug_report.md", latest_test_phase_id, "tester", "latest-bug-report.md", "tester-1"),
         ("review_report.md", old_review_phase_id, "reviewer", "old-review-report.md", "reviewer-1"),
         ("review_report.md", latest_review_phase_id, "reviewer", "latest-review-report.md", "reviewer-1"),
         ("decision.json", old_judge_phase_id, "judge", "old-decision.json", "judge-1"),
@@ -1983,7 +1967,7 @@ def test_final_handoff_stages_latest_evidence_without_candidate_patches(tmp_path
 
         assert "latest-plan.md" in manifest
         assert "latest-merged.patch" in manifest
-        assert "latest-test-report.md" in manifest
+        assert "latest-bug-report.md" in manifest
         assert "latest-review-report.md" in manifest
         assert "latest-decision.json" in manifest
         assert "final-round-2-test_gate.md" in manifest
@@ -1992,7 +1976,7 @@ def test_final_handoff_stages_latest_evidence_without_candidate_patches(tmp_path
         assert "old-merged.patch" not in manifest
         assert "latest-candidate.patch" not in manifest
         assert "latest-fix-candidate.patch" not in manifest
-        assert "old-test-report.md" not in manifest
+        assert "old-bug-report.md" not in manifest
         assert "old-review-report.md" not in manifest
         assert "old-decision.json" not in manifest
         assert "final-round-1-test_gate.md" not in manifest
@@ -2093,17 +2077,14 @@ def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_pat
     current_merge_phase_id = orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 2)
     artifact_rows = [
         ("patch.diff", execution_phase_id, "executor", "old-execution.patch"),
-        ("patch_metadata.md", execution_phase_id, "executor", "old-execution-metadata.md"),
         ("fix_patch.diff", old_fix_phase_id, "executor", "old-fix.patch"),
-        ("patch_metadata.md", old_fix_phase_id, "executor", "old-fix-metadata.md"),
         ("merged_patch.diff", previous_merge_phase_id, "executor", "previous-merged.patch"),
         ("merged_patch_metadata.md", previous_merge_phase_id, "executor", "previous-merged-metadata.md"),
         ("merge_report.md", previous_merge_phase_id, "executor", "previous-merge-report.md"),
         ("fix_patch.diff", current_fix_phase_id, "executor", "current-fix.patch"),
-        ("patch_metadata.md", current_fix_phase_id, "executor", "current-fix-metadata.md"),
         ("self_check.md", current_fix_phase_id, "executor", "current-self-check.md"),
         ("fix_notes.md", current_fix_phase_id, "executor", "current-fix-notes.md"),
-        ("test_report.md", old_fix_phase_id, "tester", "old-test-report.md"),
+        ("bug_report.md", old_fix_phase_id, "tester", "old-bug-report.md"),
         ("decision.json", old_fix_phase_id, "judge", "old-decision.json"),
         ("review_report.md", old_fix_phase_id, "reviewer", "old-review-report.md"),
         ("plan.md", execution_phase_id, "planner", "old-plan.md"),
@@ -2136,20 +2117,17 @@ def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_pat
     manifest = staged[0].read_text(encoding="utf-8")
 
     assert "current-fix.patch" in manifest
-    assert "current-fix-metadata.md" in manifest
     assert "previous-merged.patch" in manifest
     assert "previous-merged-metadata.md" in manifest
     assert "previous-merge-report.md" not in manifest
     assert "current-self-check.md" not in manifest
     assert "current-fix-notes.md" not in manifest
-    assert "old-test-report.md" not in manifest
+    assert "old-bug-report.md" not in manifest
     assert "old-decision.json" not in manifest
     assert "old-review-report.md" not in manifest
     assert "old-plan.md" not in manifest
     assert "old-execution.patch" not in manifest
-    assert "old-execution-metadata.md" not in manifest
     assert "old-fix.patch" not in manifest
-    assert "old-fix-metadata.md" not in manifest
 
 
 def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> None:
@@ -2166,16 +2144,12 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
 
     artifact_rows = [
         ("merged_patch_metadata.md", round0_merge_phase_id, "executor", "old-merged-metadata.md", "executor-1"),
-        ("build_report.md", round0_test_phase_id, "tester", "old-build-report.md", "tester-1"),
-        ("test_report.md", round0_test_phase_id, "tester", "old-test-report.md", "tester-1"),
         ("bug_report.md", round0_test_phase_id, "tester", "old-bug-report.md", "tester-1"),
         ("decision.json", round0_judge_phase_id, "judge", "old-decision.json", "judge-1"),
         ("decision_summary.md", round0_judge_phase_id, "judge", "old-decision-summary.md", "judge-1"),
         ("merged_patch_metadata.md", round1_merge_phase_id, "executor", "latest-merged-metadata.md", "executor-1"),
         ("merged_patch.diff", round1_merge_phase_id, "executor", "latest-merged.patch", "executor-1"),
         ("merge_report.md", round1_merge_phase_id, "executor", "latest-merge-report.md", "executor-1"),
-        ("build_report.md", round1_test_phase_id, "tester", "latest-build-report.md", "tester-1"),
-        ("test_report.md", round1_test_phase_id, "tester", "latest-test-report.md", "tester-1"),
         ("bug_report.md", round1_test_phase_id, "tester", "latest-bug-report.md", "tester-1"),
         ("decision.json", round1_judge_phase_id, "judge", "latest-decision.json", "judge-1"),
         ("decision_summary.md", round1_judge_phase_id, "judge", "latest-decision-summary.md", "judge-1"),
@@ -2230,8 +2204,6 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
     manifest = staged[0].read_text(encoding="utf-8")
 
     assert "latest-merged-metadata.md" in manifest
-    assert "latest-build-report.md" in manifest
-    assert "latest-test-report.md" in manifest
     assert "latest-bug-report.md" in manifest
     assert "latest-decision.json" in manifest
     assert "latest-decision-summary.md" in manifest
@@ -2246,8 +2218,6 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
     assert "stale-plan.md" not in manifest
     assert "stale-changed-files.md" not in manifest
     assert "old-merged-metadata.md" not in manifest
-    assert "old-build-report.md" not in manifest
-    assert "old-test-report.md" not in manifest
     assert "old-bug-report.md" not in manifest
     assert "old-decision.json" not in manifest
     assert "old-decision-summary.md" not in manifest
@@ -2273,10 +2243,8 @@ def test_fixing_falls_back_to_latest_visible_test_evidence_when_previous_test_ou
     )
 
     artifact_rows = [
-        ("build_report.md", round0_test_phase_id, "tester", "round0-build-report.md", "tester-1"),
-        ("test_report.md", round0_test_phase_id, "tester", "round0-test-report.md", "tester-1"),
         ("bug_report.md", round0_test_phase_id, "tester", "round0-bug-report.md", "tester-1"),
-        ("build_report.md", round1_test_phase_id, "tester", "round1-partial-build-report.md", "tester-1"),
+        ("review_report.md", round1_test_phase_id, "tester", "round1-non-tester-report.md", "tester-1"),
         ("decision.json", round0_judge_phase_id, "judge", "round0-decision.json", "judge-1"),
         ("decision_summary.md", round0_judge_phase_id, "judge", "round0-decision-summary.md", "judge-1"),
         ("merged_patch_metadata.md", round1_merge_phase_id, "executor", "round1-merged-metadata.md", "executor-1"),
@@ -2327,10 +2295,8 @@ def test_fixing_falls_back_to_latest_visible_test_evidence_when_previous_test_ou
     )
     manifest = staged[0].read_text(encoding="utf-8")
 
-    assert "round0-build-report.md" in manifest
-    assert "round0-test-report.md" in manifest
     assert "round0-bug-report.md" in manifest
-    assert "round1-partial-build-report.md" not in manifest
+    assert "round1-non-tester-report.md" not in manifest
     assert "round0-decision.json" in manifest
     assert "round0-decision-summary.md" in manifest
     assert "round1-merged-metadata.md" in manifest
@@ -2448,19 +2414,23 @@ def test_staged_input_artifacts_respect_size_budget(tmp_path: Path) -> None:
     config["artifact_input"] = {"max_files": 1, "max_file_bytes": 40, "max_total_bytes": 60}
     orchestrator = Orchestrator(config)
     task_id = orchestrator.create_task("review large artifacts")
-    phase_id = orchestrator.repository.create_phase(task_id, "TESTING", "tester", 0)
-    large_report = tmp_path / "test_report.md"
+    tester_phase_id = orchestrator.repository.create_phase(task_id, "TESTING", "tester", 0)
+    executor_phase_id = orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 0)
+    small_self_check = tmp_path / "self_check.md"
+    small_self_check.write_text("self", encoding="utf-8")
+    large_report = tmp_path / "bug_report.md"
     large_report.write_text("A" * 200, encoding="utf-8")
-    bug_report = tmp_path / "bug_report.md"
-    bug_report.write_text("bug", encoding="utf-8")
-    for artifact_type, path in (("bug_report.md", bug_report), ("test_report.md", large_report)):
+    for artifact_type, phase_id, role, path in (
+        ("self_check.md", executor_phase_id, "executor", small_self_check),
+        ("bug_report.md", tester_phase_id, "tester", large_report),
+    ):
         orchestrator.repository.create_artifact(
             ArtifactRef(
                 artifact_id=str(uuid.uuid4()),
                 task_id=task_id,
                 phase_id=phase_id,
-                role="tester",
-                agent_id="tester-1",
+                role=role,
+                agent_id=f"{role}-1",
                 artifact_type=artifact_type,
                 path=path,
                 version=1,
@@ -2531,7 +2501,6 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     assert (final_delivery.parent / "artifacts" / "materialized_repo.md").exists()
     assert (final_delivery.parent / "artifacts" / "merge_report.md").exists()
     assert (final_delivery.parent / "artifacts" / "patch.diff").exists()
-    assert (final_delivery.parent / "artifacts" / "patch_metadata.md").exists()
     assert (final_delivery.parent / "source" / "mock.txt").read_text(encoding="utf-8") == "mock change\n"
     merged_artifacts = orchestrator.repository.list_artifacts(task_id, "merged_patch.diff")
     validation_artifacts = orchestrator.repository.list_artifacts(task_id, "patch_validation.md")

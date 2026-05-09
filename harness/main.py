@@ -1388,7 +1388,6 @@ class InteractiveCLI:
             "merge_report.md",
             "patch.diff",
             "fix_patch.diff",
-            "patch_metadata.md",
             "response.md",
         ):
             path = self._latest_artifact_path(task_id, artifact_type)
@@ -1438,7 +1437,6 @@ class InteractiveCLI:
             "merge_report.md",
             "patch.diff",
             "fix_patch.diff",
-            "patch_metadata.md",
         ):
             path = self._latest_artifact_path(task_id, artifact_type)
             if path:

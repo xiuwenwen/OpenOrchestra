@@ -30,11 +30,11 @@ function statusLabel(st){
 function statusHelp(st){
   const s=String(st||"PENDING");
   const zh={
-    OUTPUT_INVALID:"Agent 没有产出符合角色合同的必需文件或 return_code，不代表测试结论失败。测试结论请看 build_result_code、test_result_code、bug_result_code 或 test_gate。",
+    OUTPUT_INVALID:"Agent 没有产出符合角色合同的必需文件或 return_code，不代表测试结论失败。测试结论请看 bug_report.md 中的 build_result_code、test_result_code、bug_result_code，或查看 test_gate。",
     FAILED:"执行失败表示 Agent 进程、阶段编排或门禁失败；业务测试失败请看 test_result_code/test_gate，patch gate 失败请看 patch_validated/objective_gate。"
   };
   const en={
-    OUTPUT_INVALID:"The agent did not produce the required role-contract files or return_code. This is not the test verdict; check build_result_code, test_result_code, bug_result_code, or test_gate for test results.",
+    OUTPUT_INVALID:"The agent did not produce the required role-contract files or return_code. This is not the test verdict; check build_result_code, test_result_code, and bug_result_code in bug_report.md, or check test_gate.",
     FAILED:"Failed means an agent process, orchestration phase, or gate failed. Business test failures are in test_result_code/test_gate; patch gate failures are in patch_validated/objective_gate."
   };
   return (uiLanguage==="en"?en[s]:zh[s])||s;
@@ -248,7 +248,7 @@ function renderAgentCards(runs){
   if(!runs.length)return`<div class="empty-msg">${esc(t("noRole"))}</div>`;
   return runs.map(r=>{
     const arts=(r.artifacts||[]).filter(a=>a.exists);
-    const deliveryTypes=["delivery.md","final_delivery.md","usage_guide.md","response.md","plan.md","decision_summary.md","review_report.md","test_report.md","bug_report.md","self_check.md","merge_report.md"];
+  const deliveryTypes=["delivery.md","final_delivery.md","usage_guide.md","response.md","plan.md","decision_summary.md","review_report.md","bug_report.md","self_check.md","merge_report.md"];
     const priArts=arts.filter(a=>deliveryTypes.includes(a.artifact_type));
     const otherArts=arts.filter(a=>!deliveryTypes.includes(a.artifact_type));
     return`<div class="ag-card">

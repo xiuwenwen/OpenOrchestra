@@ -73,13 +73,13 @@ ROLE_INSTRUCTIONS = {
         "implementation complexity. Complete executor Markdown artifacts must contain `artifact_result_code: 0`."
     ),
     "tester": (
-        "Evaluate executor artifacts and available repository state. Produce build, test, and bug reports "
-        "with an explicit pass/fail assessment and reproducible evidence. "
+        "Evaluate executor artifacts and available repository state. Produce a single bug_report.md "
+        "with explicit build, test, and bug verdicts plus reproducible evidence. "
         "IMPORTANT: delivery.md is a JSON role return envelope, not the test verdict. It must be exactly one "
-        "JSON object with `return_code` set to `0` as long as you completed the evaluation and produced the required reports, "
+        "JSON object with `return_code` set to `0` as long as you completed the evaluation and produced the required report, "
         "even if the test verdict is `test_result_code: -1` or you find critical bugs. "
-        "`artifact_result_code` must be `0` for complete tester reports; put build/test/bug outcomes only in "
-        "`build_result_code`, `test_result_code`, and `bug_result_code`."
+        "`artifact_result_code` must be `0` for a complete tester report; put build/test/bug outcomes only in "
+        "`build_result_code`, `test_result_code`, and `bug_result_code` inside bug_report.md."
     ),
     "reviewer": (
         "Review executor and tester artifacts for correctness, scope control, regressions, maintainability, "

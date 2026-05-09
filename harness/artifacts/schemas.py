@@ -78,7 +78,7 @@ def _phases(*phases: str) -> frozenset[str]:
 
 
 PLANNING_ARTIFACTS = _types("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md")
-TEST_REPORT_ARTIFACTS = _types("build_report.md", "test_report.md", "bug_report.md")
+TEST_REPORT_ARTIFACTS = _types("bug_report.md")
 JUDGE_DECISION_ARTIFACTS = _types("decision.json", "decision_summary.md")
 PATCH_GATE_ARTIFACTS = _types("test_gate.md", "objective_gate.md", "patch_validation.md", "materialized_repo.md")
 TEST_JUDGE_GATE_ARTIFACTS = _types("test_gate.md", "objective_gate.md")
@@ -87,7 +87,6 @@ EXECUTOR_REVIEW_ARTIFACTS = _types(
     "changed_files.md",
     "merged_patch.diff",
     "merged_patch_metadata.md",
-    "patch_metadata.md",
     "fix_schedule.md",
     "fix_notes.md",
     "self_check.md",
@@ -98,7 +97,6 @@ FINAL_EXECUTOR_ARTIFACTS = _types(
     "changed_files.md",
     "merged_patch.diff",
     "merged_patch_metadata.md",
-    "patch_metadata.md",
     "fix_schedule.md",
     "fix_notes.md",
     "self_check.md",
@@ -181,7 +179,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "executor",
         PATCH_MERGE,
         "executor",
-        _types("patch.diff", "fix_patch.diff", "patch_metadata.md"),
+        _types("patch.diff", "fix_patch.diff"),
         source_phases=_phases(EXECUTION, FIXING, REVIEW_FIXING),
         round_policy=ROUND_CURRENT,
     ),
@@ -308,13 +306,13 @@ def _contract(role: str, phase: str, outputs: tuple[str, ...]) -> RolePhaseContr
 _contract("planner", PLANNING_DRAFT, ("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md"))
 _contract("planner", PLANNING_PEER_REVIEW, ("peer_review.md",))
 _contract("planner", PLANNING_REVISION, ("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md"))
-_contract("executor", EXECUTION, ("implementation_plan.md", "changed_files.md", "patch.diff", "patch_metadata.md", "self_check.md"))
+_contract("executor", EXECUTION, ("implementation_plan.md", "changed_files.md", "patch.diff", "self_check.md"))
 _contract("executor", PATCH_MERGE, ("merged_patch.diff", "merged_patch_metadata.md", "merge_report.md"))
 _contract("executor", MISC_RESPONSE, ("response.md", "notes.md"))
-_contract("executor", FIXING, ("fix_schedule.md", "fix_patch.diff", "patch_metadata.md", "fix_notes.md", "self_check.md"))
-_contract("executor", REVIEW_FIXING, ("fix_schedule.md", "fix_patch.diff", "patch_metadata.md", "fix_notes.md", "self_check.md"))
-_contract("tester", TESTING, ("build_report.md", "test_report.md", "bug_report.md"))
-_contract("tester", REGRESSION_TESTING, ("build_report.md", "test_report.md", "bug_report.md"))
+_contract("executor", FIXING, ("fix_schedule.md", "fix_patch.diff", "fix_notes.md", "self_check.md"))
+_contract("executor", REVIEW_FIXING, ("fix_schedule.md", "fix_patch.diff", "fix_notes.md", "self_check.md"))
+_contract("tester", TESTING, ("bug_report.md",))
+_contract("tester", REGRESSION_TESTING, ("bug_report.md",))
 _contract("reviewer", PLAN_REVIEW, ("review_report.md", "selected_plan.md"))
 _contract("reviewer", REVIEWING, ("review_report.md",))
 _contract("judge", PLAN_JUDGEMENT, ("decision.json", "decision_summary.md"))
@@ -384,10 +382,10 @@ def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]
             *base,
             "- Do not use `artifact_result_code` to report build failure, test failure, blocked tests, or blocking bugs.",
             "- Do not copy `build_result_code`, `test_result_code`, or `bug_result_code` values into `artifact_result_code` or `return_code`.",
-            "- Put build outcome only in `build_report.md` as `build_result_code: 0`, `build_result_code: -1`, or `build_result_code: 2`.",
-            "- Put test outcome only in `test_report.md` as `test_result_code: 0`, `test_result_code: -1`, or `test_result_code: 2`.",
-            "- Put bug outcome only in `bug_report.md` as `bug_result_code: 0`, `bug_result_code: 1`, or `bug_result_code: -1`.",
-            "- If testing is blocked by a broken implementation, still write complete reports with `artifact_result_code: 0` and describe the blocker in the verdict fields.",
+            "- Put build outcome in `bug_report.md` as `build_result_code: 0`, `build_result_code: -1`, or `build_result_code: 2`.",
+            "- Put test outcome in `bug_report.md` as `test_result_code: 0`, `test_result_code: -1`, or `test_result_code: 2`.",
+            "- Put bug outcome in `bug_report.md` as `bug_result_code: 0`, `bug_result_code: 1`, or `bug_result_code: -1`.",
+            "- If testing is blocked by a broken implementation, still write a complete `bug_report.md` with `artifact_result_code: 0` and describe the blocker in the verdict fields.",
             "- Harness validates `delivery.md` and report headers; any non-zero `return_code` or non-zero `artifact_result_code` prevents the run from advancing.",
         ]
     if role == "reviewer":
