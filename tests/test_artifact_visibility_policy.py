@@ -4,6 +4,7 @@ from pathlib import Path
 
 from harness.artifacts.visibility import ArtifactVisibilityPolicy
 from harness.core.state_machine import (
+    DELIVERY,
     EXECUTION,
     FIXING,
     PLAN_REVIEW,
@@ -215,3 +216,48 @@ def test_executor_review_fixing_visibility_excludes_reviewer_report(tmp_path: Pa
     )
 
     assert _names(visible) == {"metadata-merged_patch_metadata.md"}
+
+
+def test_reviewer_visibility_excludes_test_and_gate_noise(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    artifacts = [
+        _artifact(tmp_path, phases_by_id, role="reviewer", agent_id="reviewer-1", artifact_type="selected_plan.md", phase_type=PLAN_REVIEW, round_id=1, label="selected"),
+        _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="merged_patch.diff", phase_type=PATCH_MERGE, round_id=3, label="merged"),
+        _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="self_check.md", phase_type=PATCH_MERGE, round_id=3, label="self"),
+        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=3, label="bug"),
+        _artifact(tmp_path, phases_by_id, role="judge", agent_id="judge-1", artifact_type="decision.json", phase_type=TEST_JUDGEMENT, round_id=3, label="judge"),
+        _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="orchestrator", artifact_type="test_gate.md", phase_type="TEST_GATE", round_id=3, label="gate"),
+    ]
+
+    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "reviewer", REVIEWING, 0)
+
+    assert _names(visible) == {
+        "selected-selected_plan.md",
+        "merged-merged_patch.diff",
+        "self-self_check.md",
+    }
+
+
+def test_communicator_visibility_uses_only_plan_and_final_executor_artifacts(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    artifacts = [
+        _artifact(tmp_path, phases_by_id, role="reviewer", agent_id="reviewer-1", artifact_type="selected_plan.md", phase_type=PLAN_REVIEW, round_id=1, label="selected"),
+        _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="merged_patch.diff", phase_type=PATCH_MERGE, round_id=3, label="merged"),
+        _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="merged_patch_metadata.md", phase_type=PATCH_MERGE, round_id=3, label="metadata"),
+        _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="changed_files.md", phase_type=PATCH_MERGE, round_id=3, label="changed"),
+        _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="self_check.md", phase_type=PATCH_MERGE, round_id=3, label="self"),
+        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=3, label="bug"),
+        _artifact(tmp_path, phases_by_id, role="reviewer", agent_id="reviewer-1", artifact_type="review_report.md", phase_type=REVIEWING, round_id=1, label="review"),
+        _artifact(tmp_path, phases_by_id, role="judge", agent_id="judge-1", artifact_type="decision.json", phase_type=TEST_JUDGEMENT, round_id=3, label="judge"),
+        _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="orchestrator", artifact_type="test_gate.md", phase_type="TEST_GATE", round_id=3, label="gate"),
+    ]
+
+    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "communicator", DELIVERY, 0)
+
+    assert _names(visible) == {
+        "selected-selected_plan.md",
+        "merged-merged_patch.diff",
+        "metadata-merged_patch_metadata.md",
+        "changed-changed_files.md",
+        "self-self_check.md",
+    }

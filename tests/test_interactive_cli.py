@@ -101,13 +101,13 @@ def test_resume_context_does_not_pollute_project_workflow_classification(monkeyp
     monkeypatch.setattr(main_module, "classify_workflow", fake_classify)
     monkeypatch.setattr(main_module, "run_once", fake_run_once)
 
-    cli._run_prompt("what does the dashboard mean?")
+    cli._run_prompt("add an export button to this project")
 
-    assert captured["classified_prompt"] == "what does the dashboard mean?"
+    assert captured["classified_prompt"] == "add an export button to this project"
     assert captured["backend"] == "mock"
     assert captured["config_seen"] == "yes"
     assert captured["workflow_type"] == "feature_change"
-    assert captured["run_prompt"] == "what does the dashboard mean?"
+    assert captured["run_prompt"] == "add an export button to this project"
     assert "Historical task id:" in captured["project_context_md"]
 
 
@@ -145,6 +145,34 @@ def test_misc_prompt_uses_direct_chat_without_harness_task(monkeypatch, tmp_path
     assert captured["prompt"] == "how do I use this project?"
     assert captured["context"]
     assert "Historical task id:" in captured["context"]
+
+
+def test_active_context_question_skips_classifier_and_new_task(monkeypatch, tmp_path: Path, capsys) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    historical_task_id = cli.orchestrator.create_task("Build a small weather app")
+    cli.active_task_id = historical_task_id
+    capsys.readouterr()
+    captured: dict[str, str | None] = {}
+
+    class FakeMiscChatRunner:
+        def __init__(self, backend: str, config: dict | None = None):
+            captured["backend"] = backend
+
+        def ask(self, prompt: str, context: str | None = None) -> str:
+            captured["prompt"] = prompt
+            captured["context"] = context
+            return "context answer"
+
+    monkeypatch.setattr(main_module, "classify_workflow", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("classifier should not run for active-context question")))
+    monkeypatch.setattr(main_module, "MiscChatRunner", FakeMiscChatRunner)
+    monkeypatch.setattr(main_module, "run_once", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("question should not create task")))
+
+    cli._run_prompt("这个项目怎么启动？")
+
+    assert capsys.readouterr().out.strip() == "context answer"
+    assert captured["prompt"] == "这个项目怎么启动？"
+    assert "Historical task id:" in (captured["context"] or "")
+    assert cli.active_task_id == historical_task_id
 
 
 def test_misc_classifier_fallback_prints_raw_answer_only(monkeypatch, tmp_path: Path, capsys) -> None:

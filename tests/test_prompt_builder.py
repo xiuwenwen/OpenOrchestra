@@ -189,6 +189,23 @@ def test_prompt_builder_uses_balanced_planner_when_count_is_one(tmp_path: Path) 
     assert "`test_commands:` with exact commands or `not_applicable: <reason>`" in prompt
 
 
+def test_prompt_builder_uses_fix_modify_planner_profiles_for_existing_project_workflows(tmp_path: Path) -> None:
+    context = make_context(tmp_path, role="planner", agent_id="planner-1", role_count=2)
+    context = AgentRunContext(
+        **{
+            **context.__dict__,
+            "metadata": {"workflow_type": "feature_change"},
+        }
+    )
+
+    prompt = PromptBuilder().build(context)
+
+    assert "Specialization: Minimal Patch Planner." in prompt
+    assert "Task Type Classification" in prompt or "Classify the task" in prompt
+    assert "files/modules likely to change and files/modules that should not change" in prompt
+    assert "Pragmatic Planner" not in prompt
+
+
 def test_prompt_builder_specializes_two_planners(tmp_path: Path) -> None:
     builder = PromptBuilder()
 
@@ -287,6 +304,24 @@ def test_prompt_builder_has_plan_review_merge_contract(tmp_path: Path) -> None:
     assert "Do not merely pick one planner proposal" in prompt
 
 
+def test_prompt_builder_reviewer_requires_runtime_verdict_json(tmp_path: Path) -> None:
+    context = make_context(tmp_path, role="reviewer", agent_id="reviewer-1", role_count=1)
+    context = AgentRunContext(
+        **{
+            **context.__dict__,
+            "phase": "REVIEWING",
+            "required_outputs": ["review_report.md", "delivery.md"],
+        }
+    )
+
+    prompt = PromptBuilder().build(context)
+
+    assert "run the repository on this machine" in prompt
+    assert "Review Verdict JSON" in prompt
+    assert '"review_status":"approved|changes_required|blocked"' in prompt
+    assert "environment_check.status: blocked" in prompt
+
+
 def test_prompt_builder_injects_communicator_publish_metadata(tmp_path: Path) -> None:
     context = AgentRunContext(
         task_id="task-1",
@@ -316,6 +351,7 @@ def test_prompt_builder_injects_communicator_publish_metadata(tmp_path: Path) ->
 
     assert "## Harness Metadata" in prompt
     assert f"- expected_success_path: {tmp_path / 'deliver' / 'weather-task'}" in prompt
+    assert "Use `selected_plan.md` plus the final executor artifacts as your primary sources of truth" in prompt
     assert "The expected success path is precomputed before publishing" in prompt
     assert "`## Actual Usage` section written for the end user" in prompt
     assert "enter project directory, install dependencies when needed, run the program or tests" in prompt

@@ -356,7 +356,7 @@ class AgentPhaseRunner:
                 agent_id=agent_id,
                 round_id=round_id,
                 user_prompt=user_prompt,
-                role_instruction=o.role_instructions.get(role, ""),
+                role_instruction=o.role_instruction_for(role),
                 workspace_dir=workspace.workspace_dir,
                 repo_dir=workspace.repo_dir,
                 input_dir=workspace.input_dir,

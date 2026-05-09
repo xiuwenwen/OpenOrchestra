@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -318,7 +319,10 @@ class WorkflowEngine:
     def run_review_loop(self, task_id: str, user_prompt: str) -> None:
         o = self.orchestrator
         for round_id in range(o.config["limits"]["max_review_rounds"]):
-            o.run_role_phase("reviewer", REVIEWING, round_id, required_outputs_for("reviewer", REVIEWING), user_prompt)
+            review_results = o.run_role_phase("reviewer", REVIEWING, round_id, required_outputs_for("reviewer", REVIEWING), user_prompt)
+            blocked_reason = self.review_environment_block_reason(review_results)
+            if blocked_reason:
+                raise TaskFailedError(f"Reviewer blocked delivery due to runtime environment conflict: {blocked_reason}")
             review_decision = o._run_judge_phase(task_id, REVIEW_JUDGEMENT, round_id, user_prompt)
             if o.judge.is_review_approved(review_decision):
                 break
@@ -329,6 +333,38 @@ class WorkflowEngine:
             self.run_regression_test_fix_loop(task_id, user_prompt, next_review_round, merge_ok)
         else:
             raise TaskFailedError("Review was not approved within max_review_rounds")
+
+    def review_environment_block_reason(self, results: list[AgentRunResult]) -> str | None:
+        for result in results:
+            for artifact in result.artifacts:
+                if artifact.artifact_type != "review_report.md" or not artifact.path.exists():
+                    continue
+                payload = self._extract_review_verdict_json(artifact.path.read_text(encoding="utf-8", errors="replace"))
+                environment_check = payload.get("environment_check")
+                if not isinstance(environment_check, dict):
+                    continue
+                status = str(environment_check.get("status") or "").strip().lower()
+                if status != "blocked":
+                    continue
+                reason = environment_check.get("blocking_reason") or payload.get("blocking_reason") or payload.get("reason")
+                text = str(reason).strip()
+                return text or "reviewer reported a blocked runtime environment with no reason"
+        return None
+
+    def _extract_review_verdict_json(self, content: str) -> dict[str, Any]:
+        marker = "## Review Verdict JSON"
+        marker_index = content.find(marker)
+        if marker_index < 0:
+            return {}
+        block = content[marker_index + len(marker) :]
+        match = re.search(r"```json\s*(.*?)```", block, re.DOTALL)
+        if not match:
+            return {}
+        try:
+            payload = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
     def run_regression_test_fix_loop(self, task_id: str, user_prompt: str, review_round_id: int, merge_ok: bool) -> None:
         o = self.orchestrator

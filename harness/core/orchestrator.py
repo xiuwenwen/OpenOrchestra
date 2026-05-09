@@ -81,10 +81,13 @@ ROLE_INSTRUCTIONS = {
         "`build_result_code`, `test_result_code`, and `bug_result_code` inside bug_report.md."
     ),
     "reviewer": (
-        "Review executor and tester artifacts for correctness, scope control, regressions, maintainability, "
-        "and missing validation. Produce review findings only. delivery.md is a JSON role return envelope. It must "
-        "be exactly one JSON object with `return_code` set to `0` if you completed the review, regardless of whether "
-        "the review verdict is `review_decision_code: 0` or `review_decision_code: 1`. "
+        "Review the final executor implementation for correctness, scope control, regressions, maintainability, "
+        "and customer-machine runtime readiness. When this is a code delivery, run the repository on the current machine, "
+        "attempt local isolated dependency setup when needed, and verify the delivered environment actually works. "
+        "If runtime issues are fixable, request changes in `review_report.md`; if the runtime or system conflict is irreconcilable, "
+        "report a blocked environment through the required JSON section in `review_report.md`. delivery.md is a JSON role return envelope. "
+        "It must be exactly one JSON object with `return_code` set to `0` if you completed the review, regardless of whether "
+        "the review verdict is `review_decision_code: 0`, `review_decision_code: 1`, or `review_decision_code: -1`. "
         "`review_report.md` must contain `artifact_result_code: 0` when complete."
     ),
     "judge": (
@@ -95,11 +98,18 @@ ROLE_INSTRUCTIONS = {
         "`decision_summary.md` must contain `artifact_result_code: 0` when complete."
     ),
     "communicator": (
-        "Create the final delivery artifact only. Summarize outcome, status, produced artifacts, residual "
-        "risks, and next steps using the accepted artifact set. delivery.md is a JSON role return envelope. It must "
-        "be exactly one JSON object with `return_code` set to `0` if the final delivery documentation is complete. "
+        "Create customer-facing delivery artifacts only. Use the accepted plan and final executor implementation to "
+        "describe what was built, how it works, and how the customer should run it. delivery.md is a JSON role return envelope. "
+        "It must be exactly one JSON object with `return_code` set to `0` if the final delivery documentation is complete. "
         "`final_delivery.md` and `usage_guide.md` must contain `artifact_result_code: 0` when complete."
     ),
+}
+
+ROLE_INSTRUCTIONS_BY_WORKFLOW = {
+    NEW_PROJECT: ROLE_INSTRUCTIONS,
+    BUGFIX: ROLE_INSTRUCTIONS,
+    FEATURE_CHANGE: ROLE_INSTRUCTIONS,
+    MISC: ROLE_INSTRUCTIONS,
 }
 
 SINGLE_EXECUTOR_FIX_PHASES = {FIXING, REVIEW_FIXING}
@@ -127,7 +137,7 @@ class Orchestrator:
         self.communicator = Communicator(self.repository)
         self.judge = MockJudge()
         self.prompt_builder = PromptBuilder()
-        self.role_instructions = ROLE_INSTRUCTIONS
+        self.role_instructions_by_workflow = ROLE_INSTRUCTIONS_BY_WORKFLOW
         self.materialized_repo_service = MaterializedRepoService(
             self.repository,
             self.workspace_manager,
@@ -655,6 +665,9 @@ class Orchestrator:
             # Multiple fix executors produce competing patches for the same defect, which
             # increases merge conflicts, context size, and risk of broad accidental changes.
             return 1
+        if role == "planner" and self._active_workflow_type in {BUGFIX, FEATURE_CHANGE}:
+            configured = agent_count_override if agent_count_override is not None else self.config_service.role_count(task_id, role)
+            return min(configured, 2)
         if agent_count_override is not None:
             return agent_count_override
         return self.config_service.role_count(task_id, role)
@@ -724,17 +737,23 @@ class Orchestrator:
             self.progress_callback(event)
 
     def _context_metadata(self, task: dict[str, Any], role: str, phase: str) -> dict[str, Any]:
+        metadata = {"workflow_type": task.get("workflow_type") or self._active_workflow_type or NEW_PROJECT}
         if role != "communicator" or phase != DELIVERY:
-            return {}
+            return metadata
         task_id = str(task["task_id"])
         expected_success_path = self._delivery_project_dir(task_id, str(task["user_prompt"]))
-        return {
+        metadata.update({
             "expected_success_path": str(expected_success_path),
             "expected_final_delivery": str(expected_success_path / "final_delivery.md"),
             "expected_usage_guide": str(expected_success_path / "usage_guide.md"),
             "expected_artifacts_manifest": str(expected_success_path / "artifacts_manifest.md"),
             "publish_timing": "Harness will publish these files after the communicator role succeeds.",
-        }
+        })
+        return metadata
+
+    def role_instruction_for(self, role: str) -> str:
+        workflow_type = self._active_workflow_type or NEW_PROJECT
+        return self.role_instructions_by_workflow.get(workflow_type, ROLE_INSTRUCTIONS).get(role, ROLE_INSTRUCTIONS.get(role, ""))
 
     def _workflow_prompt(self, user_prompt: str, workflow_type: str) -> str:
         if workflow_type == BUGFIX:

@@ -79,7 +79,25 @@ class MockAgentAdapter(AgentAdapter):
         if context.role == "executor" and name == "notes.md":
             return "artifact_result_code: 0\n\n# Notes\n\nContext used: mock input artifacts.\nLimitations: mock adapter output.\n"
         if context.role == "reviewer" and name == "review_report.md":
-            return "artifact_result_code: 0\n\n# Review Report\n\nreview_decision_code: 0\nNo changes required.\n"
+            return (
+                "artifact_result_code: 0\n\n"
+                "# Review Report\n\n"
+                "review_decision_code: 0\n"
+                "Runtime verification passed on the current machine.\n\n"
+                "## Review Verdict JSON\n\n"
+                "```json\n"
+                "{\n"
+                '  "review_status": "approved",\n'
+                '  "environment_check": {\n'
+                '    "attempted": true,\n'
+                '    "status": "ready",\n'
+                '    "commands_run": ["python mock.py"],\n'
+                '    "fixable": true,\n'
+                '    "blocking_reason": ""\n'
+                "  }\n"
+                "}\n"
+                "```\n"
+            )
         if context.role == "reviewer" and name == "selected_plan.md":
             return "artifact_result_code: 0\n\n# Selected Plan\n\nUse the merged mock planner proposal as the single execution plan.\n"
         if context.role == "planner" and name == "peer_review.md":
@@ -94,7 +112,7 @@ class MockAgentAdapter(AgentAdapter):
                 "- project_dir: source\n"
                 "- run_command: python mock.py\n"
                 "- dependency_install: none\n\n"
-                "The orchestrator collected all required artifacts and received final judge approval.\n"
+                "The orchestrator collected the accepted plan and final implementation artifacts for delivery.\n"
             )
         if context.role == "communicator" and name == "usage_guide.md":
             return (
@@ -108,7 +126,7 @@ class MockAgentAdapter(AgentAdapter):
                 "```\n\n"
                 "## Verification\n\n"
                 "- Confirm every role delivery.md reports `return_code: 0`.\n"
-                "- Confirm final judge approval exists.\n\n"
+                "- Confirm the delivered project runs with the documented command.\n\n"
                 "## Known Risks\n\n"
                 "- This is mock output and does not contain a real implementation.\n"
             )

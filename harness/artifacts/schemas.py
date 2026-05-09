@@ -83,26 +83,17 @@ JUDGE_DECISION_ARTIFACTS = _types("decision.json", "decision_summary.md")
 PATCH_GATE_ARTIFACTS = _types("test_gate.md", "objective_gate.md", "patch_validation.md", "materialized_repo.md")
 TEST_JUDGE_GATE_ARTIFACTS = _types("test_gate.md", "objective_gate.md")
 EXECUTOR_REVIEW_ARTIFACTS = _types(
-    "implementation_plan.md",
     "changed_files.md",
     "merged_patch.diff",
     "merged_patch_metadata.md",
-    "fix_schedule.md",
-    "fix_notes.md",
     "self_check.md",
-    "merge_report.md",
 )
-FINAL_EXECUTOR_ARTIFACTS = _types(
-    "implementation_plan.md",
+DELIVERY_EXECUTOR_ARTIFACTS = _types(
     "changed_files.md",
     "merged_patch.diff",
     "merged_patch_metadata.md",
-    "fix_schedule.md",
-    "fix_notes.md",
     "self_check.md",
-    "merge_report.md",
 )
-FINAL_PLANNER_ARTIFACTS = _types("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md", "peer_review.md")
 FINAL_REVIEWER_ARTIFACTS = _types("selected_plan.md", "review_report.md")
 
 
@@ -241,10 +232,15 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         source_phases=_phases(TEST_JUDGEMENT, REVIEW_JUDGEMENT),
         round_policy=ROUND_LATEST_COMPLETE_JUDGE_BEFORE_CURRENT,
     ),
+    ArtifactVisibilityRule(
+        "reviewer",
+        REVIEWING,
+        "reviewer",
+        _types("selected_plan.md"),
+        source_phases=_phases(PLAN_REVIEW),
+        round_policy=ROUND_LATEST_PER_TYPE,
+    ),
     ArtifactVisibilityRule("reviewer", REVIEWING, "executor", EXECUTOR_REVIEW_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("reviewer", REVIEWING, "tester", TEST_REPORT_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("reviewer", REVIEWING, "judge", JUDGE_DECISION_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("reviewer", REVIEWING, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
     ArtifactVisibilityRule("judge", TEST_JUDGEMENT, "orchestrator", TEST_JUDGE_GATE_ARTIFACTS, round_policy=ROUND_CURRENT),
     ArtifactVisibilityRule(
         "judge",
@@ -272,18 +268,20 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         source_phases=_phases(REVIEWING),
         round_policy=ROUND_CURRENT,
     ),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "planner", FINAL_PLANNER_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "executor", FINAL_EXECUTOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
+    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "executor", DELIVERY_EXECUTOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
     ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "tester", TEST_REPORT_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
     ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "reviewer", FINAL_REVIEWER_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
     ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "judge", JUDGE_DECISION_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
     ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("communicator", DELIVERY, "planner", FINAL_PLANNER_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("communicator", DELIVERY, "executor", FINAL_EXECUTOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("communicator", DELIVERY, "tester", TEST_REPORT_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("communicator", DELIVERY, "reviewer", FINAL_REVIEWER_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("communicator", DELIVERY, "judge", JUDGE_DECISION_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("communicator", DELIVERY, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
+    ArtifactVisibilityRule(
+        "communicator",
+        DELIVERY,
+        "reviewer",
+        _types("selected_plan.md"),
+        source_phases=_phases(PLAN_REVIEW),
+        round_policy=ROUND_LATEST_PER_TYPE,
+    ),
+    ArtifactVisibilityRule("communicator", DELIVERY, "executor", DELIVERY_EXECUTOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
 )
 
 DELIVERY_STATUS_OUTPUT = "delivery.md"
@@ -393,6 +391,9 @@ def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]
             *base,
             "- Put review outcome only in `review_report.md` as `review_decision_code: 0`, `review_decision_code: 1`, or `review_decision_code: -1`.",
             "- Do not copy `review_decision_code` into `artifact_result_code` or `return_code`.",
+            "- `review_report.md` must also include a `## Review Verdict JSON` section with one fenced `json` object describing runtime/environment verification.",
+            '- Required JSON keys: `review_status`, `environment_check.attempted`, `environment_check.status`, `environment_check.commands_run`, `environment_check.fixable`, and `environment_check.blocking_reason`.',
+            "- Use `environment_check.status: blocked` only for irreconcilable runtime or system conflicts that should stop Harness immediately.",
         ]
     if role == "judge":
         return [

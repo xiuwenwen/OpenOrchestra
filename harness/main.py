@@ -1210,7 +1210,7 @@ class InteractiveCLI:
                     "  /help                    Show this help",
                     "  exit                     Quit",
                     "",
-                    "Any non-command text starts a new task. If /resume is active, the historical task is included as reference context.",
+                    "Any non-command change request starts a task. If /resume is active, ordinary questions use the historical task as chat context without creating a new workspace.",
                 ]
             )
         )
@@ -1322,6 +1322,10 @@ class InteractiveCLI:
             print(f"response: {response}")
 
     def _run_prompt(self, prompt: str) -> None:
+        if self.active_task_id and not self.default_workflow and self._active_context_prompt_is_misc(prompt):
+            context = self._build_history_context(self.active_task_id)
+            print(MiscChatRunner(self.backend, config=self.config).ask(prompt, context=context))
+            return
         workflow_type, fallback_answer = (
             (self.default_workflow, None)
             if self.default_workflow
@@ -1343,6 +1347,63 @@ class InteractiveCLI:
         if latest_task_id and latest_task_id != previous_latest:
             self.active_task_id = latest_task_id
             self.ui_store.select_task(latest_task_id)
+
+    def _active_context_prompt_is_misc(self, prompt: str) -> bool:
+        text = prompt.strip().lower()
+        if not text:
+            return False
+        change_markers = (
+            "fix",
+            "repair",
+            "modify",
+            "change",
+            "add ",
+            "implement",
+            "build",
+            "create",
+            "delete",
+            "remove",
+            "refactor",
+            "修复",
+            "修改",
+            "新增",
+            "添加",
+            "实现",
+            "开发",
+            "重构",
+            "删除",
+            "移除",
+        )
+        if any(marker in text for marker in change_markers):
+            return False
+        question_markers = (
+            "?",
+            "？",
+            "how",
+            "why",
+            "what",
+            "where",
+            "when",
+            "explain",
+            "show",
+            "tell me",
+            "怎么",
+            "如何",
+            "为什么",
+            "为何",
+            "什么",
+            "哪里",
+            "在哪",
+            "解释",
+            "说明",
+            "看下",
+            "看看",
+            "启动",
+            "运行",
+            "路径",
+            "日志",
+        )
+        return any(marker in text for marker in question_markers)
 
     def _build_history_context(self, task_id: str | None) -> str | None:
         if not task_id:
