@@ -48,7 +48,7 @@ def main() -> int:
         epilog=(
             "Slash commands also work as one-shot invocations, for example: "
             "orchestra /history 10, orchestra /resume 1, orchestra /continue <task_id>, "
-            "orchestra /clean <task_id>, orchestra /goal."
+            "orchestra diagnose <task_id>, orchestra /clean <task_id>, orchestra /goal."
         ),
     )
     parser.add_argument("prompt", nargs="*", help="User task prompt to run through the harness")

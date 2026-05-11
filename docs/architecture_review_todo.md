@@ -148,11 +148,11 @@
 - 风险：目前只覆盖按 task 清理，还没有按时间、大小、最近 N 次失败的自动保留策略。
 - 目标：继续扩展为批量 retention profile 和 diagnostics bundle。
 
-### A17. 可观测性已有基础 trace/span
+### A17. 可观测性已有 trace/span 和 diagnostics bundle
 
-- 证据：`ProgressEvent`、state DB events 和 UI event store 已带 `trace_id`、`span_id`、`parent_span_id`；`Orchestrator._emit` 会自动以 `task_id` 作为 trace_id 并生成默认 span。
-- 风险：当前 span 还没有覆盖外部 command 子步骤和 artifact manifest，后续诊断包仍需要继续整合日志路径。
-- 目标：继续让 gate command、artifact manifest、diagnostics bundle 复用同一 trace/span。
+- 证据：`ProgressEvent`、state DB events 和 UI event store 已带 `trace_id`、`span_id`、`parent_span_id`；`harness/diagnostics/service.py` 可导出 task state、event timeline、agent prompt/stdout/stderr、request diagnostics、input manifest 和已登记 artifacts。
+- 风险：当前 diagnostics bundle 是本地目录导出，还没有 zip 打包和更细粒度的 redaction policy。
+- 目标：继续让 gate command、artifact manifest、diagnostics bundle 复用同一 trace/span，并在需要时提供 zip 输出。
 
 ### A18. 配置层缺少统一 schema 和版本迁移
 
@@ -288,7 +288,7 @@
   - 验收：支持 dry-run、按 task 清理、保留成功交付、保留失败最近 N 次。
   - 测试：清理命令不会删除 current active task；不会删除 final delivery。
 
-- [ ] T6.3 operational diagnostics bundle
+- [x] T6.3 operational diagnostics bundle
   - 范围：失败任务一键导出 prompt、manifest、stdout/stderr、gate reports、decision、event timeline。
   - 验收：`orchestra diagnose <task_id>` 生成 zip 或目录，隐私字段可脱敏。
   - 测试：mock failure 生成完整 bundle。
@@ -413,7 +413,7 @@
     - 交付：`harness/delivery/handoff.py`。
     - 验收：Python/Node/partial materialized source/usage guide 命令提取独立测试。
 
-20. [ ] T6.3 operational diagnostics bundle
+20. [x] T6.3 operational diagnostics bundle
     - 原因：失败排障需要一键收集证据。
     - 交付：`orchestra diagnose <task_id>`。
     - 验收：mock failure 能导出 prompt、manifest、stdout/stderr、gate reports、decision、event timeline。

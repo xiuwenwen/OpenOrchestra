@@ -8,6 +8,7 @@ COMMANDS = {
     "/resume": "Use a historical task as context",
     "/continue": "Continue/retry the active historical task",
     "/clean": "Remove intermediate files for the selected task",
+    "/diagnose": "Export a diagnostics bundle for a task",
     "/goal": "Run test/fix loops until fixed without asking at the round limit",
     "/current": "Show selected historical context",
     "/clear": "Clear selected historical context",
@@ -37,11 +38,12 @@ BARE_COMMAND_ALIASES = {
     "retry": "/continue",
     "run": "/continue",
     "clean": "/clean",
+    "diagnose": "/diagnose",
     "goal": "/goal",
     "current": "/current",
     "ui": "/ui",
 }
-BARE_COMMANDS_WITH_ARGS = {"history", "tasks", "resume", "select", "task"}
+BARE_COMMANDS_WITH_ARGS = {"history", "tasks", "resume", "select", "task", "diagnose"}
 
 
 def bare_command_line(text: str) -> str | None:

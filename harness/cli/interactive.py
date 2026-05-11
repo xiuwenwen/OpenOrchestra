@@ -41,6 +41,7 @@ from harness.core.misc_chat import MiscChatRunner
 from harness.core.orchestrator import Orchestrator
 from harness.core.workflow_type import MISC, NEW_PROJECT
 from harness.delivery.handoff import format_delivery_handoff, format_total_elapsed
+from harness.diagnostics.service import DiagnosticsService
 from harness.retention.service import RetentionService, format_bytes
 from harness.ui.display import pad_display, truncate_display
 from harness.ui.launcher import start_ui_server
@@ -277,6 +278,10 @@ class InteractiveCLI:
             if args and not self._select_task_for_command(args[0]):
                 return
             self._clean_task()
+        elif command == "/diagnose":
+            if args and not self._select_task_for_command(args[0]):
+                return
+            self._diagnose_task()
         elif command == "/goal":
             self._set_fix_until_goal()
         elif command in {"/resume", "/select", "/task"}:
@@ -328,6 +333,7 @@ class InteractiveCLI:
                     "  /continue                Continue/retry the active historical task; bare 'continue' also works",
                     "  /resume <n|task_id>      Use a historical task as context for following prompts",
                     "  /clean                   Remove selected task workspaces/artifacts; keep final success_path",
+                    "  /diagnose                Export prompt/log/artifact/event diagnostics for the active task",
                     "  /goal                    Set test/fix loops to fix until done without asking",
                     "  /current                 Show selected historical context",
                     "  /clear                   Clear selected historical context",
@@ -335,7 +341,7 @@ class InteractiveCLI:
                     "  /help                    Show this help",
                     "  exit                     Quit",
                     "",
-                    "One-shot usage: `orchestra /resume 1`, `orchestra /continue <task_id>`, `orchestra /clean <task_id>`.",
+                    "One-shot usage: `orchestra /resume 1`, `orchestra /continue <task_id>`, `orchestra diagnose <task_id>`.",
                     "Any non-command change request starts a task. If /resume is active, ordinary questions use the historical task as chat context without creating a new workspace.",
                 ]
             )
@@ -738,6 +744,19 @@ class InteractiveCLI:
             print("nothing deleted")
         for action in plan.skipped:
             print(f"skipped: {action.path} ({action.reason})")
+
+    def _diagnose_task(self) -> None:
+        if not self.active_task_id:
+            print("no active historical context. Use /resume first.")
+            return
+        try:
+            bundle = DiagnosticsService(config=self.config, repository=self.orchestrator.repository).export_task(self.active_task_id)
+        except KeyError:
+            print(f"active task no longer exists: {self.active_task_id}")
+            self.active_task_id = None
+            return
+        print(f"diagnostics_bundle: {bundle.path}")
+        print(f"copied_evidence_files: {bundle.copied_files}")
 
     def _task_result_summary(self, task_id: str) -> str:
         success_path = self._success_path(task_id)
