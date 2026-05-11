@@ -16,7 +16,7 @@
 
 1. Task Intake Context
    - 负责 CLI、一次性命令、交互命令、workflow 分类、历史任务上下文。
-   - 当前主要文件：`harness/main.py`、`harness/core/workflow_classifier.py`、`harness/core/misc_chat.py`。
+   - 当前主要文件：`harness/main.py`、`harness/cli/*`、`harness/core/workflow_classifier.py`、`harness/core/misc_chat.py`。
 
 2. Workflow Context
    - 负责 new_project、bugfix、feature_change、misc 的 phase sequencing。
@@ -48,11 +48,11 @@
 
 ## 不合理之处
 
-### A1. `main.py` 仍是超大入口模块
+### A1. `main.py` 已收敛为入口装配模块
 
-- 证据：`harness/main.py` 仍约 1000 行；delivery handoff 已抽到 `harness/delivery/handoff.py`，terminal dashboard 已抽到 `harness/ui/terminal_dashboard.py`，用户 env/config 映射已抽到 `harness/config/user_env.py`，CLI 命令注册和别名解析已抽到 `harness/cli/commands.py`，但交互循环、workflow 调用、UI 启动仍集中在入口。
-- 风险：Task Intake、UI、Delivery Handoff、Dashboard 四个上下文被揉在一起，后续新增命令或 UI 行为时容易互相影响。
-- 目标：`main.py` 只保留 argparse、wire-up、process exit code；命令、dashboard、handoff、env config 各自独立。
+- 证据：`harness/main.py` 已降到约 130 行，只保留 argparse、配置加载、backend 选择、progress/UI/orchestrator 装配和最终 dispatch。delivery handoff 已抽到 `harness/delivery/handoff.py`，terminal dashboard 已抽到 `harness/ui/terminal_dashboard.py`，用户 env/config 映射已抽到 `harness/config/user_env.py`，CLI 命令注册和别名解析已抽到 `harness/cli/commands.py`，交互循环已抽到 `harness/cli/interactive.py`，workflow 分类和一次性执行已抽到 `harness/cli/runtime.py`，UI 启动已抽到 `harness/ui/launcher.py`。
+- 风险：入口耦合风险已明显下降；后续风险转移到 `harness/cli/interactive.py` 内部方法仍偏多，需要在功能演进时继续拆 history/resume/cleanup 子服务。
+- 目标：保持 `main.py` 作为 wire-up 文件，禁止重新塞入交互逻辑、dashboard 渲染、handoff 推断、env 映射或 command registry。
 
 ### A2. `Orchestrator` 仍是服务定位器和兼容层的混合体
 
@@ -261,10 +261,10 @@
 
 ### Phase 5：CLI/UI 拆分
 
-- [ ] T5.1 拆 `InteractiveCLI`
+- [x] T5.1 拆 `InteractiveCLI`
   - 范围：命令解析、history/resume/continue、workflow classification、task execution 分文件。
   - 验收：`main.py` 少于 300 行；原交互命令和一次性命令不变。
-  - 测试：现有 `tests/test_interactive_cli.py` 拆成 command parser、resume context、one-shot command 三组。
+  - 测试：覆盖 command parser、resume context、one-shot command 和入口装配边界。
 
 - [x] T5.2 拆 Dashboard
   - 范围：`DashboardProgressReporter` 移入 `harness/ui/terminal_dashboard.py`。
@@ -345,7 +345,7 @@
    - 交付：注入 repository、communicator、materialized repo、source repo、artifact writer ports。
    - 验收：`DeliveryPublisher` 不调用任何 `o._*` 方法，可独立单测。
 
-8. [ ] T5.1 拆 `InteractiveCLI`
+8. [x] T5.1 拆 `InteractiveCLI`
    - 原因：`main.py` 是最大耦合点，CLI、dashboard、handoff、env、UI 启动混在一起。
    - 交付：命令解析、resume context、workflow execution、one-shot command 分模块。
    - 验收：`main.py` 少于 300 行；现有交互命令和一次性命令行为不变。

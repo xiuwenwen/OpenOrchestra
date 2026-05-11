@@ -53,7 +53,19 @@ def test_user_env_logic_is_not_embedded_in_main_entrypoint() -> None:
 
 def test_cli_command_registry_is_not_embedded_in_main_entrypoint() -> None:
     text = Path("harness/main.py").read_text(encoding="utf-8")
+    command_registry = Path("harness/cli/commands.py").read_text(encoding="utf-8")
 
-    assert "from harness.cli.commands import" in text
+    assert "from harness.cli.interactive import InteractiveCLI" in text
     assert "COMMANDS = {" not in text
     assert "BARE_COMMAND_ALIASES =" not in text
+    assert "COMMANDS = {" in command_registry
+
+
+def test_interactive_cli_logic_is_not_embedded_in_main_entrypoint() -> None:
+    text = Path("harness/main.py").read_text(encoding="utf-8")
+
+    assert len(text.splitlines()) < 300
+    assert "class InteractiveCLI" not in text
+    assert "class HarnessCompleter" not in text
+    assert "def run_once" not in text
+    assert "def start_ui_server" not in text

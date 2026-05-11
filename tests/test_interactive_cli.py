@@ -4,6 +4,7 @@ import io
 import sys
 from pathlib import Path
 
+import harness.cli.interactive as interactive_module
 import harness.main as main_module
 from harness.delivery import handoff as handoff_module
 from harness.agents.result import ArtifactRef
@@ -99,8 +100,8 @@ def test_resume_context_does_not_pollute_project_workflow_classification(monkeyp
         captured["project_context_md"] = project_context_md or ""
         return 0
 
-    monkeypatch.setattr(main_module, "classify_workflow", fake_classify)
-    monkeypatch.setattr(main_module, "run_once", fake_run_once)
+    monkeypatch.setattr(interactive_module, "classify_workflow", fake_classify)
+    monkeypatch.setattr(interactive_module, "run_once", fake_run_once)
 
     cli._run_prompt("add an export button to this project")
 
@@ -132,9 +133,9 @@ def test_misc_prompt_uses_direct_chat_without_harness_task(monkeypatch, tmp_path
     def fail_run_once(*args, **kwargs) -> int:
         raise AssertionError("misc must not run Harness task flow")
 
-    monkeypatch.setattr(main_module, "classify_workflow", lambda prompt, backend, config=None: ("misc", None))
-    monkeypatch.setattr(main_module, "MiscChatRunner", FakeMiscChatRunner)
-    monkeypatch.setattr(main_module, "run_once", fail_run_once)
+    monkeypatch.setattr(interactive_module, "classify_workflow", lambda prompt, backend, config=None: ("misc", None))
+    monkeypatch.setattr(interactive_module, "MiscChatRunner", FakeMiscChatRunner)
+    monkeypatch.setattr(interactive_module, "run_once", fail_run_once)
 
     cli._run_prompt("how do I use this project?")
 
@@ -164,9 +165,9 @@ def test_active_context_question_skips_classifier_and_new_task(monkeypatch, tmp_
             captured["context"] = context
             return "context answer"
 
-    monkeypatch.setattr(main_module, "classify_workflow", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("classifier should not run for active-context question")))
-    monkeypatch.setattr(main_module, "MiscChatRunner", FakeMiscChatRunner)
-    monkeypatch.setattr(main_module, "run_once", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("question should not create task")))
+    monkeypatch.setattr(interactive_module, "classify_workflow", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("classifier should not run for active-context question")))
+    monkeypatch.setattr(interactive_module, "MiscChatRunner", FakeMiscChatRunner)
+    monkeypatch.setattr(interactive_module, "run_once", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("question should not create task")))
 
     cli._run_prompt("这个项目怎么启动？")
 
@@ -186,8 +187,8 @@ def test_misc_classifier_fallback_prints_raw_answer_only(monkeypatch, tmp_path: 
         def ask(self, prompt: str, context: str | None = None) -> str:
             raise AssertionError("fallback answer should avoid a second model call")
 
-    monkeypatch.setattr(main_module, "classify_workflow", lambda prompt, backend, config=None: ("misc", "raw answer"))
-    monkeypatch.setattr(main_module, "MiscChatRunner", FailMiscChatRunner)
+    monkeypatch.setattr(interactive_module, "classify_workflow", lambda prompt, backend, config=None: ("misc", "raw answer"))
+    monkeypatch.setattr(interactive_module, "MiscChatRunner", FailMiscChatRunner)
 
     cli._run_prompt("how do I use this project?")
 
@@ -479,7 +480,7 @@ def test_project_prompt_selects_new_task_for_followup_dashboard(monkeypatch, tmp
     historical_task_id = cli.orchestrator.create_task("Build a previous app")
     cli.active_task_id = historical_task_id
 
-    monkeypatch.setattr(main_module, "classify_workflow", lambda prompt, backend, config=None: ("new_project", None))
+    monkeypatch.setattr(interactive_module, "classify_workflow", lambda prompt, backend, config=None: ("new_project", None))
 
     def fake_run_once(orchestrator, prompt: str, workflow_type: str, project_context_md: str | None = None) -> int:
         task_id = orchestrator.create_task(prompt, workflow_type=workflow_type)
@@ -487,7 +488,7 @@ def test_project_prompt_selects_new_task_for_followup_dashboard(monkeypatch, tmp
         store(ProgressEvent("task_started", task_id=task_id, status="RUNNING"))
         return 0
 
-    monkeypatch.setattr(main_module, "run_once", fake_run_once)
+    monkeypatch.setattr(interactive_module, "run_once", fake_run_once)
 
     cli._run_prompt("Build the next app")
 
@@ -620,7 +621,7 @@ def test_backend_completion_includes_gemini_and_qwen(tmp_path: Path) -> None:
 
 def test_goal_command_sets_unlimited_fix_rounds(monkeypatch, tmp_path: Path, capsys) -> None:
     saved: dict[str, str] = {}
-    monkeypatch.setattr(main_module, "save_user_env_value", lambda key, value: saved.update({key: value}))
+    monkeypatch.setattr(interactive_module, "save_user_env_value", lambda key, value: saved.update({key: value}))
     cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
 
     cli._handle_command("/goal")
