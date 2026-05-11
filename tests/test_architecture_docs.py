@@ -49,3 +49,11 @@ def test_user_env_logic_is_not_embedded_in_main_entrypoint() -> None:
     assert "from harness.config.user_env import" in text
     assert "def load_user_env" not in text
     assert "ENV_CONFIG_SPECS: dict" not in text
+
+
+def test_cli_command_registry_is_not_embedded_in_main_entrypoint() -> None:
+    text = Path("harness/main.py").read_text(encoding="utf-8")
+
+    assert "from harness.cli.commands import" in text
+    assert "COMMANDS = {" not in text
+    assert "BARE_COMMAND_ALIASES =" not in text

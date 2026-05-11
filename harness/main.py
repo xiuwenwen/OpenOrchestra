@@ -36,6 +36,12 @@ except ModuleNotFoundError:
     class InMemoryHistory:
         pass
 
+from harness.cli.commands import (
+    bare_command_line,
+    command_description,
+    matching_commands,
+    resolve_command,
+)
 from harness.config.loader import load_config
 from harness.config.user_env import (
     ENV_CONFIG_SPECS,
@@ -73,51 +79,6 @@ from harness.ui.terminal_dashboard import (
 REAL_BACKENDS = ("codex", "claude", "gemini", "qwen")
 
 
-COMMANDS = {
-    "/backend": "Show current backend",
-    "/use": "Switch underlying agent backend",
-    "/history": "List recent tasks",
-    "/resume": "Use a historical task as context",
-    "/continue": "Continue/retry the active historical task",
-    "/clean": "Remove intermediate files for the selected task",
-    "/goal": "Run test/fix loops until fixed without asking at the round limit",
-    "/current": "Show selected historical context",
-    "/clear": "Clear selected historical context",
-    "/ui": "Start or show the local Web execution viewer",
-    "/help": "Show command help",
-    "/exit": "Quit",
-    "/quit": "Quit",
-}
-
-
-COMMAND_ALIASES = {
-    "/h": "/help",
-    "/?": "/help",
-    "/tasks": "/history",
-    "/select": "/resume",
-    "/task": "/resume",
-    "/switch": "/use",
-    "/retry": "/continue",
-    "/run": "/continue",
-}
-
-BARE_COMMAND_ALIASES = {
-    "help": "/help",
-    "history": "/history",
-    "tasks": "/history",
-    "resume": "/resume",
-    "select": "/resume",
-    "task": "/resume",
-    "continue": "/continue",
-    "retry": "/continue",
-    "run": "/continue",
-    "clean": "/clean",
-    "goal": "/goal",
-    "current": "/current",
-    "ui": "/ui",
-}
-
-BARE_COMMANDS_WITH_ARGS = {"history", "tasks", "resume", "select", "task"}
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="orchestra",
@@ -336,16 +297,7 @@ class InteractiveCLI:
         return 0
 
     def _bare_command_line(self, text: str) -> str | None:
-        parts = text.split()
-        if not parts or parts[0].startswith("/"):
-            return None
-        token = parts[0].lower()
-        command = BARE_COMMAND_ALIASES.get(token)
-        if not command:
-            return None
-        if len(parts) > 1 and token not in BARE_COMMANDS_WITH_ARGS:
-            return None
-        return " ".join([command, *parts[1:]])
+        return bare_command_line(text)
 
     def _read_line(self) -> str:
         if not PROMPT_TOOLKIT_AVAILABLE:
@@ -454,10 +406,7 @@ class InteractiveCLI:
         return []
 
     def _command_description(self, command: str) -> str:
-        canonical = COMMAND_ALIASES.get(command, command)
-        description = COMMANDS.get(canonical, "")
-        alias_note = f" -> {canonical}" if command != canonical else ""
-        return f"{alias_note} {description}".strip()
+        return command_description(command)
 
     def _format_history_meta(self, row: dict[str, Any]) -> str:
         prompt = truncate_display(" ".join(str(row["user_prompt"]).split()), 40)
@@ -521,10 +470,7 @@ class InteractiveCLI:
             if matches:
                 print("matching commands:")
                 for match in matches:
-                    canonical = COMMAND_ALIASES.get(match, match)
-                    description = COMMANDS.get(canonical, "")
-                    alias_note = f" -> {canonical}" if match != canonical else ""
-                    print(f"  {match}{alias_note:<12} {description}")
+                    print(f"  {match:<16} {self._command_description(match)}")
 
     def _select_task_for_command(self, selector: str) -> bool:
         task_id = self._resolve_task_selector(selector)
@@ -535,19 +481,10 @@ class InteractiveCLI:
         return True
 
     def _resolve_command(self, token: str) -> str:
-        if token in COMMAND_ALIASES:
-            return COMMAND_ALIASES[token]
-        if token in COMMANDS:
-            return token
-        matches = [COMMAND_ALIASES.get(match, match) for match in self._matching_commands(token)]
-        unique_matches = sorted(set(matches))
-        if len(unique_matches) == 1:
-            return unique_matches[0]
-        return token
+        return resolve_command(token)
 
     def _matching_commands(self, prefix: str) -> list[str]:
-        candidates = sorted([*COMMANDS.keys(), *COMMAND_ALIASES.keys()])
-        return [command for command in candidates if command.startswith(prefix)]
+        return matching_commands(prefix)
 
     def _print_help(self) -> None:
         print(
