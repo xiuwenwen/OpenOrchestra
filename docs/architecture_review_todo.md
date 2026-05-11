@@ -100,11 +100,11 @@
 - 风险：超时、日志、实时输出、命令安全、环境注入、未来 correlation id 行为不一致。
 - 目标：建立 `CommandRunner` port；Agent、test gate、patch gate、classifier、delivery review 都走同一执行抽象。
 
-### A9. 外部 Agent backend 缺少健康状态、退避和 circuit breaker
+### A9. 外部 Agent backend 已有基础健康状态和 circuit breaker
 
-- 证据：`AgentPhaseRunner` 有 retry，但 retry 是按单次 phase/agent run 处理；backend 级别没有健康状态、连续失败熔断、退避窗口或 provider 降级。
-- 风险：Claude/Codex/Gemini/Qwen provider 出现系统性故障时，Harness 会继续烧 retry 和 token。
-- 目标：为 backend adapter 增加 health state、failure budget、cooldown、retry classification、fallback backend 策略。
+- 证据：`harness/adapters/health.py` 已新增 `BackendHealthMonitor`，`AgentPhaseRunner` 在每次 agent attempt 前检查 backend state，并在 timeout/auth/runtime failure 后记录 degraded/open；UI snapshot 和前端摘要会展示 open/degraded backend。
+- 风险：当前熔断仍是进程内状态，尚未持久化到 state DB，也没有自动 fallback backend 策略。
+- 目标：后续如要长驻服务化运行，再把 backend health 写入状态表，并增加可配置 fallback backend。
 
 ### A10. 输入 artifact budget 是全局数值，不是 role/phase 策略
 
@@ -232,7 +232,7 @@
   - 验收：所有 subprocess 调用都走统一 runner；禁止 `shell=True`；命令列表形式强制校验。
   - 测试：新增架构测试，扫描 `subprocess.run/Popen` 只允许在 runner 内部出现。
 
-- [ ] T3.2 backend health 和 circuit breaker
+- [x] T3.2 backend health 和 circuit breaker
   - 范围：为每个 backend 维护连续失败、失败类型、cooldown、熔断状态。
   - 验收：provider 系统性失败时不继续无效重试；UI 显示 backend degraded/open。
   - 测试：模拟连续 REQUEST_SIZE、timeout、auth failure、non-retryable failure。
@@ -359,7 +359,7 @@
    - 交付：新增 `loop_type`、`parent_round_id`、`iteration_id` 或等价模型。
    - 验收：regression round 不再依赖 `1000` stride；旧 artifact 仍兼容读取。
 
-10. [ ] T3.2 backend health 和 circuit breaker
+10. [x] T3.2 backend health 和 circuit breaker
     - 原因：provider 系统性失败时，只靠单 run retry 会继续烧 token 和时间。
     - 交付：backend 健康状态、连续失败计数、cooldown、熔断、降级策略。
     - 验收：模拟 timeout/auth failure/context limit 时，backend 能进入 degraded/open 状态。

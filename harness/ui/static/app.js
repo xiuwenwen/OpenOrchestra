@@ -23,8 +23,8 @@ function short(s,n=60){s=String(s??"").replace(/\s+/g," ");return s.length>n?s.s
 function fmtBytes(b){if(b==null)return"";if(b<1024)return b+" B";if(b<1048576)return Math.round(b/1024)+" KB";return(b/1048576).toFixed(1)+" MB"}
 function statusLabel(st){
   const s=String(st||"PENDING");
-  const zh={OUTPUT_INVALID:"产物格式无效",FAILED:"执行失败",TIMEOUT:"超时",COMPLETED:"完成",RUNNING:"运行中",PENDING:"等待",CREATED:"已创建"};
-  const en={OUTPUT_INVALID:"Output Contract Invalid",FAILED:"Failed",TIMEOUT:"Timeout",COMPLETED:"Completed",RUNNING:"Running",PENDING:"Pending",CREATED:"Created"};
+  const zh={OUTPUT_INVALID:"产物格式无效",FAILED:"执行失败",TIMEOUT:"超时",COMPLETED:"完成",RUNNING:"运行中",PENDING:"等待",CREATED:"已创建",OPEN:"熔断",DEGRADED:"降级",HEALTHY:"健康"};
+  const en={OUTPUT_INVALID:"Output Contract Invalid",FAILED:"Failed",TIMEOUT:"Timeout",COMPLETED:"Completed",RUNNING:"Running",PENDING:"Pending",CREATED:"Created",OPEN:"Open",DEGRADED:"Degraded",HEALTHY:"Healthy"};
   return (uiLanguage==="en"?en[s]:zh[s])||s;
 }
 function statusHelp(st){
@@ -104,6 +104,7 @@ function selectTask(id){currentTask=id;lastEventId=0;selectedPhaseIdx=-1;selecte
 function renderSnapshot(data){
   const task=data.task;if(!task)return;
   const runs=data.agent_runs||[],running=runs.filter(r=>r.status==="RUNNING");
+  const backendHealth=backendHealthSummary(data.backend_health||{});
   document.getElementById("headerTask").textContent=short(task.user_prompt,50);
   // Summary bar
   document.getElementById("summary").innerHTML=`
@@ -117,12 +118,19 @@ function renderSnapshot(data){
     <div class="sum-sep"></div>
     <div class="sum-item"><span class="sum-label">${uiLanguage==="en"?"Active":"活跃"}</span><span class="sum-val">${running.length}</span></div>
     <div class="sum-sep"></div>
+    ${backendHealth}
     <button class="btn" style="margin-right:10px;padding:3px 8px;font-size:11px;flex-shrink:0" onclick="openConfig()">${uiLanguage==="en"?"Config":"配置"}</button>
     <div class="sum-prompt">${esc(task.user_prompt)}</div>`;
   renderPipeline(data.workflow_timeline||data.phases||[],task.current_phase,data.workflow_loop_edges||[]);
   renderRoleBar(data.roles||{},runs);
   renderDetail(data);
   renderLog(data.events||[]);
+}
+
+function backendHealthSummary(health){
+  const items=Object.values(health||{}).filter(h=>h&&h.state&&h.state!=="healthy");
+  if(!items.length)return "";
+  return items.map(h=>`<div class="sum-item" title="${esc(h.message||"")}"><span class="sum-label">${esc(h.backend)}</span>${pill(String(h.state||"").toUpperCase())}</div><div class="sum-sep"></div>`).join("");
 }
 
 function renderPipeline(phases,curPhase,loopEdges){
@@ -320,7 +328,7 @@ function renderFileText(){
 // Activity Log
 function toggleLog(){logOpen=!logOpen;document.getElementById("logBody").classList.toggle("open",logOpen)}
 function renderLog(events){
-  const flow=(events||[]).filter(e=>/^(task_|phase_|agent_|patch_|test_|delivery_|judge_)/.test(String(e.event_type||""))).slice(-60);
+  const flow=(events||[]).filter(e=>/^(task_|phase_|agent_|backend_|patch_|test_|delivery_|judge_)/.test(String(e.event_type||""))).slice(-60);
   document.getElementById("logBadge").textContent=String(flow.length);
   if(flow.length){const last=flow[flow.length-1];document.getElementById("logPreview").textContent=`${flowLabel(last.event_type)} · ${labelPhase(last.phase||"")} · ${last.role?roleLabel(last.role):""}`}
   document.getElementById("logBody").innerHTML=flow.slice().reverse().map(e=>{
@@ -337,8 +345,8 @@ function failureKind(e){
   return "";
 }
 function flowLabel(et){
-  const zh={task_created:"任务创建",task_started:"任务启动",task_completed:"任务完成",task_failed:"任务失败",phase_started:"阶段开始",phase_completed:"阶段完成",phase_skipped:"阶段跳过",agent_started:"Agent启动",agent_heartbeat:"Agent运行",agent_completed:"Agent完成",agent_failed:"Agent失败",agent_retryable_failure:"Agent重试",patch_validated:"补丁门禁",test_gate:"测试门禁",delivery_published:"交付发布",judge_decision:"裁决"};
-  const en={task_created:"Task Created",task_started:"Task Started",task_completed:"Task Done",task_failed:"Task Failed",phase_started:"Phase Start",phase_completed:"Phase Done",phase_skipped:"Phase Skip",agent_started:"Agent Start",agent_heartbeat:"Agent Run",agent_completed:"Agent Done",agent_failed:"Agent Fail",agent_retryable_failure:"Agent Retry",patch_validated:"Patch Gate",test_gate:"Test Gate",delivery_published:"Delivery",judge_decision:"Judge"};
+  const zh={task_created:"任务创建",task_started:"任务启动",task_completed:"任务完成",task_failed:"任务失败",phase_started:"阶段开始",phase_completed:"阶段完成",phase_skipped:"阶段跳过",agent_started:"Agent启动",agent_heartbeat:"Agent运行",agent_completed:"Agent完成",agent_failed:"Agent失败",agent_retryable_failure:"Agent重试",backend_health_changed:"后端健康",backend_circuit_open:"后端熔断",patch_validated:"补丁门禁",test_gate:"测试门禁",delivery_published:"交付发布",judge_decision:"裁决"};
+  const en={task_created:"Task Created",task_started:"Task Started",task_completed:"Task Done",task_failed:"Task Failed",phase_started:"Phase Start",phase_completed:"Phase Done",phase_skipped:"Phase Skip",agent_started:"Agent Start",agent_heartbeat:"Agent Run",agent_completed:"Agent Done",agent_failed:"Agent Fail",agent_retryable_failure:"Agent Retry",backend_health_changed:"Backend Health",backend_circuit_open:"Backend Open",patch_validated:"Patch Gate",test_gate:"Test Gate",delivery_published:"Delivery",judge_decision:"Judge"};
   return(uiLanguage==="en"?en[et]:zh[et])||et||"-";
 }
 

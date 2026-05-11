@@ -40,6 +40,8 @@
     .pill.COMPLETED{background:var(--good-soft);color:var(--good)}.pill.COMPLETED::before{background:var(--good)}
     .pill.FAILED,.pill.TIMEOUT{background:var(--bad-soft);color:var(--bad)}.pill.FAILED::before,.pill.TIMEOUT::before{background:var(--bad)}
     .pill.OUTPUT_INVALID{background:var(--warn-soft);color:var(--warn)}.pill.OUTPUT_INVALID::before{background:var(--warn)}
+    .pill.OPEN{background:var(--bad-soft);color:var(--bad)}.pill.OPEN::before{background:var(--bad)}
+    .pill.DEGRADED{background:var(--warn-soft);color:var(--warn)}.pill.DEGRADED::before{background:var(--warn)}
     .pill.PENDING,.pill.CREATED{background:var(--overlay);color:var(--muted)}.pill.PENDING::before,.pill.CREATED::before{background:var(--subtle)}
     .pill.INFO{background:var(--overlay);color:var(--muted)}.pill.INFO::before{display:none}
 

@@ -8,6 +8,7 @@ from typing import Any, Callable
 from harness.adapters.base import AgentAdapter
 from harness.adapters.claude_code_adapter import ClaudeCodeAdapter
 from harness.adapters.codex_cli_adapter import CodexCLIAdapter
+from harness.adapters.health import BackendHealthMonitor
 from harness.adapters.headless_cli_adapter import HeadlessCLIAdapter
 from harness.adapters.mock_adapter import MockAgentAdapter
 from harness.agents.result import AgentRunResult
@@ -79,6 +80,7 @@ class Orchestrator:
         self.validator = ArtifactValidator()
         self.communicator = Communicator(self.repository)
         self.judge = MockJudge()
+        self.backend_health = BackendHealthMonitor.from_config(self.config)
         self.prompt_builder = PromptBuilder()
         self.materialized_repo_service = MaterializedRepoService(
             self.repository,

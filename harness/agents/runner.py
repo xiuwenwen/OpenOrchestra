@@ -125,6 +125,7 @@ class AgentPhaseRunner:
             if o.config["policy"].get("same_role_can_run_concurrently", True) and agent_count > 1:
                 results = self.run_agents_concurrently(
                     adapter,
+                    backend,
                     task_id,
                     phase_id,
                     phase,
@@ -139,6 +140,7 @@ class AgentPhaseRunner:
                 results = [
                     self.run_agent_with_retry(
                         adapter,
+                        backend,
                         task_id,
                         phase_id,
                         phase,
@@ -274,6 +276,7 @@ class AgentPhaseRunner:
     def run_agents_concurrently(
         self,
         adapter: AgentAdapter,
+        backend: str,
         task_id: str,
         phase_id: str,
         phase: str,
@@ -295,6 +298,7 @@ class AgentPhaseRunner:
             executor.submit(
                 self.run_agent_with_retry,
                 adapter,
+                backend,
                 task_id,
                 phase_id,
                 phase,
@@ -326,6 +330,7 @@ class AgentPhaseRunner:
     def run_agent_with_retry(
         self,
         adapter: AgentAdapter,
+        backend: str,
         task_id: str,
         phase_id: str,
         phase: str,
@@ -344,6 +349,24 @@ class AgentPhaseRunner:
         for attempt in range(max_retry + 1):
             if cancel_event and cancel_event.is_set():
                 raise TaskFailedError(f"Agent {agent_id} cancelled because the phase timed out")
+            health = o.backend_health.check(backend)
+            if not health.allowed:
+                message = health.reason or f"Backend {backend} circuit is open"
+                o._emit(
+                    ProgressEvent(
+                        "backend_circuit_open",
+                        task_id=task_id,
+                        phase=phase,
+                        role=role,
+                        agent_id=agent_id,
+                        round_id=round_id,
+                        attempt=attempt,
+                        status="OPEN",
+                        message=message,
+                        data=self.backend_health_event_data(health),
+                    )
+                )
+                raise TaskFailedError(message)
             attempt_started_at = time.monotonic()
             run_id = o.repository.create_agent_run(task_id, phase_id, role, agent_id, attempt)
             workspace = o.workspace_manager.create_workspace(
@@ -446,6 +469,7 @@ class AgentPhaseRunner:
                         task_id, phase_id, role, agent_id, workspace.output_dir
                     )
                     o.repository.update_agent_run_status(run_id, "COMPLETED")
+                    self.record_backend_success(backend, context, attempt)
                     elapsed_seconds = round(time.monotonic() - attempt_started_at, 3)
                     o._emit(
                         ProgressEvent(
@@ -468,7 +492,11 @@ class AgentPhaseRunner:
                     )
                     return result
                 status = self.output_policy.invalid_output_status(validation_ok=ok, agent_status=result.status)
-                message = "; ".join(errors) if errors else f"Agent exit_code={result.exit_code} status={result.status}"
+                if result.exit_code != 0:
+                    suffix = f"; {'; '.join(errors)}" if errors else ""
+                    message = f"Agent exit_code={result.exit_code} status={result.status}{suffix}"
+                else:
+                    message = "; ".join(errors) if errors else f"Agent exit_code={result.exit_code} status={result.status}"
                 terminal_failure = self.is_request_size_failure(result, context, message)
                 if terminal_failure:
                     status = "FAILED"
@@ -499,6 +527,9 @@ class AgentPhaseRunner:
                         data=event_data,
                     )
                 )
+                health = self.record_backend_failure(backend, context, attempt, message, status=status)
+                if not health.allowed:
+                    raise NonRetryableAgentError(health.reason or message)
                 if terminal_failure:
                     raise NonRetryableAgentError(message)
                 last_result = result
@@ -534,6 +565,15 @@ class AgentPhaseRunner:
                         data=event_data,
                     )
                 )
+                health = self.record_backend_failure(
+                    backend,
+                    context,
+                    attempt,
+                    status_message,
+                    status=failure_status,
+                )
+                if not health.allowed:
+                    raise NonRetryableAgentError(health.reason or status_message) from exc
                 if terminal_failure:
                     raise NonRetryableAgentError(last_error_message) from exc
                 last_result = AgentRunResult(task_id, phase_id, role, agent_id, "FAILED", exit_code=1)
@@ -543,6 +583,66 @@ class AgentPhaseRunner:
             details = last_result.validation_errors or ([last_error_message] if last_error_message else [])
             raise TaskFailedError(f"Agent {agent_id} failed after {max_retry + 1} attempt(s): {details}")
         raise TaskFailedError(f"Agent {agent_id} failed before producing a result")
+
+    def record_backend_success(self, backend: str, context: AgentRunContext, attempt: int) -> None:
+        o = self.orchestrator
+        previous = o.backend_health.check(backend)
+        snapshot = o.backend_health.record_success(backend)
+        if previous.state == "healthy":
+            return
+        o._emit(
+            ProgressEvent(
+                "backend_health_changed",
+                task_id=context.task_id,
+                phase=context.phase,
+                role=context.role,
+                agent_id=context.agent_id,
+                round_id=context.round_id,
+                attempt=attempt,
+                status="HEALTHY",
+                message=f"backend {backend} recovered",
+                data=self.backend_health_event_data(snapshot),
+            )
+        )
+
+    def record_backend_failure(
+        self,
+        backend: str,
+        context: AgentRunContext,
+        attempt: int,
+        message: str,
+        *,
+        status: str | None = None,
+    ):
+        o = self.orchestrator
+        snapshot = o.backend_health.record_failure(backend, message, status=status)
+        if snapshot.failure_kind in {"request_size", "output_contract"}:
+            return snapshot
+        o._emit(
+            ProgressEvent(
+                "backend_health_changed",
+                task_id=context.task_id,
+                phase=context.phase,
+                role=context.role,
+                agent_id=context.agent_id,
+                round_id=context.round_id,
+                attempt=attempt,
+                status=snapshot.state.upper(),
+                message=snapshot.reason or f"backend {backend} health={snapshot.state}",
+                data=self.backend_health_event_data(snapshot),
+            )
+        )
+        return snapshot
+
+    def backend_health_event_data(self, snapshot) -> dict[str, Any]:
+        return {
+            "backend": snapshot.backend,
+            "backend_health_state": snapshot.state,
+            "backend_health_allowed": snapshot.allowed,
+            "backend_consecutive_failures": snapshot.consecutive_failures,
+            "backend_failure_kind": snapshot.failure_kind or "-",
+            "backend_open_until": snapshot.open_until,
+        }
 
     def _review_delivery_contract(
         self,

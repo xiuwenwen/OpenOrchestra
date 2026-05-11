@@ -136,6 +136,7 @@ class HarnessStateView:
 
         success_path = self._delivery_success_path(task)
         task_workspace = self._task_workspace_path(task_id)
+        events = self.event_store.events_for(task_id)
         return {
             "task": task,
             "phases": phases,
@@ -143,7 +144,8 @@ class HarnessStateView:
             "workflow_loop_edges": self._workflow_loop_edges(phases),
             "agent_runs": agent_runs,
             "artifacts": artifacts,
-            "events": self.event_store.events_for(task_id),
+            "events": events,
+            "backend_health": self._backend_health(events),
             "event_log": [dict(event) for event in reversed(self.repository.list_events(task_id, limit=200))],
             "roles": self._role_summary(agent_runs, phases),
             "role_rounds": self._role_rounds(agent_runs),
@@ -182,6 +184,25 @@ class HarnessStateView:
                 )
             last_seen[phase_type] = {"index": index, "round_id": phase.get("round_id")}
         return edges
+
+    def _backend_health(self, events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        health: dict[str, dict[str, Any]] = {}
+        for event in events:
+            if event.get("event_type") not in {"backend_health_changed", "backend_circuit_open"}:
+                continue
+            data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            backend = str(data.get("backend") or "")
+            if not backend:
+                continue
+            health[backend] = {
+                "backend": backend,
+                "state": data.get("backend_health_state") or str(event.get("status") or "").lower(),
+                "allowed": data.get("backend_health_allowed"),
+                "consecutive_failures": data.get("backend_consecutive_failures"),
+                "failure_kind": data.get("backend_failure_kind"),
+                "message": event.get("message"),
+            }
+        return health
 
     def read_file(self, path_text: str, max_chars: int = 200_000) -> dict[str, Any]:
         return self.file_reader.read_file(path_text, max_chars=max_chars)

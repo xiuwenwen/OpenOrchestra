@@ -122,6 +122,34 @@ def test_ui_snapshot_preserves_workflow_loops(tmp_path: Path) -> None:
     ]
 
 
+def test_ui_snapshot_exposes_backend_health_events(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    repo = StateRepository(StateDB(config["system"]["state_db"]))
+    store = UiEventStore()
+    task_id = repo.create_task("backend health", workflow_type="bugfix")
+    store(
+        ProgressEvent(
+            "backend_health_changed",
+            task_id=task_id,
+            status="OPEN",
+            message="backend claude circuit opened",
+            data={
+                "backend": "claude",
+                "backend_health_state": "open",
+                "backend_health_allowed": False,
+                "backend_consecutive_failures": 3,
+                "backend_failure_kind": "timeout",
+            },
+        )
+    )
+
+    snapshot = HarnessStateView(config, repo, store).snapshot(task_id)
+
+    assert snapshot["backend_health"]["claude"]["state"] == "open"
+    assert snapshot["backend_health"]["claude"]["allowed"] is False
+    assert snapshot["backend_health"]["claude"]["failure_kind"] == "timeout"
+
+
 def test_ui_file_reader_is_limited_to_harness_roots(tmp_path: Path) -> None:
     config = _config(tmp_path)
     repo = StateRepository(StateDB(config["system"]["state_db"]))
