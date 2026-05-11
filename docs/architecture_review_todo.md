@@ -142,11 +142,11 @@
 - 风险：新维护者会按旧文档理解流程，继续往已废弃 phase 上加功能。
 - 目标：文档由 workflow contract 或 Mermaid 生成脚本生成，至少在 CI 中检测关键 phase 是否和代码一致。
 
-### A16. 生成目录清理依赖人工命令和 `.gitignore`
+### A16. 生成目录清理已有 retention service
 
-- 证据：`.gitignore` 已忽略 `/workspaces/`、`/artifacts/`、`/deliver/`、`/state/`，但 runtime retention policy 仍在 todo。
-- 风险：长期交互运行会堆积大量 workspace/artifact/deliver/state 文件，占用磁盘；用户已经多次关注空间浪费。
-- 目标：配置化 retention policy，按 task 状态、时间、大小、是否 delivered 决定清理策略。
+- 证据：`harness/retention/service.py` 已集中处理 task 清理，支持 dry-run、保护运行中任务、保留 final delivery/response，只删除 workspace/artifact 中间目录；`/clean` 已改为调用该服务。
+- 风险：目前只覆盖按 task 清理，还没有按时间、大小、最近 N 次失败的自动保留策略。
+- 目标：继续扩展为批量 retention profile 和 diagnostics bundle。
 
 ### A17. 可观测性已有基础 trace/span
 
@@ -283,7 +283,7 @@
   - 验收：给定 task_id 可以完整追踪 agent prompt、stdout/stderr、gate command、artifact、delivery。
   - 测试：端到端 mock flow 中断言每类事件都有 trace 字段。
 
-- [ ] T6.2 retention policy
+- [x] T6.2 retention policy
   - 范围：按 `workspaces/`、`artifacts/`、`deliver/`、`state/events` 定义保留规则。
   - 验收：支持 dry-run、按 task 清理、保留成功交付、保留失败最近 N 次。
   - 测试：清理命令不会删除 current active task；不会删除 final delivery。
@@ -374,7 +374,7 @@
     - 交付：task/phase/run/command/artifact 全链路 trace/span。
     - 验收：一个 task_id 能追踪所有关键事件和文件。
 
-13. [ ] T6.2 retention policy
+13. [x] T6.2 retention policy
     - 原因：workspace/artifact/deliver/state 会持续增长，用户已经多次关注空间浪费。
     - 交付：dry-run、按 task/时间/大小/状态清理、保留成功交付。
     - 验收：不会删除 active task；不会删除 final delivery。

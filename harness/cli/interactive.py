@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import builtins
 import json
-import shutil
 import sys
 import threading
 from pathlib import Path
@@ -42,6 +41,7 @@ from harness.core.misc_chat import MiscChatRunner
 from harness.core.orchestrator import Orchestrator
 from harness.core.workflow_type import MISC, NEW_PROJECT
 from harness.delivery.handoff import format_delivery_handoff, format_total_elapsed
+from harness.retention.service import RetentionService, format_bytes
 from harness.ui.display import pad_display, truncate_display
 from harness.ui.launcher import start_ui_server
 from harness.ui.server import HarnessWebServer, UiEventStore
@@ -714,86 +714,30 @@ class InteractiveCLI:
         if not self.active_task_id:
             print("no active historical context. Use /resume first.")
             return
-        task = self.orchestrator.repository.get_task(self.active_task_id)
-        if not task:
-            print(f"active task no longer exists: {self.active_task_id}")
-            self.active_task_id = None
+        plan = RetentionService(
+            config=self.config,
+            repository=self.orchestrator.repository,
+            success_path_provider=self.orchestrator.delivery_success_path,
+        ).clean_task(self.active_task_id)
+        if not plan.deleted and plan.skipped and plan.skipped[0].reason.startswith("no final"):
+            print(f"{plan.skipped[0].reason}; refusing to clean intermediate files")
             return
-
-        success_path = self._success_path(self.active_task_id)
-        if not success_path or not success_path.exists():
-            print("no final success_path found; refusing to clean intermediate files")
+        if not plan.deleted and plan.skipped and plan.skipped[0].reason == "task is active":
+            print("task is active; refusing to clean intermediate files")
             return
-        final_delivery = success_path / "final_delivery.md"
-        response = self._latest_artifact_path(self.active_task_id, "response.md")
-        if not final_delivery.exists() and not response:
-            print("no final delivery or response found; refusing to clean intermediate files")
-            return
-
-        workspace_task_dir = Path(self.config["system"]["workspace_root"]).expanduser().resolve() / self.active_task_id
-        artifact_task_dir = Path(self.config["system"]["artifact_root"]).expanduser().resolve() / self.active_task_id
-        candidates = [workspace_task_dir, artifact_task_dir]
-        deleted: list[tuple[Path, int]] = []
-        skipped: list[tuple[Path, str]] = []
-
-        for path in candidates:
-            if not path.exists():
-                skipped.append((path, "not found"))
-                continue
-            if not self._is_safe_clean_target(path, self.active_task_id, success_path):
-                skipped.append((path, "unsafe target"))
-                continue
-            size = self._path_size(path)
-            shutil.rmtree(path)
-            deleted.append((path, size))
-
-        freed = sum(size for _, size in deleted)
         print(f"cleaned task: {self.active_task_id}")
-        print(f"success_path: {success_path}")
-        if final_delivery.exists():
-            print(f"final_delivery: {final_delivery}")
-        if deleted:
-            for path, size in deleted:
-                print(f"deleted: {path} ({self._format_bytes(size)})")
-            print(f"freed: {self._format_bytes(freed)}")
+        if plan.success_path:
+            print(f"success_path: {plan.success_path}")
+        if plan.final_delivery and plan.final_delivery.exists():
+            print(f"final_delivery: {plan.final_delivery}")
+        if plan.deleted:
+            for action in plan.deleted:
+                print(f"deleted: {action.path} ({format_bytes(action.size)})")
+            print(f"freed: {format_bytes(plan.freed_bytes)}")
         else:
             print("nothing deleted")
-        for path, reason in skipped:
-            print(f"skipped: {path} ({reason})")
-
-    def _is_safe_clean_target(self, path: Path, task_id: str, success_path: Path) -> bool:
-        resolved = path.resolve()
-        if resolved.name != task_id:
-            return False
-        success_resolved = success_path.resolve()
-        return not self._path_contains(resolved, success_resolved)
-
-    def _path_contains(self, parent: Path, child: Path) -> bool:
-        try:
-            child.relative_to(parent)
-            return True
-        except ValueError:
-            return False
-
-    def _path_size(self, path: Path) -> int:
-        if path.is_file():
-            return path.stat().st_size
-        total = 0
-        for item in path.rglob("*"):
-            if item.is_file():
-                try:
-                    total += item.stat().st_size
-                except OSError:
-                    continue
-        return total
-
-    def _format_bytes(self, size: int) -> str:
-        units = ("B", "KB", "MB", "GB")
-        value = float(size)
-        for unit in units:
-            if value < 1024 or unit == units[-1]:
-                return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
-            value /= 1024
+        for action in plan.skipped:
+            print(f"skipped: {action.path} ({action.reason})")
 
     def _task_result_summary(self, task_id: str) -> str:
         success_path = self._success_path(task_id)
