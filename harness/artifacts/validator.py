@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 
 from harness.artifacts.delivery_codes import DELIVERY_SUCCESS_RETURN_CODE, delivery_status_for_return_code
+from harness.artifacts.metadata import load_artifact_metadata, metadata_int_field
 from harness.artifacts.output_templates import output_has_pending_template_marker
 
 RETURN_CODE_FIELD_PATTERN = re.compile(r"^\s*[\-\*\s]*\**return_code\**\s*:\s*\**(-?\d+)\**\s*$")
@@ -40,6 +41,7 @@ class ArtifactValidator:
 
     def validate_required_outputs_result(self, output_dir: Path, required_outputs: list[str]) -> ValidationResult:
         issues: list[ValidationIssue] = []
+        metadata = load_artifact_metadata(output_dir)
         for relative_name in required_outputs:
             path = output_dir / relative_name
             if not path.exists():
@@ -64,7 +66,9 @@ class ArtifactValidator:
                 )
         delivery_path = output_dir / "delivery.md"
         if delivery_path.exists() and delivery_path.is_file():
-            return_code = self.parse_delivery_return_code(delivery_path)
+            return_code = metadata_int_field(metadata, "delivery.md", "return_code")
+            if return_code is None:
+                return_code = self.parse_delivery_return_code(delivery_path)
             if return_code is None:
                 issues.append(
                     ValidationIssue("delivery.md", "missing_return_code", "delivery.md must contain `return_code: <int>`")
@@ -83,7 +87,9 @@ class ArtifactValidator:
             path = output_dir / relative_name
             if not path.exists() or not path.is_file() or path.stat().st_size == 0:
                 continue
-            artifact_code = self.parse_markdown_artifact_result_code(path)
+            artifact_code = metadata_int_field(metadata, relative_name, "artifact_result_code")
+            if artifact_code is None:
+                artifact_code = self.parse_markdown_artifact_result_code(path)
             if artifact_code is None:
                 issues.append(
                     ValidationIssue(

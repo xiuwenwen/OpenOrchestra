@@ -82,11 +82,11 @@
 - 风险：大部分可见性和历史查询仍以 `round_id` 为排序键，虽然 regression stride 已移除，但后续如果要展示多层 loop，需要进一步让 UI 和 explain 工具展示结构字段。
 - 目标：保持 `round_id` 仅做兼容显示和路径字段，新的 loop 语义都写入结构字段。
 
-### A6. Artifact 合同仍依赖 Markdown 字段搜索
+### A6. Artifact 合同已有结构化 metadata，Markdown 字段作为 fallback
 
-- 证据：validator 支持在 Markdown 文件内搜索 `artifact_result_code`；delivery envelope 是 JSON，但业务报告仍是 Markdown + 字段。
-- 风险：人类可读和机器可读混在同一个文件，模型容易把业务失败码误写到合同码；后续字段扩展会继续靠正则。
-- 目标：每个交付文件旁边生成结构化 sidecar metadata，或统一交付 JSON envelope；Markdown 只负责人类说明，机器判定只读结构化文件。
+- 证据：`harness/artifacts/metadata.py` 定义 `.oo_artifact_metadata.json` sidecar；`ArtifactValidator` 优先读取结构化 metadata 中的 `return_code` / `artifact_result_code`，没有 sidecar 时才回退到 Markdown 字段搜索；`ArtifactManager` 收集产物时会在 artifact 存储旁写 sidecar，并跳过模型输出目录里的 sidecar 文件。
+- 风险：模型 prompt 仍要求 Markdown 内保留合同字段，主要为了历史兼容；后续可以逐步让模型只负责内容，让 Harness 生成 metadata。
+- 目标：继续收敛到“Markdown 只负责人类说明，机器判定只读结构化 metadata”。
 
 ### A7. Visibility table 已集中，已生成 matrix
 
@@ -203,7 +203,7 @@
   - 验收：tester、judge、reviewer、communicator 的 budget 可分别配置；默认行为与当前测试一致。
   - 测试：为 tester/judge/reviewer/communicator 各加一个 budget exact-match 测试。
 
-- [ ] T1.3 引入结构化 artifact metadata
+- [x] T1.3 引入结构化 artifact metadata
   - 范围：保留 Markdown 兼容，但每个 artifact collection 同时写入/登记 machine metadata。
   - 验收：validator 优先读 metadata；Markdown 字段搜索作为 legacy fallback。
   - 测试：同一 artifact 在 metadata 正确、Markdown 缺字段时仍通过；metadata 错误时拒绝。

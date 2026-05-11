@@ -8,10 +8,10 @@ These metrics are intentionally coarse. They give maintainers a stable baseline 
 
 | Metric | Value | Guardrail |
 | --- | ---: | ---: |
-| Production Python files | 101 | - |
-| Production total LOC | 13658 | 15000 |
-| Test Python files | 34 | - |
-| Test total LOC | 8177 | 10000 |
+| Production Python files | 102 | - |
+| Production total LOC | 13740 | 15000 |
+| Test Python files | 35 | - |
+| Test total LOC | 8240 | 10000 |
 | Largest production file | harness/core/orchestrator.py (1026) | 1200 |
 | Largest test file | tests/test_orchestrator_mock_flow.py (3116) | 3500 |
 | Longest function | harness/agents/runner.py:330 `AgentPhaseRunner.run_agent_with_retry` (257) | 300 |
