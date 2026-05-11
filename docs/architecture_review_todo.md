@@ -50,7 +50,7 @@
 
 ### A1. `main.py` 仍是超大入口模块
 
-- 证据：`harness/main.py` 仍超过 1200 行；delivery handoff 已抽到 `harness/delivery/handoff.py`，terminal dashboard 已抽到 `harness/ui/terminal_dashboard.py`，但 env 映射、CLI 命令解析、交互循环、UI 启动仍集中在入口。
+- 证据：`harness/main.py` 仍接近 1100 行；delivery handoff 已抽到 `harness/delivery/handoff.py`，terminal dashboard 已抽到 `harness/ui/terminal_dashboard.py`，用户 env/config 映射已抽到 `harness/config/user_env.py`，但 CLI 命令解析、交互循环、UI 启动仍集中在入口。
 - 风险：Task Intake、UI、Delivery Handoff、Dashboard 四个上下文被揉在一起，后续新增命令或 UI 行为时容易互相影响。
 - 目标：`main.py` 只保留 argparse、wire-up、process exit code；命令、dashboard、handoff、env config 各自独立。
 

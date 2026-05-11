@@ -41,3 +41,11 @@ def test_terminal_dashboard_logic_is_not_embedded_in_main_entrypoint() -> None:
     assert "from harness.ui.terminal_dashboard import" in text
     assert "class DashboardProgressReporter" not in text
     assert "class ConsoleProgressReporter" not in text
+
+
+def test_user_env_logic_is_not_embedded_in_main_entrypoint() -> None:
+    text = Path("harness/main.py").read_text(encoding="utf-8")
+
+    assert "from harness.config.user_env import" in text
+    assert "def load_user_env" not in text
+    assert "ENV_CONFIG_SPECS: dict" not in text
