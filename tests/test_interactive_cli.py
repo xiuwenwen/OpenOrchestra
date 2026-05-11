@@ -10,6 +10,8 @@ from harness.delivery import handoff as handoff_module
 from harness.agents.result import ArtifactRef
 from harness.core.progress import ProgressEvent
 from harness.main import ConsoleProgressReporter, InteractiveCLI
+from harness.state.db import StateDB
+from harness.state.repository import StateRepository
 
 
 class _TtyBuffer(io.StringIO):
@@ -682,6 +684,33 @@ def test_main_dispatches_one_shot_slash_command(monkeypatch, tmp_path: Path) -> 
 
     assert main_module.main() == 0
     assert calls == ["/resume 1"]
+
+
+def test_main_cooldown_backend_persists_and_exits_without_ui(monkeypatch, tmp_path: Path, capsys) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("unused: true\n", encoding="utf-8")
+
+    def fake_load_config(path):
+        assert str(path) == str(config_path)
+        return _config(tmp_path)
+
+    monkeypatch.setattr(main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(main_module, "load_user_env", lambda path=main_module.USER_ENV_PATH: {"OO_BACKEND": "codex"})
+    monkeypatch.setattr(main_module, "ensure_user_env_defaults", lambda config, values, path=main_module.USER_ENV_PATH: None)
+    monkeypatch.setattr(main_module, "resolve_real_backend", lambda requested: requested)
+    monkeypatch.setattr(main_module, "start_ui_server", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("ui should not start")))
+    monkeypatch.setattr(
+        main_module.sys,
+        "argv",
+        ["harness", "--config", str(config_path), "--cooldown-backend", "claude", "30"],
+    )
+
+    assert main_module.main() == 0
+
+    states = StateRepository(StateDB(tmp_path / "state" / "harness.db")).load_backend_health_states()
+    assert states["claude"]["state"] == "open"
+    assert states["claude"]["failure_kind"] == "manual_cooldown"
+    assert "cooldown active for 30s" in capsys.readouterr().out
 
 
 def test_resume_completion_items_include_task_information(tmp_path: Path) -> None:

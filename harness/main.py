@@ -78,6 +78,12 @@ def main() -> int:
     )
     parser.add_argument("--no-ui", dest="ui", action="store_false", help="Do not start the local Web execution viewer.")
     parser.add_argument("--ui-port", type=int, default=None, help="Port for the local Web execution viewer.")
+    parser.add_argument(
+        "--cooldown-backend",
+        nargs=2,
+        metavar=("BACKEND", "SECONDS"),
+        help="Manually open a backend circuit for SECONDS, for example: --cooldown-backend claude 30.",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -96,6 +102,20 @@ def main() -> int:
     ui_store = UiEventStore()
     progress_callback = ProgressMultiplexer([progress_reporter, ui_store])
     orchestrator = Orchestrator(config, progress_callback=progress_callback)
+    if args.cooldown_backend:
+        backend_name, seconds_text = args.cooldown_backend
+        try:
+            cooldown_seconds = float(seconds_text)
+        except ValueError:
+            print(f"[ERROR] cooldown seconds must be numeric, got {seconds_text!r}", file=sys.stderr)
+            return 2
+        snapshot = orchestrator.backend_health.cooldown_backend(backend_name, cooldown_seconds)
+        print(
+            f"[backend] {snapshot.backend} cooldown active for {int(max(0.0, cooldown_seconds))}s "
+            f"(open_until={snapshot.open_until})",
+            flush=True,
+        )
+        return 0
     ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port, args.config) if args.ui else None
     cli = InteractiveCLI(
         config,

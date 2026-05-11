@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 import re
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 
 AUTH_FAILURE_PATTERNS = (
@@ -55,16 +55,33 @@ class BackendHealthMonitor:
         enabled: bool = True,
         failure_threshold: int = 3,
         cooldown_seconds: float = 120.0,
-        time_provider: Callable[[], float] = time.monotonic,
+        time_provider: Callable[[], float] = time.time,
+        persisted_states: Mapping[str, Mapping[str, Any]] | None = None,
+        persist_callback: Callable[[BackendHealthSnapshot], None] | None = None,
     ):
         self.enabled = enabled
         self.failure_threshold = max(1, int(failure_threshold))
         self.cooldown_seconds = max(0.0, float(cooldown_seconds))
         self.time_provider = time_provider
+        self._persist_callback = persist_callback
         self._states: dict[str, _BackendHealthState] = {}
+        for backend, persisted in (persisted_states or {}).items():
+            self._states[backend] = _BackendHealthState(
+                state=str(persisted.get("state") or "healthy"),
+                consecutive_failures=int(persisted.get("consecutive_failures") or 0),
+                failure_kind=persisted.get("failure_kind"),
+                open_until=_optional_float(persisted.get("open_until")),
+                reason=persisted.get("reason"),
+            )
 
     @classmethod
-    def from_config(cls, config: dict[str, Any]) -> "BackendHealthMonitor":
+    def from_config(
+        cls,
+        config: dict[str, Any],
+        *,
+        persisted_states: Mapping[str, Mapping[str, Any]] | None = None,
+        persist_callback: Callable[[BackendHealthSnapshot], None] | None = None,
+    ) -> "BackendHealthMonitor":
         settings = config.get("backend_health", {})
         if not isinstance(settings, dict):
             settings = {}
@@ -72,6 +89,8 @@ class BackendHealthMonitor:
             enabled=bool(settings.get("enabled", True)),
             failure_threshold=int(settings.get("failure_threshold", 3)),
             cooldown_seconds=float(settings.get("cooldown_seconds", 120)),
+            persisted_states=persisted_states,
+            persist_callback=persist_callback,
         )
 
     def check(self, backend: str) -> BackendHealthSnapshot:
@@ -83,6 +102,7 @@ class BackendHealthMonitor:
             state.state = "degraded"
             state.open_until = None
             state.reason = "cooldown expired; allowing a probe attempt"
+            self._persist(backend, state, allowed=True)
         return self._snapshot(backend, state, allowed=state.state != "open")
 
     def record_success(self, backend: str) -> BackendHealthSnapshot:
@@ -92,6 +112,7 @@ class BackendHealthMonitor:
         state.failure_kind = None
         state.open_until = None
         state.reason = None
+        self._persist(backend, state, allowed=True)
         return self._snapshot(backend, state, allowed=True)
 
     def record_failure(self, backend: str, message: str, *, status: str | None = None) -> BackendHealthSnapshot:
@@ -109,7 +130,19 @@ class BackendHealthMonitor:
         else:
             state.state = "degraded"
             state.reason = f"backend {backend} degraded after {state.consecutive_failures} {kind} failure(s)"
+        self._persist(backend, state, allowed=state.state != "open", failure_kind=kind)
         return self._snapshot(backend, state, allowed=state.state != "open")
+
+    def cooldown_backend(self, backend: str, cooldown_seconds: float, *, reason: str | None = None) -> BackendHealthSnapshot:
+        state = self._state_for(backend)
+        state.state = "open"
+        state.open_until = self.time_provider() + max(0.0, float(cooldown_seconds))
+        state.reason = reason or f"backend {backend} manually cooled down for {int(max(0.0, float(cooldown_seconds)))}s"
+        if state.consecutive_failures < 1:
+            state.consecutive_failures = 1
+        state.failure_kind = state.failure_kind or "manual_cooldown"
+        self._persist(backend, state, allowed=False)
+        return self._snapshot(backend, state, allowed=False)
 
     def classify_failure(self, message: str, *, status: str | None = None) -> str:
         text = f"{status or ''}\n{message}".lower()
@@ -148,3 +181,24 @@ class BackendHealthMonitor:
             open_until=state.open_until,
             reason=state.reason,
         )
+
+    def _persist(
+        self,
+        backend: str,
+        state: _BackendHealthState,
+        *,
+        allowed: bool,
+        failure_kind: str | None = None,
+    ) -> None:
+        if self._persist_callback is None:
+            return
+        self._persist_callback(self._snapshot(backend, state, allowed=allowed, failure_kind=failure_kind))
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

@@ -86,6 +86,54 @@ def test_backend_health_auth_opens_immediately_and_contract_errors_do_not_poison
     assert not opened.allowed
 
 
+def test_backend_health_monitor_persists_open_state_across_instances() -> None:
+    now = [100.0]
+    persisted: dict[str, dict[str, object]] = {}
+
+    def save(snapshot) -> None:
+        persisted[snapshot.backend] = {
+            "state": snapshot.state,
+            "consecutive_failures": snapshot.consecutive_failures,
+            "failure_kind": snapshot.failure_kind,
+            "open_until": snapshot.open_until,
+            "reason": snapshot.reason,
+        }
+
+    monitor = BackendHealthMonitor(
+        failure_threshold=1,
+        cooldown_seconds=30,
+        time_provider=lambda: now[0],
+        persist_callback=save,
+    )
+    monitor.record_failure("claude", "Command timed out.", status="FAILED")
+
+    reloaded = BackendHealthMonitor(
+        failure_threshold=1,
+        cooldown_seconds=30,
+        time_provider=lambda: now[0],
+        persisted_states=persisted,
+        persist_callback=save,
+    )
+
+    assert not reloaded.check("claude").allowed
+
+    now[0] = 131.0
+    assert reloaded.check("claude").allowed
+    assert persisted["claude"]["state"] == "degraded"
+
+
+def test_backend_health_monitor_supports_manual_cooldown() -> None:
+    now = [10.0]
+    monitor = BackendHealthMonitor(time_provider=lambda: now[0])
+
+    snapshot = monitor.cooldown_backend("claude", 45)
+
+    assert snapshot.state == "open"
+    assert snapshot.failure_kind == "manual_cooldown"
+    assert snapshot.open_until == 55.0
+    assert not monitor.check("claude").allowed
+
+
 def test_agent_runner_stops_retries_when_backend_circuit_opens(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     events: list[ProgressEvent] = []

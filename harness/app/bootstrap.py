@@ -65,7 +65,11 @@ def build_orchestrator_services(
     validator = ArtifactValidator()
     communicator = Communicator(repository)
     judge = MockJudge()
-    backend_health = BackendHealthMonitor.from_config(config)
+    backend_health = BackendHealthMonitor.from_config(
+        config,
+        persisted_states=repository.load_backend_health_states(),
+        persist_callback=repository.save_backend_health_state,
+    )
     scheduler = BackendBulkheadScheduler.from_config(config)
     prompt_builder = PromptBuilder()
     materialized_repo_service = MaterializedRepoService(

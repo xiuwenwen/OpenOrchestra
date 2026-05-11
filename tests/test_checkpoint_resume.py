@@ -1,0 +1,267 @@
+from __future__ import annotations
+
+import json
+import sys
+import uuid
+import re
+from pathlib import Path
+from concurrent.futures import wait as real_wait
+
+import pytest
+
+from harness.agents import runner as agent_runner_module
+from harness.agents.result import AgentRunResult, ArtifactRef
+from harness.artifacts.schemas import required_outputs_for
+import harness.core.orchestrator as orchestrator_module
+from harness.core.orchestrator import Orchestrator
+from harness.core.progress import ProgressEvent
+from harness.core.state_machine import (
+    DELIVERY,
+    EXECUTION,
+    FAILED,
+    FINAL_JUDGEMENT,
+    FIXING,
+    PATCH_MERGE,
+    PLAN_REVIEW,
+    PLAN_JUDGEMENT,
+    PLANNING_DRAFT,
+    PLANNING_PEER_REVIEW,
+    PLANNING_REVISION,
+    REGRESSION_TESTING,
+    REVIEW_FIXING,
+    REVIEW_JUDGEMENT,
+    REVIEWING,
+    RUNNING,
+    TESTING,
+    TEST_JUDGEMENT,
+)
+from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
+from harness.patch.gate import materialized_repo_markdown, run_patch_gate
+
+
+from orchestrator_mock_support import _config
+
+
+def test_failed_phase_with_completed_agent_runs_is_recovered_on_resume(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("recover old concurrent planner phase")
+    phase_id = orchestrator.repository.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+    for agent_id in ("planner-1", "planner-2"):
+        run_id = orchestrator.repository.create_agent_run(task_id, phase_id, "planner", agent_id, 0)
+        output_dir = tmp_path / f"{agent_id}-output"
+        output_dir.mkdir()
+        for artifact_type in required_outputs_for("planner", "PLANNING_DRAFT"):
+            path = output_dir / artifact_type
+            content = (
+                "return_code: 0\n"
+                if artifact_type == "delivery.md"
+                else f"artifact_result_code: 0\n\n# {artifact_type}\n"
+            )
+            path.write_text(content, encoding="utf-8")
+            orchestrator.repository.create_artifact(
+                ArtifactRef(
+                    artifact_id=str(uuid.uuid4()),
+                    task_id=task_id,
+                    phase_id=phase_id,
+                    role="planner",
+                    agent_id=agent_id,
+                    artifact_type=artifact_type,
+                    path=path,
+                    version=1,
+                    hash="hash",
+                )
+            )
+        orchestrator.repository.update_agent_run_status(run_id, "COMPLETED")
+    orchestrator.repository.update_phase_status(phase_id, "FAILED")
+
+    results = orchestrator.run_role_phase(
+        "planner",
+        PLANNING_DRAFT,
+        0,
+        required_outputs_for("planner", PLANNING_DRAFT),
+        "recover old concurrent planner phase",
+    )
+
+    assert {result.agent_id for result in results} == {"planner-1", "planner-2"}
+    assert orchestrator.repository.list_phases(task_id)[0]["status"] == "COMPLETED"
+
+def test_failed_phase_is_not_recovered_when_required_artifacts_are_missing(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["roles"]["planner"]["count"] = 1
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("rerun incomplete old phase")
+    phase_id = orchestrator.repository.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+    run_id = orchestrator.repository.create_agent_run(task_id, phase_id, "planner", "planner-1", 0)
+    delivery = tmp_path / "delivery.md"
+    delivery.write_text("return_code: 0\n", encoding="utf-8")
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=phase_id,
+            role="planner",
+            agent_id="planner-1",
+            artifact_type="delivery.md",
+            path=delivery,
+            version=1,
+            hash="hash",
+        )
+    )
+    orchestrator.repository.update_agent_run_status(run_id, "COMPLETED")
+    orchestrator.repository.update_phase_status(phase_id, "FAILED")
+
+    orchestrator.run_role_phase(
+        "planner",
+        PLANNING_DRAFT,
+        0,
+        required_outputs_for("planner", PLANNING_DRAFT),
+        "rerun incomplete old phase",
+    )
+
+    phases = orchestrator.repository.list_phases(task_id)
+    assert len(phases) == 2
+    assert phases[-1]["status"] == "COMPLETED"
+
+def test_checkpoint_resume_prefers_latest_recoverable_phase(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["roles"]["planner"]["count"] = 1
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("prefer latest checkpoint")
+    old_phase_id = orchestrator.repository.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+    old_run_id = orchestrator.repository.create_agent_run(task_id, old_phase_id, "planner", "planner-1", 0)
+    old_output_dir = tmp_path / "old-output"
+    old_output_dir.mkdir()
+    old_delivery = old_output_dir / "delivery.md"
+    old_delivery.write_text("return_code: 0\n", encoding="utf-8")
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=old_phase_id,
+            role="planner",
+            agent_id="planner-1",
+            artifact_type="delivery.md",
+            path=old_delivery,
+            version=1,
+            hash="hash",
+        )
+    )
+    orchestrator.repository.update_agent_run_status(old_run_id, "COMPLETED")
+    orchestrator.repository.update_phase_status(old_phase_id, "FAILED")
+
+    latest_phase_id = orchestrator.repository.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+    latest_run_id = orchestrator.repository.create_agent_run(task_id, latest_phase_id, "planner", "planner-1", 0)
+    latest_output_dir = tmp_path / "latest-output"
+    latest_output_dir.mkdir()
+    for artifact_type in required_outputs_for("planner", PLANNING_DRAFT):
+        path = latest_output_dir / artifact_type
+        path.write_text(
+            "return_code: 0\n"
+            if artifact_type == "delivery.md"
+            else f"artifact_result_code: 0\n\n# {artifact_type}\n",
+            encoding="utf-8",
+        )
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id=latest_phase_id,
+                role="planner",
+                agent_id="planner-1",
+                artifact_type=artifact_type,
+                path=path,
+                version=2,
+                hash="hash",
+            )
+        )
+    orchestrator.repository.update_agent_run_status(latest_run_id, "COMPLETED")
+    orchestrator.repository.update_phase_status(latest_phase_id, "COMPLETED")
+
+    results = orchestrator.run_role_phase(
+        "planner",
+        PLANNING_DRAFT,
+        0,
+        required_outputs_for("planner", PLANNING_DRAFT),
+        "prefer latest checkpoint",
+    )
+
+    assert [result.phase_id for result in results] == [latest_phase_id]
+
+def test_checkpoint_resume_rejects_invalid_recovered_contract(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["roles"]["planner"]["count"] = 1
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("reject invalid checkpoint")
+    phase_id = orchestrator.repository.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+    run_id = orchestrator.repository.create_agent_run(task_id, phase_id, "planner", "planner-1", 0)
+    output_dir = tmp_path / "invalid-output"
+    output_dir.mkdir()
+    for artifact_type in required_outputs_for("planner", PLANNING_DRAFT):
+        path = output_dir / artifact_type
+        path.write_text(
+            "return_code: 0\n" if artifact_type == "delivery.md" else f"# {artifact_type}\n",
+            encoding="utf-8",
+        )
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id=phase_id,
+                role="planner",
+                agent_id="planner-1",
+                artifact_type=artifact_type,
+                path=path,
+                version=1,
+                hash="hash",
+            )
+        )
+    orchestrator.repository.update_agent_run_status(run_id, "COMPLETED")
+    orchestrator.repository.update_phase_status(phase_id, "COMPLETED")
+
+    results = orchestrator.run_role_phase(
+        "planner",
+        PLANNING_DRAFT,
+        0,
+        required_outputs_for("planner", PLANNING_DRAFT),
+        "rerun invalid checkpoint",
+    )
+
+    assert [result.phase_id for result in results] != [phase_id]
+
+def test_judge_checkpoint_resume_parses_existing_decision(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("resume judge")
+    orchestrator._active_task_id = task_id
+    try:
+        phase_id = orchestrator.repository.create_phase(task_id, PLAN_JUDGEMENT, "judge", 0)
+        run_id = orchestrator.repository.create_agent_run(task_id, phase_id, "judge", "judge-1", 0)
+        artifacts = {
+            "decision.json": '{"decision":"approved","changes_required":false}\n',
+            "decision_summary.md": "# Decision\napproved\n",
+            "delivery.md": "return_code: 0\n",
+        }
+        for artifact_type, content in artifacts.items():
+            path = tmp_path / artifact_type
+            path.write_text(content, encoding="utf-8")
+            orchestrator.repository.create_artifact(
+                ArtifactRef(
+                    artifact_id=str(uuid.uuid4()),
+                    task_id=task_id,
+                    phase_id=phase_id,
+                    role="judge",
+                    agent_id="judge-1",
+                    artifact_type=artifact_type,
+                    path=path,
+                    version=1,
+                    hash="hash",
+                )
+            )
+        orchestrator.repository.update_agent_run_status(run_id, "COMPLETED")
+        orchestrator.repository.update_phase_status(phase_id, "COMPLETED")
+
+        decision = orchestrator._run_judge_phase(task_id, PLAN_JUDGEMENT, 0, "resume judge")
+    finally:
+        orchestrator._active_task_id = None
+
+    assert decision["decision"] == "approved"

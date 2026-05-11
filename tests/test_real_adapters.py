@@ -9,6 +9,7 @@ from harness.adapters.claude_config import (
     DEFAULT_CONTEXT_WINDOW_TOKENS,
     DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE,
     MIN_DYNAMIC_MAX_OUTPUT_TOKENS,
+    TOKEN_ESTIMATE_SAFETY_MULTIPLIER,
     ClaudeContextBudgetError,
     claude_dynamic_max_output_tokens,
     estimate_prompt_tokens,
@@ -203,6 +204,16 @@ def test_dynamic_max_output_tokens_keeps_128k_requests_below_200k_context() -> N
 
     assert adjusted == DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - estimate_prompt_tokens(prompt)
     assert adjusted < 128_000
+
+
+def test_prompt_token_estimate_uses_conservative_mixed_language_multiplier() -> None:
+    prompt = "修复 bug and update README with 12345\n" * 100
+    cjk_estimate_without_safety = 200
+    ascii_bytes = len((" bug and update README with 12345\n" * 100).encode("utf-8"))
+    lower_bound = int((cjk_estimate_without_safety + ascii_bytes / 4) * TOKEN_ESTIMATE_SAFETY_MULTIPLIER)
+
+    assert estimate_prompt_tokens(prompt) >= lower_bound
+    assert TOKEN_ESTIMATE_SAFETY_MULTIPLIER >= 1.30
 
 
 def test_claude_dynamic_max_output_tokens_raises_when_prompt_exceeds_budget() -> None:

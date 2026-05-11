@@ -380,3 +380,55 @@ class StateRepository:
         with self.db.connect() as conn:
             rows = conn.execute(query, params).fetchall()
         return [EventRecord.from_row(row) for row in rows]
+
+    def load_backend_health_states(self) -> dict[str, dict[str, Any]]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT backend, state, consecutive_failures, failure_kind, open_until, reason
+                FROM backend_health
+                """
+            ).fetchall()
+        return {
+            str(row["backend"]): {
+                "state": row["state"],
+                "consecutive_failures": row["consecutive_failures"],
+                "failure_kind": row["failure_kind"],
+                "open_until": row["open_until"],
+                "reason": row["reason"],
+            }
+            for row in rows
+        }
+
+    def save_backend_health_state(self, snapshot: Any) -> None:
+        with self._lock, self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO backend_health(
+                    backend,
+                    state,
+                    consecutive_failures,
+                    failure_kind,
+                    open_until,
+                    reason,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(backend) DO UPDATE SET
+                    state = excluded.state,
+                    consecutive_failures = excluded.consecutive_failures,
+                    failure_kind = excluded.failure_kind,
+                    open_until = excluded.open_until,
+                    reason = excluded.reason,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    snapshot.backend,
+                    snapshot.state,
+                    snapshot.consecutive_failures,
+                    snapshot.failure_kind,
+                    snapshot.open_until,
+                    snapshot.reason,
+                    utc_now_iso(),
+                ),
+            )

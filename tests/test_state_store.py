@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from harness.agents.result import ArtifactRef
+from harness.adapters.health import BackendHealthSnapshot
 from harness.state.db import StateDB
 from harness.state.records import AgentRunRecord, ArtifactRecord, EventRecord, JudgeDecisionRecord, PhaseRecord, TaskRecord
 from harness.state.repository import StateRepository
@@ -342,3 +343,29 @@ def test_state_store_records_append_only_events(tmp_path: Path) -> None:
     assert events[0]["span_id"] == "phase:TESTING:round-1"
     assert events[0]["parent_span_id"] == f"task:{task_id}"
     assert events[0]["payload"] == '{"round_id": 1}'
+
+
+def test_state_store_persists_backend_health_state(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+
+    repo.save_backend_health_state(
+        BackendHealthSnapshot(
+            backend="claude",
+            state="open",
+            allowed=False,
+            consecutive_failures=2,
+            failure_kind="timeout",
+            open_until=123.5,
+            reason="cooling down",
+        )
+    )
+
+    states = repo.load_backend_health_states()
+
+    assert states["claude"] == {
+        "state": "open",
+        "consecutive_failures": 2,
+        "failure_kind": "timeout",
+        "open_until": 123.5,
+        "reason": "cooling down",
+    }

@@ -73,6 +73,16 @@ class StateDB:
             CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id);
             CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
             CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+            CREATE TABLE IF NOT EXISTS backend_health (
+                backend TEXT PRIMARY KEY,
+                state TEXT NOT NULL,
+                consecutive_failures INTEGER NOT NULL,
+                failure_kind TEXT,
+                open_until REAL,
+                reason TEXT,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_backend_health_state ON backend_health(state);
             CREATE INDEX IF NOT EXISTS idx_phases_task_loop ON phases(task_id, loop_type, parent_round_id, iteration_id);
             """
         )

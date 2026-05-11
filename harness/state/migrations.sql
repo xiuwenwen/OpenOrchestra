@@ -77,6 +77,16 @@ CREATE TABLE IF NOT EXISTS events (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS backend_health (
+    backend TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    consecutive_failures INTEGER NOT NULL,
+    failure_kind TEXT,
+    open_until REAL,
+    reason TEXT,
+    updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 CREATE INDEX IF NOT EXISTS idx_phases_task_id ON phases(task_id);
 CREATE INDEX IF NOT EXISTS idx_phases_task_round ON phases(task_id, round_id);
@@ -91,3 +101,4 @@ CREATE INDEX IF NOT EXISTS idx_judge_decisions_phase_id ON judge_decisions(phase
 CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+CREATE INDEX IF NOT EXISTS idx_backend_health_state ON backend_health(state);
