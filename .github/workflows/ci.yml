@@ -32,5 +32,8 @@ jobs:
       - name: Check generated visibility matrix
         run: python -m harness.contracts.visibility_matrix --check
 
+      - name: Report architecture metrics
+        run: python -m harness.architecture.metrics --check
+
       - name: Run tests
         run: python -m pytest

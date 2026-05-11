@@ -130,11 +130,11 @@
 - 风险：随着 UI 配置项增加，schema validation 和 error contract 容易散落；SSE 长连接、文件读取、配置更新缺少版本化 API。
 - 目标：保留轻量 server 也可以，但需要明确 `/api/v1/*` schema、request/response dataclass 或 pydantic-lite validation。
 
-### A14. 测试结构过于集中
+### A14. 测试结构过于集中，已有 metrics guardrail
 
-- 证据：`tests/test_orchestrator_mock_flow.py` 约 3103 行，覆盖 workflow、gates、visibility、delivery、resume、materialization 等多个上下文。
+- 证据：`docs/generated_architecture_metrics.md` 记录当前 baseline：生产 Python 约 1.33 万行，最大生产文件是 `harness/core/orchestrator.py`，最大测试文件是 `tests/test_orchestrator_mock_flow.py`；`tests/test_architecture_metrics.py` 用宽阈值防止继续膨胀。
 - 风险：新增行为时容易把测试继续塞进同一个文件，定位失败成本高，测试夹具重复。
-- 目标：按 bounded context 拆分：`test_workflow_engine_*`、`test_agent_runner_*`、`test_input_staging_*`、`test_delivery_publisher_*`、`test_materialization_service_*`。
+- 目标：继续按 bounded context 拆分：`test_workflow_engine_*`、`test_agent_runner_*`、`test_input_staging_*`、`test_delivery_publisher_*`、`test_materialization_service_*`。
 
 ### A15. 文档和当前流程存在漂移
 
@@ -186,7 +186,7 @@
   - 验收：生成文件进入 `docs/generated_visibility_matrix.md`；CI 检查生成内容未漂移。
   - 测试：新增 golden test 或 snapshot hash test。
 
-- [ ] T0.3 增加 architecture metrics check
+- [x] T0.3 增加 architecture metrics check
   - 范围：记录核心文件 LOC、最大函数长度、测试文件 LOC。
   - 验收：CI 只警告不失败；文档中列出当前 baseline。
   - 测试：新增 `tests/test_architecture_metrics.py`，先以宽阈值保护不继续恶化。
@@ -388,7 +388,7 @@
     - 交付：`docs/generated_visibility_matrix.md`。
     - 验收：CI 检查生成内容未漂移。
 
-15. [ ] T0.3 增加 architecture metrics check
+15. [x] T0.3 增加 architecture metrics check
     - 原因：大文件和大测试文件已经出现，需要防止继续恶化。
     - 交付：核心文件 LOC、最大函数长度、测试文件 LOC baseline。
     - 验收：先警告不失败，后续逐步收紧。
