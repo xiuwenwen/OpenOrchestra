@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Callable
 
 from harness.artifacts.manager import ArtifactManager
 from harness.core.progress import ProgressEvent
-from harness.core.state_machine import PATCH_MERGE
+from harness.core.state_machine import EXECUTION, FIXING, PATCH_MERGE, REVIEW_FIXING
 from harness.patch.gate import (
     PatchGatePolicy,
+    analyze_unified_diff,
     materialized_repo_markdown,
     objective_gate_markdown,
     patch_validation_markdown,
@@ -47,6 +49,142 @@ class PatchGateService:
         self.write_success_marker = write_success_marker
         self.emit = emit
         self.positive_int = positive_int
+
+    def try_deterministic_single_candidate_merge(self, task_id: str, round_id: int) -> bool:
+        candidates = self.current_round_candidate_patches(task_id, round_id)
+        if len(candidates) != 1:
+            return False
+        candidate = candidates[0]
+        candidate_path = Path(candidate["path"])
+        if not candidate_path.exists() or not candidate_path.is_file():
+            return False
+        phase_id = self.repository.create_phase(task_id, PATCH_MERGE, "executor", round_id)
+        run_id = self.repository.create_agent_run(task_id, phase_id, "executor", "deterministic-patch-merge", 0)
+        try:
+            patch_text = candidate_path.read_text(encoding="utf-8", errors="replace")
+            if patch_text and not patch_text.endswith("\n"):
+                patch_text += "\n"
+            metadata = self.deterministic_merge_metadata(candidate, candidate_path, patch_text, round_id)
+            report = self.deterministic_merge_report(candidate, candidate_path, round_id)
+            delivery = json.dumps(
+                {
+                    "return_code": 0,
+                    "status": "success",
+                    "summary": "Deterministically promoted the single current-round candidate patch.",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            self.artifact_manager.create_text_artifact(
+                task_id,
+                "merged_patch.diff",
+                patch_text,
+                phase_id=phase_id,
+                role="executor",
+                agent_id="deterministic-patch-merge",
+            )
+            self.artifact_manager.create_text_artifact(
+                task_id,
+                "merged_patch_metadata.md",
+                metadata,
+                phase_id=phase_id,
+                role="executor",
+                agent_id="deterministic-patch-merge",
+            )
+            self.artifact_manager.create_text_artifact(
+                task_id,
+                "merge_report.md",
+                report,
+                phase_id=phase_id,
+                role="executor",
+                agent_id="deterministic-patch-merge",
+            )
+            self.artifact_manager.create_text_artifact(
+                task_id,
+                "delivery.md",
+                delivery + "\n",
+                phase_id=phase_id,
+                role="executor",
+                agent_id="deterministic-patch-merge",
+            )
+            self.repository.update_agent_run_status(run_id, "COMPLETED")
+            self.repository.update_phase_status(phase_id, "COMPLETED")
+            self.emit(
+                ProgressEvent(
+                    "patch_merge_deterministic",
+                    task_id=task_id,
+                    phase=PATCH_MERGE,
+                    role="executor",
+                    agent_id="deterministic-patch-merge",
+                    round_id=round_id,
+                    status="COMPLETED",
+                    message="PATCH_MERGE skipped model call because exactly one current-round candidate patch exists",
+                    data={"candidate_patch": str(candidate_path), "artifact_type": candidate["artifact_type"]},
+                )
+            )
+        except Exception as exc:
+            self.repository.update_agent_run_status(run_id, "FAILED", str(exc))
+            self.repository.update_phase_status(phase_id, "FAILED")
+            raise
+        return True
+
+    def current_round_candidate_patches(self, task_id: str, round_id: int) -> list[dict[str, Any]]:
+        source_phase_ids = {
+            phase["phase_id"]
+            for phase in self.repository.list_phases(task_id)
+            if phase["phase_type"] in {EXECUTION, FIXING, REVIEW_FIXING} and phase["round_id"] == round_id
+        }
+        if not source_phase_ids:
+            return []
+        candidates: list[dict[str, Any]] = []
+        for artifact_type in ("patch.diff", "fix_patch.diff"):
+            for artifact in self.repository.list_artifacts(task_id, artifact_type):
+                if artifact.get("phase_id") in source_phase_ids and Path(artifact["path"]).is_file():
+                    candidates.append(artifact)
+        return candidates
+
+    def deterministic_merge_metadata(self, candidate: dict[str, Any], candidate_path: Path, patch_text: str, round_id: int) -> str:
+        stats = analyze_unified_diff(patch_text, self.policy())
+        changed_files = ", ".join(str(path) for path in stats.changed_files) or "none"
+        return "\n".join(
+            [
+                "artifact_result_code: 0",
+                "",
+                "# Merged Patch Metadata",
+                "",
+                "patch_artifact: merged_patch.diff",
+                f"selected_candidate_artifacts: {candidate['artifact_type']}",
+                f"selected_candidate_path: {candidate_path}",
+                f"base_round: {round_id}",
+                f"base_task_id: {candidate['task_id']}",
+                "base_source_type: current_round_candidate_patch",
+                "base_source_path: repository workspace for this PATCH_MERGE round",
+                "apply_target: repository_root",
+                "patch_scope: merged_authoritative",
+                f"changed_files: {changed_files}",
+                "expected_apply_command: git apply --whitespace=nowarn merged_patch.diff",
+                "compatibility_notes: Single candidate patch promoted without an LLM merge call; objective patch gate remains authoritative.",
+                "",
+            ]
+        )
+
+    def deterministic_merge_report(self, candidate: dict[str, Any], candidate_path: Path, round_id: int) -> str:
+        return "\n".join(
+            [
+                "artifact_result_code: 0",
+                "",
+                "# Merge Report",
+                "",
+                "merge_strategy: deterministic_single_candidate",
+                f"round_id: {round_id}",
+                f"selected_candidate_artifacts: {candidate['artifact_type']}",
+                f"selected_candidate_path: {candidate_path}",
+                "rejected_candidate_artifacts: none",
+                "conflict_handling: not_applicable_single_candidate",
+                "ready_for_testing: pending_objective_patch_gate",
+                "",
+            ]
+        )
 
     def run_validation(self, task_id: str, round_id: int) -> bool:
         latest = self.latest_merged_patch_for_round(task_id, round_id)

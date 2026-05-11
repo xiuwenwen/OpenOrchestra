@@ -13,6 +13,7 @@ from harness.agents.context import AgentRunContext
 from harness.agents.delivery_review import DeliveryContractReviewer
 from harness.agents.output_policy import AgentOutputPolicy
 from harness.agents.result import AgentRunResult, ArtifactRef
+from harness.artifacts.output_templates import seed_output_templates
 from harness.artifacts.validator import ValidationResult, delivery_issue_is_contract_only
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressEvent
@@ -241,12 +242,22 @@ class AgentPhaseRunner:
     def recovered_results_have_required_outputs(self, results: list[AgentRunResult], required_outputs: list[str]) -> bool:
         for result in results:
             artifacts_by_type = {artifact.artifact_type: artifact.path for artifact in result.artifacts}
+            output_dir: Path | None = None
             for output_name in required_outputs:
                 path = artifacts_by_type.get(output_name)
                 if not path or not path.exists() or not path.is_file() or path.stat().st_size == 0:
+                    result.validation_ok = False
+                    result.validation_errors = [f"Missing required output: {output_name}"]
                     return False
-            delivery_path = artifacts_by_type.get("delivery.md")
-            if delivery_path and self.orchestrator.validator.parse_delivery_status(delivery_path) != "success":
+                output_dir = output_dir or path.parent
+            if not output_dir:
+                result.validation_ok = False
+                result.validation_errors = ["Recovered phase has no output directory"]
+                return False
+            validation = self.orchestrator.validator.validate_required_outputs_result(output_dir, required_outputs)
+            result.validation_ok = validation.ok
+            result.validation_errors = validation.errors
+            if not validation.ok:
                 return False
         return bool(results)
 
@@ -367,6 +378,13 @@ class AgentPhaseRunner:
                 timeout_seconds=timeout_seconds,
                 config=o.config_service.config_for_task(task_id),
                 metadata=metadata,
+            )
+            seed_output_templates(
+                context.output_dir,
+                context.required_outputs,
+                role=context.role,
+                phase=context.phase,
+                agent_id=context.agent_id,
             )
             context.log_dir.mkdir(parents=True, exist_ok=True)
             (context.log_dir / "prompt.md").write_text(o.prompt_builder.build(context), encoding="utf-8")

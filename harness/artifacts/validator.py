@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 
 from harness.artifacts.delivery_codes import DELIVERY_SUCCESS_RETURN_CODE, delivery_status_for_return_code
+from harness.artifacts.output_templates import output_has_pending_template_marker
 
 RETURN_CODE_FIELD_PATTERN = re.compile(r"^\s*[\-\*\s]*\**return_code\**\s*:\s*\**(-?\d+)\**\s*$")
 ARTIFACT_RESULT_CODE_FIELD_PATTERN = re.compile(r"^\s*[\-\*\s]*\**artifact_result_code\**\s*:\s*\**(-?\d+)\**\s*$")
@@ -52,6 +53,14 @@ class ArtifactValidator:
             elif path.stat().st_size == 0:
                 issues.append(
                     ValidationIssue(relative_name, "required_output_empty", f"Required output is empty: {relative_name}")
+                )
+            elif output_has_pending_template_marker(path):
+                issues.append(
+                    ValidationIssue(
+                        relative_name,
+                        "template_not_completed",
+                        f"{relative_name} still contains Harness output template marker",
+                    )
                 )
         delivery_path = output_dir / "delivery.md"
         if delivery_path.exists() and delivery_path.is_file():
@@ -148,5 +157,5 @@ def delivery_issue_is_contract_only(result: ValidationResult) -> bool:
     errors = [issue for issue in result.issues if issue.severity == "error"]
     if not errors:
         return False
-    delivery_contract_codes = {"missing_return_code", "nonzero_return_code"}
+    delivery_contract_codes = {"missing_return_code", "nonzero_return_code", "template_not_completed"}
     return all(issue.artifact == "delivery.md" and issue.code in delivery_contract_codes for issue in errors)

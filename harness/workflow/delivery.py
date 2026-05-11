@@ -143,25 +143,23 @@ class DeliveryPublisher:
         )
 
     def publish_supporting_artifacts(self, task_id: str, project_dir: Path) -> list[tuple[str, Path]]:
-        artifact_types = [
-            "merged_patch.diff",
-            "merged_patch_metadata.md",
-            "patch_validation.md",
-            "materialized_repo.md",
-            "objective_gate.md",
-            "test_gate.md",
-            "merge_report.md",
-            "patch.diff",
-            "fix_patch.diff",
-            "implementation_plan.md",
-            "changed_files.md",
-            "self_check.md",
-            "fix_schedule.md",
-            "fix_notes.md",
-            "bug_report.md",
-            "review_report.md",
-            "decision_summary.md",
-        ]
+        delivery_config = self.orchestrator.config.get("delivery", {})
+        include_internal_artifacts = (
+            bool(delivery_config.get("include_internal_artifacts", False))
+            if isinstance(delivery_config, dict)
+            else False
+        )
+        artifact_types = (
+            [
+                "merged_patch_metadata.md",
+                "changed_files.md",
+                "self_check.md",
+                "fix_notes.md",
+                "review_report.md",
+            ]
+            if include_internal_artifacts
+            else []
+        )
         copied: list[tuple[str, Path]] = []
         artifact_dir = project_dir / "artifacts"
         patch_dir = project_dir / "patches"

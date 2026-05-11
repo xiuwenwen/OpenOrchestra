@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from harness.agents.result import AgentRunResult
+from harness.artifacts.output_templates import (
+    TEMPLATE_PENDING_VALUE,
+    output_has_pending_template_marker,
+    seed_output_templates,
+)
+from harness.artifacts.schemas import required_outputs_for
+from harness.artifacts.validator import ArtifactValidator, delivery_issue_is_contract_only
+from harness.core.orchestrator import Orchestrator
+from harness.core.state_machine import FIXING, PLANNING_DRAFT
+
+
+def _config(tmp_path: Path) -> dict:
+    return {
+        "system": {
+            "workspace_root": str(tmp_path / "workspaces"),
+            "artifact_root": str(tmp_path / "artifacts"),
+            "deliver_root": str(tmp_path / "deliver"),
+            "state_db": str(tmp_path / "state" / "harness.db"),
+        },
+        "agent_backend": {"default": "mock", "planner": "mock"},
+        "roles": {"planner": {"count": 1}},
+        "limits": {"max_agent_retry": 0},
+        "timeouts": {"planner": 5},
+        "policy": {"same_role_can_run_concurrently": True},
+    }
+
+
+def test_seed_output_templates_creates_non_diff_templates_only(tmp_path: Path) -> None:
+    required_outputs = required_outputs_for("executor", FIXING)
+
+    seeded = seed_output_templates(
+        tmp_path,
+        required_outputs,
+        role="executor",
+        phase=FIXING,
+        agent_id="executor-1",
+    )
+
+    seeded_names = {path.name for path in seeded}
+    assert "fix_schedule.md" in seeded_names
+    assert "fix_notes.md" in seeded_names
+    assert "self_check.md" in seeded_names
+    assert "delivery.md" in seeded_names
+    assert "fix_patch.diff" not in seeded_names
+    assert not (tmp_path / "fix_patch.diff").exists()
+    assert "artifact_result_code: 0" in (tmp_path / "fix_schedule.md").read_text(encoding="utf-8")
+    assert output_has_pending_template_marker(tmp_path / "fix_schedule.md")
+
+    delivery = json.loads((tmp_path / "delivery.md").read_text(encoding="utf-8"))
+    assert delivery["return_code"] == 0
+    assert delivery["harness_template_status"] == TEMPLATE_PENDING_VALUE
+
+
+def test_validator_rejects_uncompleted_output_templates(tmp_path: Path) -> None:
+    seed_output_templates(
+        tmp_path,
+        ["plan.md", "delivery.md"],
+        role="planner",
+        phase=PLANNING_DRAFT,
+        agent_id="planner-1",
+    )
+
+    result = ArtifactValidator().validate_required_outputs_result(tmp_path, ["plan.md", "delivery.md"])
+
+    assert not result.ok
+    assert result.errors == [
+        "plan.md still contains Harness output template marker",
+        "delivery.md still contains Harness output template marker",
+    ]
+
+
+def test_delivery_template_marker_is_delivery_contract_issue(tmp_path: Path) -> None:
+    seed_output_templates(
+        tmp_path,
+        ["delivery.md"],
+        role="planner",
+        phase=PLANNING_DRAFT,
+        agent_id="planner-1",
+    )
+
+    result = ArtifactValidator().validate_required_outputs_result(tmp_path, ["delivery.md"])
+
+    assert not result.ok
+    assert delivery_issue_is_contract_only(result)
+
+
+def test_json_template_pending_decision_remains_invalid_after_marker_key_removed(tmp_path: Path) -> None:
+    seed_output_templates(
+        tmp_path,
+        ["decision.json"],
+        role="judge",
+        phase="TEST_JUDGEMENT",
+        agent_id="judge-1",
+    )
+    decision_path = tmp_path / "decision.json"
+    payload = json.loads(decision_path.read_text(encoding="utf-8"))
+    payload.pop("harness_template_status")
+    decision_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = ArtifactValidator().validate_required_outputs_result(tmp_path, ["decision.json"])
+
+    assert not result.ok
+    assert result.errors == ["decision.json still contains Harness output template marker"]
+
+
+def test_runner_seeds_output_templates_before_adapter_invocation(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("plan with seeded templates")
+    required_outputs = required_outputs_for("planner", PLANNING_DRAFT)
+    observed: dict[str, bool] = {}
+
+    class TemplateAwareAdapter:
+        def run(self, context):
+            observed["plan_template_exists"] = (context.output_dir / "plan.md").exists()
+            observed["plan_template_pending"] = output_has_pending_template_marker(context.output_dir / "plan.md")
+            observed["delivery_template_exists"] = (context.output_dir / "delivery.md").exists()
+            for name in context.required_outputs:
+                path = context.output_dir / name
+                if name == "delivery.md":
+                    path.write_text(
+                        json.dumps(
+                            {
+                                "return_code": 0,
+                                "task_status": "success",
+                                "role_return_code": 0,
+                                "produced_files": context.required_outputs,
+                                "known_risks": [],
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                else:
+                    path.write_text(f"artifact_result_code: 0\n\n# {name}\n\nCompleted.\n", encoding="utf-8")
+            stdout = context.log_dir / "stdout.log"
+            stderr = context.log_dir / "stderr.log"
+            stdout.write_text("ok\n", encoding="utf-8")
+            stderr.write_text("", encoding="utf-8")
+            return AgentRunResult(
+                task_id=context.task_id,
+                phase_id=context.phase_id,
+                role=context.role,
+                agent_id=context.agent_id,
+                status="COMPLETED",
+                exit_code=0,
+                stdout_path=stdout,
+                stderr_path=stderr,
+            )
+
+    monkeypatch.setattr(orchestrator, "_adapter_for_backend", lambda backend: TemplateAwareAdapter())
+
+    orchestrator.run_role_phase("planner", PLANNING_DRAFT, 0, required_outputs, "plan with seeded templates")
+
+    assert observed == {
+        "plan_template_exists": True,
+        "plan_template_pending": True,
+        "delivery_template_exists": True,
+    }
+    artifacts = orchestrator.repository.list_artifacts(task_id, "plan.md")
+    assert artifacts

@@ -95,9 +95,6 @@ class ArtifactVisibilityPolicy:
             artifact_round = int(phase_row["round_id"]) if phase_row and phase_row.get("round_id") is not None else None
             artifact_phase = str(phase_row["phase_type"]) if phase_row else None
             effective_round = artifact_round if artifact_round is not None else self._artifact_declared_round_id(artifact)
-            if artifact_type == "project_context.md":
-                append_once(artifact)
-                continue
             for rule_index, rule in enumerate(rules):
                 if not self._artifact_matches_visibility_rule(
                     artifact,
@@ -113,7 +110,13 @@ class ArtifactVisibilityPolicy:
                 ):
                     continue
                 if rule.round_policy in {ROUND_LATEST_PER_TYPE, ROUND_LATEST_BEFORE_CURRENT_PER_TYPE}:
-                    latest_matches[(rule_index, artifact_type)] = artifact
+                    key = (rule_index, artifact_type)
+                    current = latest_matches.get(key)
+                    if current is None or self._artifact_order_key(
+                        artifact,
+                        phases_by_id,
+                    ) > self._artifact_order_key(current, phases_by_id):
+                        latest_matches[key] = artifact
                 else:
                     append_once(artifact)
                 break
@@ -134,6 +137,33 @@ class ArtifactVisibilityPolicy:
                 return True
         return False
 
+    def _artifact_order_key(
+        self,
+        artifact: dict[str, Any],
+        phases_by_id: dict[str, dict[str, Any]],
+    ) -> tuple[int, int, str, str]:
+        phase_row = phases_by_id.get(artifact.get("phase_id") or "")
+        round_value = -1
+        if phase_row and phase_row.get("round_id") is not None:
+            try:
+                round_value = int(phase_row["round_id"])
+            except (TypeError, ValueError):
+                round_value = -1
+        else:
+            declared_round = self._artifact_declared_round_id(artifact)
+            if declared_round is not None:
+                round_value = declared_round
+        try:
+            version = int(artifact.get("version") or 0)
+        except (TypeError, ValueError):
+            version = 0
+        return (
+            round_value,
+            version,
+            str(artifact.get("created_at") or ""),
+            str(artifact.get("artifact_id") or artifact.get("path") or ""),
+        )
+
     def _artifact_matches_visibility_rule(
         self,
         artifact: dict[str, Any],
@@ -149,7 +179,11 @@ class ArtifactVisibilityPolicy:
         latest_complete_judge_round: int | None,
     ) -> bool:
         artifact_type = artifact["artifact_type"]
-        if (artifact.get("role") or "") != rule.source_role:
+        artifact_role = artifact.get("role")
+        if rule.source_role == "context" and artifact_type == "project_context.md":
+            if artifact_role not in {None, "", "context"}:
+                return False
+        elif (artifact_role or "") != rule.source_role:
             return False
         if artifact_type not in rule.artifact_types:
             return False

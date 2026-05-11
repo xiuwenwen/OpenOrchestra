@@ -181,8 +181,10 @@ class MaterializedRepoService:
                 continue
             text = path.read_text(encoding="utf-8", errors="replace")
             if self.materialized_repo_status(text) != "success":
-                return None
-            return self.extract_materialized_report_round(text)
+                continue
+            round_id = self.extract_materialized_report_round(text)
+            if round_id is not None:
+                return round_id
         return None
 
     def materialized_repo_status(self, report: str) -> str:

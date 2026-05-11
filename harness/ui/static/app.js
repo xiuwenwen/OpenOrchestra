@@ -163,7 +163,7 @@ function renderPipeline(phases,curPhase,loopEdges){
 }
 
 function buildTimeline(phases,curPhase){
-  const wfOrder=["PLANNING_DRAFT","PLANNING_PEER_REVIEW","PLANNING_REVISION","PLAN_REVIEW","EXECUTION","PATCH_MERGE","TESTING","TEST_JUDGEMENT","FIXING","REVIEWING","REVIEW_JUDGEMENT","REVIEW_FIXING","REGRESSION_TESTING","FINAL_JUDGEMENT","DELIVERY"];
+  const wfOrder=["PLANNING_DRAFT","PLANNING_PEER_REVIEW","PLANNING_REVISION","PLAN_REVIEW","EXECUTION","PATCH_MERGE","TESTING","TEST_JUDGEMENT","FIXING","REVIEWING","REVIEW_FIXING","REGRESSION_TESTING","DELIVERY"];
   const existing=(phases||[]).map((p,i)=>({...p,phase_type:p.phase_type||p,timeline_index:p.timeline_index??i}));
   if(existing.length)return existing;
   const ci=wfOrder.indexOf(curPhase||"");

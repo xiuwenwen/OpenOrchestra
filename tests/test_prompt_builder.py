@@ -59,7 +59,7 @@ def test_prompt_builder_outputs_precise_english_contract(tmp_path: Path) -> None
     assert f"`patch.diff`: `{tmp_path / 'workspace' / 'output' / 'patch.diff'}`" in prompt
     assert "A similarly named file under any other path is invalid." in prompt
     assert "## Prohibited Actions" in prompt
-    assert "valid unified diff" in prompt
+    assert "valid git-style unified diff" in prompt
     assert "git add -N . && git diff --no-ext-diff" in prompt
     assert "Do not paste a large patch into a Write-tool payload" in prompt
     assert not re.search(r"[\u4e00-\u9fff]", prompt)
@@ -104,7 +104,7 @@ def test_prompt_builder_hides_generic_error_code_tables_from_tester(tmp_path: Pa
     assert "`artifact_result_code: 2`" not in prompt
 
 
-def test_prompt_builder_has_model_driven_patch_merge_contract(tmp_path: Path) -> None:
+def test_prompt_builder_has_patch_merge_contract(tmp_path: Path) -> None:
     context = AgentRunContext(
         task_id="task-1",
         phase_id="phase-1",
@@ -127,12 +127,13 @@ def test_prompt_builder_has_model_driven_patch_merge_contract(tmp_path: Path) ->
 
     prompt = PromptBuilder().build(context)
 
-    assert "model-driven PATCH_MERGE phase" in prompt
+    assert "PATCH_MERGE phase" in prompt
     assert "Do not concatenate blindly" in prompt
     assert "exactly one authoritative `merged_patch.diff`" in prompt
     assert "do not paste a large merged diff as a Write-tool payload" in prompt
     assert "`patch_metadata.md`" not in prompt
     assert "`merged_patch_metadata.md`" in prompt
+    assert "`diff --git` file headers" in prompt
     assert "Do not select a patch based only on filename" in prompt
     assert "Prior `merged_patch.diff` artifacts are historical evidence" in prompt
     assert "## Role Specialization" not in prompt

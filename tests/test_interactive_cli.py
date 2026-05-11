@@ -629,6 +629,59 @@ def test_goal_command_sets_unlimited_fix_rounds(monkeypatch, tmp_path: Path, cap
     assert "fix until fixed" in capsys.readouterr().out
 
 
+def test_command_line_for_text_accepts_one_shot_slash_command(tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+
+    assert cli.command_line_for_text("/resume 1") == "/resume 1"
+    assert cli.command_line_for_text("continue") == "/continue"
+    assert cli.command_line_for_text("continue fixing BGM") is None
+
+
+def test_one_shot_continue_accepts_task_selector(monkeypatch, tmp_path: Path) -> None:
+    cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    task_id = cli.orchestrator.create_task("Build a weather app")
+    calls: list[str | None] = []
+    monkeypatch.setattr(cli, "_continue_task", lambda: calls.append(cli.active_task_id))
+
+    assert cli.run_command_once(f"/continue {task_id}") == 0
+
+    assert calls == [task_id]
+
+
+def test_main_dispatches_one_shot_slash_command(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("unused: true\n", encoding="utf-8")
+    calls: list[str] = []
+
+    def fake_load_config(path):
+        assert str(path) == str(config_path)
+        return _config(tmp_path)
+
+    class FakeCLI:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def command_line_for_text(self, text: str) -> str | None:
+            return text if text.startswith("/") else None
+
+        def run_command_once(self, command_line: str) -> int:
+            calls.append(command_line)
+            return 0
+
+        def run(self):
+            raise AssertionError("one-shot command should not enter interactive mode")
+
+    monkeypatch.setattr(main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(main_module, "load_user_env", lambda path=main_module.USER_ENV_PATH: {"OO_BACKEND": "codex"})
+    monkeypatch.setattr(main_module, "ensure_user_env_defaults", lambda config, values, path=main_module.USER_ENV_PATH: None)
+    monkeypatch.setattr(main_module, "resolve_real_backend", lambda requested: requested)
+    monkeypatch.setattr(main_module, "InteractiveCLI", FakeCLI)
+    monkeypatch.setattr(main_module.sys, "argv", ["harness", "--config", str(config_path), "--no-ui", "/resume", "1"])
+
+    assert main_module.main() == 0
+    assert calls == ["/resume 1"]
+
+
 def test_resume_completion_items_include_task_information(tmp_path: Path) -> None:
     cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
     task_id = cli.orchestrator.create_task("Build a weather app with IP lookup")

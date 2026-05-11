@@ -502,7 +502,15 @@ def make_progress_reporter() -> ConsoleProgressReporter:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="orchestra", description="Run OpenOrchestra.")
+    parser = argparse.ArgumentParser(
+        prog="orchestra",
+        description="Run OpenOrchestra.",
+        epilog=(
+            "Slash commands also work as one-shot invocations, for example: "
+            "orchestra /history 10, orchestra /resume 1, orchestra /continue <task_id>, "
+            "orchestra /clean <task_id>, orchestra /goal."
+        ),
+    )
     parser.add_argument("prompt", nargs="*", help="User task prompt to run through the harness")
     parser.add_argument("--config", default="config/config.yaml", help="Path to config.yaml")
     parser.add_argument(
@@ -549,16 +557,7 @@ def main() -> int:
     progress_callback = ProgressMultiplexer([progress_reporter, ui_store])
     orchestrator = Orchestrator(config, progress_callback=progress_callback)
     ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port, args.config) if args.ui else None
-    prompt = " ".join(args.prompt).strip()
-    if prompt:
-        workflow_type, fallback_answer = (args.workflow, None) if args.workflow else classify_workflow(prompt, backend, config)
-        if workflow_type == MISC:
-            print(fallback_answer or MiscChatRunner(backend, config=config).ask(prompt))
-            return 0
-        if not args.workflow:
-            print(f"[classifier] workflow_type={workflow_type}", flush=True)
-        return run_once(orchestrator, prompt, workflow_type)
-    return InteractiveCLI(
+    cli = InteractiveCLI(
         config,
         backend,
         progress_callback=progress_callback,
@@ -567,7 +566,20 @@ def main() -> int:
         ui_server=ui_server,
         orchestrator=orchestrator,
         config_path=args.config,
-    ).run()
+    )
+    prompt = " ".join(args.prompt).strip()
+    if prompt:
+        command_line = cli.command_line_for_text(prompt)
+        if command_line:
+            return cli.run_command_once(command_line)
+        workflow_type, fallback_answer = (args.workflow, None) if args.workflow else classify_workflow(prompt, backend, config)
+        if workflow_type == MISC:
+            print(fallback_answer or MiscChatRunner(backend, config=config).ask(prompt))
+            return 0
+        if not args.workflow:
+            print(f"[classifier] workflow_type={workflow_type}", flush=True)
+        return run_once(orchestrator, prompt, workflow_type)
+    return cli.run()
 
 
 def start_ui_server(
@@ -1005,11 +1017,9 @@ class InteractiveCLI:
             if prompt.lower() in {"exit", "quit", "q", "/exit", "/quit"}:
                 return 0
             try:
-                command_line = self._bare_command_line(prompt)
+                command_line = self.command_line_for_text(prompt)
                 if command_line:
                     self._handle_command(command_line)
-                elif prompt.startswith("/"):
-                    self._handle_command(prompt)
                 else:
                     self._run_prompt(prompt)
             except Exception as exc:
@@ -1019,6 +1029,22 @@ class InteractiveCLI:
     def _prompt(self) -> str:
         context = f" task={self.active_task_id[:8]}" if self.active_task_id else ""
         return f"harness[{self.backend}{context}]> "
+
+    def command_line_for_text(self, text: str) -> str | None:
+        stripped = text.strip()
+        if not stripped:
+            return None
+        if stripped.startswith("/"):
+            return stripped
+        return self._bare_command_line(stripped)
+
+    def run_command_once(self, command_line: str) -> int:
+        try:
+            self._handle_command(command_line)
+        except Exception as exc:
+            print(f"task failed: {exc}", file=sys.stderr)
+            return 1
+        return 0
 
     def _bare_command_line(self, text: str) -> str | None:
         parts = text.split()
@@ -1162,6 +1188,8 @@ class InteractiveCLI:
         args = parts[1:]
         if command == "/help":
             self._print_help()
+        elif command in {"/exit", "/quit"}:
+            self._stop_input.set()
         elif command == "/backend":
             print(f"current backend: {self.backend}")
         elif command in {"/use", "/backend-use", "/switch"}:
@@ -1173,8 +1201,12 @@ class InteractiveCLI:
             limit = int(args[0]) if args and args[0].isdigit() else 20
             self._print_history(limit)
         elif command in {"/continue", "/retry", "/run"}:
+            if args and not self._select_task_for_command(args[0]):
+                return
             self._continue_task()
         elif command == "/clean":
+            if args and not self._select_task_for_command(args[0]):
+                return
             self._clean_task()
         elif command == "/goal":
             self._set_fix_until_goal()
@@ -1184,6 +1216,8 @@ class InteractiveCLI:
                 return
             self._resume_task(args[0])
         elif command == "/current":
+            if args and not self._select_task_for_command(args[0]):
+                return
             self._print_current()
         elif command == "/clear":
             self.active_task_id = None
@@ -1202,6 +1236,14 @@ class InteractiveCLI:
                     description = COMMANDS.get(canonical, "")
                     alias_note = f" -> {canonical}" if match != canonical else ""
                     print(f"  {match}{alias_note:<12} {description}")
+
+    def _select_task_for_command(self, selector: str) -> bool:
+        task_id = self._resolve_task_selector(selector)
+        if not task_id:
+            return False
+        self.active_task_id = task_id
+        self.ui_store.select_task(task_id)
+        return True
 
     def _resolve_command(self, token: str) -> str:
         if token in COMMAND_ALIASES:
@@ -1236,6 +1278,7 @@ class InteractiveCLI:
                     "  /help                    Show this help",
                     "  exit                     Quit",
                     "",
+                    "One-shot usage: `orchestra /resume 1`, `orchestra /continue <task_id>`, `orchestra /clean <task_id>`.",
                     "Any non-command change request starts a task. If /resume is active, ordinary questions use the historical task as chat context without creating a new workspace.",
                 ]
             )
@@ -1276,6 +1319,15 @@ class InteractiveCLI:
             )
 
     def _resume_task(self, selector: str) -> None:
+        task_id = self._resolve_task_selector(selector)
+        if not task_id:
+            return
+        self.active_task_id = task_id
+        self.ui_store.select_task(task_id)
+        print(f"resumed context: {task_id}")
+        self._print_current()
+
+    def _resolve_task_selector(self, selector: str) -> str | None:
         task_id = selector
         if selector.isdigit():
             if not self.history_rows:
@@ -1283,16 +1335,13 @@ class InteractiveCLI:
             index = int(selector)
             if index < 1 or index > len(self.history_rows):
                 print(f"history number out of range: {selector}")
-                return
+                return None
             task_id = self.history_rows[index - 1]["task_id"]
         task = self.orchestrator.repository.get_task(task_id)
         if not task:
             print(f"task not found: {task_id}")
-            return
-        self.active_task_id = task_id
-        self.ui_store.select_task(task_id)
-        print(f"resumed context: {task_id}")
-        self._print_current()
+            return None
+        return str(task_id)
 
     def _continue_task(self) -> None:
         if not self.active_task_id:

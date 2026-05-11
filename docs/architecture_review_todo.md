@@ -1,0 +1,433 @@
+# OpenOrchestra Architecture Review Todo
+
+日期：2026-05-11
+
+审视角度：以 bounded context、模块化单体、可靠性、可观测性、状态一致性、交付边界为标准审视当前工程。OpenOrchestra 当前本质是本地 Agent 编排器，不应过早拆成网络微服务；合理目标是先做成边界清晰的模块化单体，未来如有多用户、多机器 worker、远程队列、团队协作需求，再按 bounded context 抽服务。
+
+## 结论
+
+当前工程方向是合理的：它没有重新实现 Agent 的 File/Shell/Edit/Test 工具，而是聚焦在任务编排、状态、artifact、patch gate、test gate、judge 和交付。近期重构已经把 workflow、agent runner、artifact visibility、gate、materialization、delivery、UI 等边界拆出来，工程可测试性也明显提高。
+
+但它还不是优秀架构。主要问题是：核心边界仍靠 Orchestrator 兼容 facade 和大量字符串契约维持；prompt、artifact 合同、role/phase 可见性、状态机、round 语义、外部 CLI 调用、UI/CLI 入口仍存在交叉耦合；测试量很大但集中在少数巨型测试文件，长期维护成本高。
+
+## 当前 Bounded Context
+
+建议把当前模块化单体明确为以下上下文：
+
+1. Task Intake Context
+   - 负责 CLI、一次性命令、交互命令、workflow 分类、历史任务上下文。
+   - 当前主要文件：`harness/main.py`、`harness/core/workflow_classifier.py`、`harness/core/misc_chat.py`。
+
+2. Workflow Context
+   - 负责 new_project、bugfix、feature_change、misc 的 phase sequencing。
+   - 当前主要文件：`harness/workflow/engine.py`。
+
+3. Agent Runtime Context
+   - 负责 workspace、prompt、adapter 调用、retry、timeout、heartbeat、输出收集、输出校验。
+   - 当前主要文件：`harness/agents/runner.py`、`harness/adapters/*`。
+
+4. Artifact Contract Context
+   - 负责 required outputs、delivery envelope、artifact result code、role/phase visibility、input staging。
+   - 当前主要文件：`harness/artifacts/schemas.py`、`harness/artifacts/visibility.py`、`harness/artifacts/validator.py`、`harness/context/staging.py`。
+
+5. Gate And Materialization Context
+   - 负责 patch gate、test gate、materialized repo、repo source 选择。
+   - 当前主要文件：`harness/gates/*`、`harness/patch/gate.py`、`harness/materialization/service.py`。
+
+6. State And Event Context
+   - 负责 tasks、phases、agent_runs、artifacts、judge_decisions、events。
+   - 当前主要文件：`harness/state/*`。
+
+7. Delivery Context
+   - 负责 final_delivery、usage_guide、success_path、materialized source、dependency installer、交付 manifest。
+   - 当前主要文件：`harness/workflow/delivery.py`、`harness/communication/communicator.py`。
+
+8. UI Context
+   - 负责本地 HTTP UI、SSE、状态视图、文件读取安全、前端静态资源。
+   - 当前主要文件：`harness/ui/*`。
+
+## 不合理之处
+
+### A1. `main.py` 仍是超大入口模块
+
+- 证据：`harness/main.py` 约 1771 行，包含 env 映射、CLI 命令解析、dashboard、交互循环、handoff 推断、delivery 命令提取、UI 启动。
+- 风险：Task Intake、UI、Delivery Handoff、Dashboard 四个上下文被揉在一起，后续新增命令或 UI 行为时容易互相影响。
+- 目标：`main.py` 只保留 argparse、wire-up、process exit code；命令、dashboard、handoff、env config 各自独立。
+
+### A2. `Orchestrator` 仍是服务定位器和兼容层的混合体
+
+- 证据：`harness/core/orchestrator.py` 约 995 行，构造所有服务、保存 active task mutable state、暴露大量 `_run_*` 兼容方法，同时持有 `ROLE_INSTRUCTIONS`。
+- 风险：虽然业务逻辑已部分拆走，但模块依赖方向仍以 Orchestrator 为中心。新功能容易继续挂到 Orchestrator 上，导致边界回流。
+- 目标：Orchestrator 仅作为应用服务 facade；服务组合搬到 bootstrap/container；兼容 `_run_*` 方法逐步移除或仅测试层保留。
+
+### A3. Prompt 合同、角色指令、输出合同散落
+
+- 证据：
+  - `ROLE_INSTRUCTIONS` 在 `harness/core/orchestrator.py`。
+  - planner/tester specializations 在 `harness/prompts/builder.py`。
+  - output contract lines 在 `harness/artifacts/schemas.py`。
+  - prompt template 文件也存在 `harness/prompts/templates/`。
+- 风险：修改一个 role 的输出合同或任务分类提示词时，容易漏改另一个位置，导致 Agent prompt 与 validator 不一致。
+- 目标：建立 `RoleContractRegistry`，每个 workflow_type + role + phase 绑定 required_outputs、visibility、output contract、role instruction、specialization、validator hint。
+
+### A4. 状态机仍以字符串和宽松表驱动
+
+- 证据：`harness/state/repository.py` 的 `TASK_STATUSES` 包含所有 phase type，且仍保留 `FINAL_JUDGEMENT`、`PLAN_JUDGEMENT` 等历史状态；phase/agent/task 更新主要是字符串检查。
+- 风险：非法状态跳转不容易被阻止，历史状态和当前工作流混杂会继续污染 UI、文档和 visibility 规则。
+- 目标：显式 `TaskStateMachine`、`PhaseStateMachine`、`AgentRunStateMachine`，用 transition table 限制状态转换，并把 legacy phase 标为 deprecated。
+
+### A5. Round ID 语义过载
+
+- 证据：普通 test/fix round 使用连续整数；regression round 使用 `review_round_id * 1000 + test_round_id` 编码。
+- 风险：round_id 同时表达 workflow loop、review loop、regression loop，后续查询、UI 展示、artifact visibility、resume 都要理解编码约定。
+- 目标：数据库和 domain model 引入 `loop_type`、`parent_round_id`、`attempt_round_id` 或 `iteration_id`，保留旧 `round_id` 作为显示兼容字段。
+
+### A6. Artifact 合同仍依赖 Markdown 字段搜索
+
+- 证据：validator 支持在 Markdown 文件内搜索 `artifact_result_code`；delivery envelope 是 JSON，但业务报告仍是 Markdown + 字段。
+- 风险：人类可读和机器可读混在同一个文件，模型容易把业务失败码误写到合同码；后续字段扩展会继续靠正则。
+- 目标：每个交付文件旁边生成结构化 sidecar metadata，或统一交付 JSON envelope；Markdown 只负责人类说明，机器判定只读结构化文件。
+
+### A7. Visibility table 已集中，但缺少可解释性和生成物
+
+- 证据：`harness/artifacts/schemas.py` 有 `ARTIFACT_VISIBILITY_RULES`，`harness/artifacts/visibility.py` 解释规则；但没有生成的 role/phase visibility matrix 文档和 explain 工具。
+- 风险：用户反复看到“某 role 拿到太多 md”时，只能靠阅读代码判断规则，调试成本高。
+- 目标：增加 `orchestra visibility explain <task_id> <role> <phase> [round]` 或内部命令，输出每个 artifact 被允许/拒绝的规则原因。
+
+### A8. Test gate 绕过统一 subprocess runner
+
+- 证据：Agent adapter 走 `SubprocessRunner`，但 `harness/gates/test_gate.py` 直接使用 `subprocess.run`。
+- 风险：超时、日志、实时输出、命令安全、环境注入、未来 correlation id 行为不一致。
+- 目标：建立 `CommandRunner` port；Agent、test gate、patch gate、classifier、delivery review 都走同一执行抽象。
+
+### A9. 外部 Agent backend 缺少健康状态、退避和 circuit breaker
+
+- 证据：`AgentPhaseRunner` 有 retry，但 retry 是按单次 phase/agent run 处理；backend 级别没有健康状态、连续失败熔断、退避窗口或 provider 降级。
+- 风险：Claude/Codex/Gemini/Qwen provider 出现系统性故障时，Harness 会继续烧 retry 和 token。
+- 目标：为 backend adapter 增加 health state、failure budget、cooldown、retry classification、fallback backend 策略。
+
+### A10. 输入 artifact budget 是全局数值，不是 role/phase 策略
+
+- 证据：`artifact_input.max_files/max_file_bytes/max_total_bytes` 是全局配置；staging 里再按 artifact mode 做 path_only/truncate。
+- 风险：tester、judge、reviewer、communicator 对上下文需求完全不同，用全局 budget 容易要么过多要么过少。
+- 目标：将 budget 下沉到 `RolePhaseContract`，让每个 role/phase 有独立 max_files、max_bytes、large_artifact_mode、mandatory artifacts。
+
+### A11. DeliveryPublisher 仍反向依赖 Orchestrator
+
+- 证据：`harness/workflow/delivery.py` 直接持有 `orchestrator: Any`，调用 `o._latest_materialized_repo()`、`o._source_repo_for_existing_project_task()` 等兼容方法。
+- 风险：Delivery context 无法独立测试和替换，Orchestrator facade 被继续保留。
+- 目标：改为注入 `RepositoryPort`、`ArtifactPort`、`MaterializedRepoPort`、`SourceRepoPort`、`CommunicatorPort`。
+
+### A12. Patch gate 分层仍偏混合
+
+- 证据：`harness/gates/patch_gate.py` 是 service 层，但底层 `harness/patch/gate.py` 同时负责 diff 分析、git apply、materialized repo、命令执行。
+- 风险：策略规则、git 命令执行、文件系统 materialization 耦合，难以替换或独立审计。
+- 目标：拆成 `PatchAnalyzer`、`PatchPolicyEvaluator`、`GitApplyChecker`、`Materializer`、`PatchGateReportWriter`。
+
+### A13. UI API 仍是手写 HTTP handler，缺少稳定 API schema
+
+- 证据：`harness/ui/api.py` 使用 `BaseHTTPRequestHandler` 手写路由和 JSON schema。
+- 风险：随着 UI 配置项增加，schema validation 和 error contract 容易散落；SSE 长连接、文件读取、配置更新缺少版本化 API。
+- 目标：保留轻量 server 也可以，但需要明确 `/api/v1/*` schema、request/response dataclass 或 pydantic-lite validation。
+
+### A14. 测试结构过于集中
+
+- 证据：`tests/test_orchestrator_mock_flow.py` 约 3103 行，覆盖 workflow、gates、visibility、delivery、resume、materialization 等多个上下文。
+- 风险：新增行为时容易把测试继续塞进同一个文件，定位失败成本高，测试夹具重复。
+- 目标：按 bounded context 拆分：`test_workflow_engine_*`、`test_agent_runner_*`、`test_input_staging_*`、`test_delivery_publisher_*`、`test_materialization_service_*`。
+
+### A15. 文档和当前流程存在漂移
+
+- 证据：`system_architecture_and_flow.md` 的状态图仍包含 `REVIEW_JUDGEMENT`、`FINAL_JUDGEMENT` 路径，但当前 workflow 已在 review loop 中直接读取 reviewer verdict，不再进入最终 judge。
+- 风险：新维护者会按旧文档理解流程，继续往已废弃 phase 上加功能。
+- 目标：文档由 workflow contract 或 Mermaid 生成脚本生成，至少在 CI 中检测关键 phase 是否和代码一致。
+
+### A16. 生成目录清理依赖人工命令和 `.gitignore`
+
+- 证据：`.gitignore` 已忽略 `/workspaces/`、`/artifacts/`、`/deliver/`、`/state/`，但 runtime retention policy 仍在 todo。
+- 风险：长期交互运行会堆积大量 workspace/artifact/deliver/state 文件，占用磁盘；用户已经多次关注空间浪费。
+- 目标：配置化 retention policy，按 task 状态、时间、大小、是否 delivered 决定清理策略。
+
+### A17. 可观测性不够“端到端”
+
+- 证据：有 progress event 和 UI event store，但 agent subprocess、gate command、artifact decision、retry、budget truncation 没有统一 correlation id/span id。
+- 风险：一次任务跨 CLI、agent、gate、judge、delivery 的问题排查仍要人工串多个文件。
+- 目标：引入 `trace_id=task_id`、`span_id=phase/run/command`，所有日志、events、artifacts manifest 都记录 correlation。
+
+### A18. 配置层缺少统一 schema 和版本迁移
+
+- 证据：`config/config.yaml`、env specs、UI runtime payload、task configuration JSON 分散定义；legacy env alias 也在 CLI 入口。
+- 风险：新增配置项容易漏掉 env、UI、task override、README 四处之一。
+- 目标：建立 `ConfigSchema`，统一 defaults、env mapping、UI-editable metadata、task override validation、doc generation。
+
+### A19. 多 agent 并发模型缺少资源隔离策略
+
+- 证据：同 role 可以并发运行；phase timeout 是 `(max_retry + 1) * (timeout + grace)`；但没有全局 worker pool、backend concurrency limit、per-backend token budget。
+- 风险：planner/executor 并发数被调大时，可能同时压垮本地 CPU、磁盘或同一 provider。
+- 目标：引入 `Scheduler` 级别的 backend bulkhead：每 backend 最大并发、每 role 最大并发、全局排队、取消传播。
+
+### A20. 领域模型仍以 dict 穿透
+
+- 证据：repository 返回 `dict[str, Any]`；workflow、visibility、delivery、UI 都直接读取 `"phase_id"`、`"round_id"`、`"artifact_type"`。
+- 风险：字段拼写、缺省值、类型转换散落，重构时没有编译期保护。
+- 目标：逐步引入 `TaskRecord`、`PhaseRecord`、`AgentRunRecord`、`ArtifactRecord` dataclass，并让 repository 边界负责转换。
+
+## 分阶段 Todo
+
+### Phase 0：冻结现有行为和文档真实度
+
+- [ ] T0.1 更新 `system_architecture_and_flow.md`
+  - 范围：删除已废弃的 `FINAL_JUDGEMENT` 主流程，标明 `REVIEW_JUDGEMENT` 仅为 legacy/compat 或彻底移除。
+  - 验收：文档里的 phase 顺序与 `WorkflowEngine` 一致；README 的 workflow 描述同步。
+  - 测试：新增文档一致性测试，至少断言当前主流程 phase 名称不出现废弃路径。
+
+- [ ] T0.2 生成当前 role/phase visibility matrix
+  - 范围：从 `RolePhaseContract` 自动生成 Markdown 表，列出 target role、phase、source role、artifact types、round policy。
+  - 验收：生成文件进入 `docs/generated_visibility_matrix.md`；CI 检查生成内容未漂移。
+  - 测试：新增 golden test 或 snapshot hash test。
+
+- [ ] T0.3 增加 architecture metrics check
+  - 范围：记录核心文件 LOC、最大函数长度、测试文件 LOC。
+  - 验收：CI 只警告不失败；文档中列出当前 baseline。
+  - 测试：新增 `tests/test_architecture_metrics.py`，先以宽阈值保护不继续恶化。
+
+### Phase 1：合同集中化
+
+- [ ] T1.1 建立 `harness/contracts/role_contracts.py`
+  - 范围：迁移 role instruction、required outputs、visibility rules、output contract lines、prompt specialization selector。
+  - 验收：`core/orchestrator.py` 不再定义 `ROLE_INSTRUCTIONS`；`prompts/builder.py` 从 contract registry 读取 specializations。
+  - 测试：迁移并扩展 `tests/test_artifact_schemas.py`，覆盖每个 workflow_type + role + phase。
+
+- [ ] T1.2 增加 role/phase artifact budget
+  - 范围：在 contract 中定义 `input_budget`，替代 staging 中的全局唯一 budget。
+  - 验收：tester、judge、reviewer、communicator 的 budget 可分别配置；默认行为与当前测试一致。
+  - 测试：为 tester/judge/reviewer/communicator 各加一个 budget exact-match 测试。
+
+- [ ] T1.3 引入结构化 artifact metadata
+  - 范围：保留 Markdown 兼容，但每个 artifact collection 同时写入/登记 machine metadata。
+  - 验收：validator 优先读 metadata；Markdown 字段搜索作为 legacy fallback。
+  - 测试：同一 artifact 在 metadata 正确、Markdown 缺字段时仍通过；metadata 错误时拒绝。
+
+### Phase 2：状态和 round 模型硬化
+
+- [ ] T2.1 引入 typed records
+  - 范围：`TaskRecord`、`PhaseRecord`、`AgentRunRecord`、`ArtifactRecord`。
+  - 验收：workflow、visibility、delivery 不再直接依赖裸 dict；UI adapter 可在边界转换成 JSON。
+  - 测试：repository contract tests 覆盖类型转换和缺省值。
+
+- [ ] T2.2 建立状态机 transition table
+  - 范围：task/phase/agent run 的合法状态转换。
+  - 验收：非法转换抛出明确异常；legacy resume 恢复路径有显式例外。
+  - 测试：覆盖成功、失败、checkpoint recovery、timeout、OUTPUT_INVALID。
+
+- [ ] T2.3 解开 round_id 编码
+  - 范围：新增 `loop_type`、`parent_round_id`、`iteration_id` 字段；保留 `round_id` 显示兼容。
+  - 验收：regression round 不再依赖 `1000` stride；visibility 查询用结构字段。
+  - 测试：迁移现有 regression round tests，保留旧 artifact 兼容测试。
+
+### Phase 3：执行与可靠性边界
+
+- [ ] T3.1 统一 command execution port
+  - 范围：`SubprocessRunner` 扩展为 `CommandRunner`，覆盖 adapter、test gate、patch gate、classifier、delivery review。
+  - 验收：所有 subprocess 调用都走统一 runner；禁止 `shell=True`；命令列表形式强制校验。
+  - 测试：新增架构测试，扫描 `subprocess.run/Popen` 只允许在 runner 内部出现。
+
+- [ ] T3.2 backend health 和 circuit breaker
+  - 范围：为每个 backend 维护连续失败、失败类型、cooldown、熔断状态。
+  - 验收：provider 系统性失败时不继续无效重试；UI 显示 backend degraded/open。
+  - 测试：模拟连续 REQUEST_SIZE、timeout、auth failure、non-retryable failure。
+
+- [ ] T3.3 Scheduler bulkhead
+  - 范围：按 backend/role 全局限制并发，支持排队和取消。
+  - 验收：配置 `backend_concurrency.claude=1` 时同一时刻只有一个 Claude run。
+  - 测试：并发 phase 测试验证排队、超时、取消传播。
+
+### Phase 4：Orchestrator 和 Delivery 解耦
+
+- [ ] T4.1 拆 application bootstrap
+  - 范围：新增 `harness/app/bootstrap.py`，负责服务构造和依赖注入。
+  - 验收：`Orchestrator.__init__` 不再手动 new 所有服务；测试可以单独构造 bounded context。
+  - 测试：bootstrap wiring smoke test。
+
+- [ ] T4.2 DeliveryPublisher 改为 ports 注入
+  - 范围：移除 `orchestrator: Any`，注入 repository、communicator、materialized repo、source repo、artifact writer。
+  - 验收：`DeliveryPublisher` 不调用任何 `o._*` 方法。
+  - 测试：独立 delivery publisher tests，不依赖完整 Orchestrator。
+
+- [ ] T4.3 移除 Orchestrator legacy helper 依赖
+  - 范围：统计 `_run_*`、`_latest_*`、`_stage_*` 兼容方法调用点，迁移到 service port。
+  - 验收：生产代码不再调用 Orchestrator 私有 helper；测试只通过公开 service API 或专用 fixture。
+  - 测试：扩展 `test_workflow_engine_contract.py` 的架构扫描。
+
+### Phase 5：CLI/UI 拆分
+
+- [ ] T5.1 拆 `InteractiveCLI`
+  - 范围：命令解析、history/resume/continue、workflow classification、task execution 分文件。
+  - 验收：`main.py` 少于 300 行；原交互命令和一次性命令不变。
+  - 测试：现有 `tests/test_interactive_cli.py` 拆成 command parser、resume context、one-shot command 三组。
+
+- [ ] T5.2 拆 Dashboard
+  - 范围：`DashboardProgressReporter` 移入 `harness/ui/terminal_dashboard.py`。
+  - 验收：dashboard 渲染、event line、状态更新可独立单测。
+  - 测试：宽字符、截断、向上滚动、非 TTY fallback。
+
+- [ ] T5.3 Handoff 推断独立化
+  - 范围：delivery run command、dependency install、source path 判断移入 `harness/delivery/handoff.py`。
+  - 验收：CLI 只调用 handoff service 并打印结果。
+  - 测试：Python/Node/partial materialized source/usage guide 命令提取。
+
+### Phase 6：可观测性和清理策略
+
+- [ ] T6.1 correlation id/span id
+  - 范围：task event、phase event、agent run、command run、artifact manifest 统一记录 trace/span。
+  - 验收：给定 task_id 可以完整追踪 agent prompt、stdout/stderr、gate command、artifact、delivery。
+  - 测试：端到端 mock flow 中断言每类事件都有 trace 字段。
+
+- [ ] T6.2 retention policy
+  - 范围：按 `workspaces/`、`artifacts/`、`deliver/`、`state/events` 定义保留规则。
+  - 验收：支持 dry-run、按 task 清理、保留成功交付、保留失败最近 N 次。
+  - 测试：清理命令不会删除 current active task；不会删除 final delivery。
+
+- [ ] T6.3 operational diagnostics bundle
+  - 范围：失败任务一键导出 prompt、manifest、stdout/stderr、gate reports、decision、event timeline。
+  - 验收：`orchestra diagnose <task_id>` 生成 zip 或目录，隐私字段可脱敏。
+  - 测试：mock failure 生成完整 bundle。
+
+## 不建议现在做的事
+
+- 不建议立即拆成真正微服务。当前没有多团队、独立部署、远程 worker 池、不同扩缩容需求；拆服务会制造 distributed monolith。
+- 不建议把 Markdown 报告一次性全部改成 JSON。更合理路径是先添加结构化 metadata，保持用户可读 Markdown 和历史兼容。
+- 不建议一次性删除 Orchestrator 的所有兼容 helper。先通过 ports 和 contract tests 缩小依赖面，再分批移除。
+- 不建议让前端直接配置所有低层策略。前端应配置业务上可理解的 backend/count/timeout/budget profile，底层策略保留在配置文件或高级模式。
+
+## 按优先级排序的执行清单
+
+### P0：立即做，阻断继续返工的问题
+
+这些任务会继续制造错误理解、错误实现或安全风险，应优先完成。
+
+1. [ ] T0.1 更新 `system_architecture_and_flow.md`
+   - 原因：当前文档仍描述已废弃或弱化的 judgement/final judgement 路径，会误导后续开发。
+   - 交付：更新架构图、workflow 描述、README 对应段落。
+   - 验收：文档中的主流程与 `WorkflowEngine` 当前行为一致。
+
+2. [ ] T1.1 建立 `harness/contracts/role_contracts.py`
+   - 原因：prompt、required outputs、visibility、输出合同散落，是 role 输入和合同码问题反复出现的根因。
+   - 交付：`RoleContractRegistry`，统一 workflow_type + role + phase 的合同入口。
+   - 验收：`core/orchestrator.py` 不再定义 `ROLE_INSTRUCTIONS`；prompt builder 和 validator 从合同入口读取。
+
+3. [ ] T3.1 统一 command execution port
+   - 原因：Agent、test gate、patch gate、classifier 等外部命令路径不完全统一，安全、超时、日志、取消语义会漂移。
+   - 交付：`CommandRunner` port，所有外部命令调用统一走列表参数形式。
+   - 验收：生产代码中 `subprocess.run/Popen` 只允许出现在 runner 实现内；无 `shell=True`。
+
+### P1：高优先级，建立长期可维护骨架
+
+这些任务不一定马上导致事故，但会决定后续重构是否越做越稳。
+
+4. [ ] T1.2 增加 role/phase artifact budget
+   - 原因：tester、judge、reviewer、communicator 需要的上下文不同，全局 budget 不能表达差异。
+   - 交付：每个 role/phase 独立配置 max_files、max_bytes、large_artifact_mode、mandatory artifacts。
+   - 验收：tester/judge/reviewer/communicator 的输入 manifest 有 exact-match 测试。
+
+5. [ ] T2.1 引入 typed records
+   - 原因：裸 dict 穿透 workflow、visibility、delivery、UI，字段错误和类型漂移难以控制。
+   - 交付：`TaskRecord`、`PhaseRecord`、`AgentRunRecord`、`ArtifactRecord`。
+   - 验收：repository 边界负责 dict/dataclass 转换；业务层不直接读取裸 SQLite row。
+
+6. [ ] T2.2 建立状态机 transition table
+   - 原因：当前状态主要是字符串集合检查，不能表达合法跳转。
+   - 交付：task/phase/agent run transition table。
+   - 验收：非法状态转换抛明确异常；checkpoint recovery、timeout、OUTPUT_INVALID 有显式路径。
+
+7. [ ] T4.2 DeliveryPublisher 改为 ports 注入
+   - 原因：delivery 仍反向依赖 Orchestrator 私有 helper，边界没有真正独立。
+   - 交付：注入 repository、communicator、materialized repo、source repo、artifact writer ports。
+   - 验收：`DeliveryPublisher` 不调用任何 `o._*` 方法，可独立单测。
+
+8. [ ] T5.1 拆 `InteractiveCLI`
+   - 原因：`main.py` 是最大耦合点，CLI、dashboard、handoff、env、UI 启动混在一起。
+   - 交付：命令解析、resume context、workflow execution、one-shot command 分模块。
+   - 验收：`main.py` 少于 300 行；现有交互命令和一次性命令行为不变。
+
+### P2：中高优先级，解决规模化运行和长期成本
+
+这些任务主要减少长任务、provider 故障、并发和磁盘增长带来的运行风险。
+
+9. [ ] T2.3 解开 round_id 编码
+   - 原因：普通 round、review round、regression round 共用一个整数，会污染 visibility、UI 和 resume 逻辑。
+   - 交付：新增 `loop_type`、`parent_round_id`、`iteration_id` 或等价模型。
+   - 验收：regression round 不再依赖 `1000` stride；旧 artifact 仍兼容读取。
+
+10. [ ] T3.2 backend health 和 circuit breaker
+    - 原因：provider 系统性失败时，只靠单 run retry 会继续烧 token 和时间。
+    - 交付：backend 健康状态、连续失败计数、cooldown、熔断、降级策略。
+    - 验收：模拟 timeout/auth failure/context limit 时，backend 能进入 degraded/open 状态。
+
+11. [ ] T3.3 Scheduler bulkhead
+    - 原因：多 agent 并发缺少 backend/role 级资源隔离。
+    - 交付：按 backend、role、全局并发限制排队执行。
+    - 验收：配置 `backend_concurrency.claude=1` 时同一时刻只有一个 Claude run。
+
+12. [ ] T6.1 correlation id/span id
+    - 原因：任务排障仍要人工串 prompt、manifest、stdout/stderr、gate report、decision。
+    - 交付：task/phase/run/command/artifact 全链路 trace/span。
+    - 验收：一个 task_id 能追踪所有关键事件和文件。
+
+13. [ ] T6.2 retention policy
+    - 原因：workspace/artifact/deliver/state 会持续增长，用户已经多次关注空间浪费。
+    - 交付：dry-run、按 task/时间/大小/状态清理、保留成功交付。
+    - 验收：不会删除 active task；不会删除 final delivery。
+
+### P3：优化项，提高可解释性和工程体验
+
+这些任务价值明确，但可以在 P0-P2 稳定后做。
+
+14. [ ] T0.2 生成当前 role/phase visibility matrix
+    - 原因：role 为什么看到某个 artifact 仍需要读代码。
+    - 交付：`docs/generated_visibility_matrix.md`。
+    - 验收：CI 检查生成内容未漂移。
+
+15. [ ] T0.3 增加 architecture metrics check
+    - 原因：大文件和大测试文件已经出现，需要防止继续恶化。
+    - 交付：核心文件 LOC、最大函数长度、测试文件 LOC baseline。
+    - 验收：先警告不失败，后续逐步收紧。
+
+16. [ ] T4.1 拆 application bootstrap
+    - 原因：服务构造仍集中在 Orchestrator。
+    - 交付：`harness/app/bootstrap.py`。
+    - 验收：Orchestrator 不再手动 new 所有服务。
+
+17. [ ] T4.3 移除 Orchestrator legacy helper 依赖
+    - 原因：兼容 helper 会诱导新代码继续绕过 service boundary。
+    - 交付：迁移 `_run_*`、`_latest_*`、`_stage_*` 调用到公开 service API。
+    - 验收：生产代码不再调用 Orchestrator 私有 helper。
+
+18. [ ] T5.2 拆 Dashboard
+    - 原因：dashboard 与 CLI 主入口耦合，终端渲染问题会污染交互逻辑。
+    - 交付：`harness/ui/terminal_dashboard.py`。
+    - 验收：宽字符、截断、向上滚动、非 TTY fallback 独立测试。
+
+19. [ ] T5.3 Handoff 推断独立化
+    - 原因：交付路径、run command、dependency install 推断不应留在 CLI。
+    - 交付：`harness/delivery/handoff.py`。
+    - 验收：Python/Node/partial materialized source/usage guide 命令提取独立测试。
+
+20. [ ] T6.3 operational diagnostics bundle
+    - 原因：失败排障需要一键收集证据。
+    - 交付：`orchestra diagnose <task_id>`。
+    - 验收：mock failure 能导出 prompt、manifest、stdout/stderr、gate reports、decision、event timeline。
+
+## 分阶段 Todo 说明
+
+下面的分阶段 Todo 保留原来的工程推进视角。实际执行顺序以上面的 P0/P1/P2/P3 为准。
+
+## 验收标准
+
+- 所有主流程仍保持 CLI/UI/API 行为兼容。
+- `python3 -m pytest -q` 全绿。
+- 生产代码中没有新的 Orchestrator 私有 helper 依赖。
+- 每个 role/phase 的 required outputs、visibility、prompt instruction、input budget 都能从一个合同入口查到。
+- tester、judge、reviewer、communicator 的输入 manifest 可以用 explain 工具解释每个 artifact 的来源和规则。
+- 任何外部命令调用都可追踪、可超时、可取消、无 `shell=True`。
+- 失败任务可以从 event timeline、logs、artifact manifest 恢复完整诊断链路。

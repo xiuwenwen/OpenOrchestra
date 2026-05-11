@@ -138,7 +138,7 @@ def test_orchestrator_bugfix_flow_uses_persisted_workflow_and_runs_review(tmp_pa
     assert "FIXING" in phases
     assert "TESTING" in phases
     assert "REVIEWING" in phases
-    assert "REVIEW_JUDGEMENT" in phases
+    assert "REVIEW_JUDGEMENT" not in phases
     assert FINAL_JUDGEMENT not in phases
     assert final_delivery.exists()
 
@@ -159,7 +159,7 @@ def test_failed_exhausted_bugfix_continue_appends_new_round_window(monkeypatch, 
         return []
 
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
-    monkeypatch.setattr(orchestrator, "_run_patch_merge", lambda task_id, round_id, user_prompt: False)
+    monkeypatch.setattr(orchestrator, "run_patch_merge", lambda task_id, round_id, user_prompt: False)
 
     try:
         orchestrator.run_task(task_id, workflow_type=BUGFIX)
@@ -195,7 +195,7 @@ def test_failed_exhausted_new_project_continue_appends_new_fix_window(monkeypatc
         return False
 
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
-    monkeypatch.setattr(orchestrator, "_run_patch_merge", fake_patch_merge)
+    monkeypatch.setattr(orchestrator, "run_patch_merge", fake_patch_merge)
 
     try:
         orchestrator._run_execution_test_loop(task_id, "build a project")
@@ -222,9 +222,9 @@ def test_unlimited_new_project_test_fix_rounds_continue_until_pass(monkeypatch, 
         tested_rounds.append(round_id)
         return True
 
-    monkeypatch.setattr(orchestrator, "_run_patch_merge", fake_patch_merge)
-    monkeypatch.setattr(orchestrator, "_run_harness_test_gate", fake_test_gate)
-    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
+    monkeypatch.setattr(orchestrator, "run_patch_merge", fake_patch_merge)
+    monkeypatch.setattr(orchestrator, "run_harness_test_gate", fake_test_gate)
+    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
     monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: len(tested_rounds) >= 8)
 
     orchestrator._run_execution_test_loop(task_id, "build a project")
@@ -258,9 +258,9 @@ def test_unlimited_failed_new_project_resume_starts_after_highest_round(monkeypa
         return True
 
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
-    monkeypatch.setattr(orchestrator, "_run_patch_merge", fake_patch_merge)
-    monkeypatch.setattr(orchestrator, "_run_harness_test_gate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
+    monkeypatch.setattr(orchestrator, "run_patch_merge", fake_patch_merge)
+    monkeypatch.setattr(orchestrator, "run_harness_test_gate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
     monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: True)
 
     orchestrator._run_execution_test_loop(task_id, "build a project")
@@ -282,14 +282,14 @@ def test_unlimited_bugfix_rounds_continue_until_pass(monkeypatch, tmp_path: Path
         return []
 
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
-    monkeypatch.setattr(orchestrator, "_run_patch_merge", lambda *args, **kwargs: True)
-    monkeypatch.setattr(orchestrator, "_run_harness_test_gate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
+    monkeypatch.setattr(orchestrator, "run_patch_merge", lambda *args, **kwargs: True)
+    monkeypatch.setattr(orchestrator, "run_harness_test_gate", lambda *args, **kwargs: True)
+    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
     monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: len(fix_rounds) >= 7)
-    monkeypatch.setattr(orchestrator, "_run_review_loop", lambda *args, **kwargs: None)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_review_loop", lambda *args, **kwargs: None)
     delivery = tmp_path / "final_delivery.md"
     delivery.write_text("ok", encoding="utf-8")
-    monkeypatch.setattr(orchestrator, "_run_delivery", lambda *args, **kwargs: delivery)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_delivery", lambda *args, **kwargs: delivery)
 
     result = orchestrator._run_bugfix_flow(task_id, "fix a failing command")
 
@@ -328,9 +328,9 @@ def test_test_fix_round_limit_callback_can_extend_execution_loop(monkeypatch, tm
         return {"decision": "pass" if round_id >= 2 else "fail"}
 
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
-    monkeypatch.setattr(orchestrator, "_run_patch_merge", lambda *args, **kwargs: True)
-    monkeypatch.setattr(orchestrator, "_run_harness_test_gate", lambda task_id, round_id: tested_rounds.append(round_id) or True)
-    monkeypatch.setattr(orchestrator, "_run_judge_phase", fake_judge_phase)
+    monkeypatch.setattr(orchestrator, "run_patch_merge", lambda *args, **kwargs: True)
+    monkeypatch.setattr(orchestrator, "run_harness_test_gate", lambda task_id, round_id: tested_rounds.append(round_id) or True)
+    monkeypatch.setattr(orchestrator, "run_judge_phase", fake_judge_phase)
     monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: decision.get("decision") == "pass")
 
     orchestrator._run_execution_test_loop(task_id, "build a project")
@@ -350,7 +350,7 @@ def test_orchestrator_feature_change_flow_completes(tmp_path: Path) -> None:
     assert phases[0] == "PLANNING_DRAFT"
     assert "EXECUTION" in phases
     assert "REVIEWING" in phases
-    assert "REVIEW_JUDGEMENT" in phases
+    assert "REVIEW_JUDGEMENT" not in phases
     assert FINAL_JUDGEMENT not in phases
     assert final_delivery.exists()
 
@@ -378,12 +378,64 @@ def test_regression_testing_runs_harness_test_gate_before_judgement(monkeypatch,
         gate_rounds.append(round_id)
         return True
 
-    monkeypatch.setattr(orchestrator, "_run_harness_test_gate", fake_test_gate)
-    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: {"decision": "pass", "tests_passed": True})
+    monkeypatch.setattr(orchestrator, "run_harness_test_gate", fake_test_gate)
+    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass", "tests_passed": True})
 
     orchestrator._run_regression_test_fix_loop(task_id, "review fix", review_round_id=1, merge_ok=True)
 
-    assert gate_rounds == [5]
+    assert gate_rounds == [1000]
+
+
+def test_regression_round_id_does_not_depend_on_mutable_fix_limit(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+
+    assert orchestrator.workflow_engine.regression_phase_round_id(2, 3, 5) == 2003
+    assert orchestrator.workflow_engine.regression_phase_round_id(2, 3, 15) == 2003
+    assert orchestrator.workflow_engine.regression_phase_round_id(2, 3, None) == 2003
+
+
+def test_regression_round_ids_stay_stable_after_fix_limit_extension(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_test_fix_rounds"] = 1
+    choices = ["extra_10"]
+    orchestrator = Orchestrator(
+        config,
+        fix_round_limit_callback=lambda task_id, current_limit: choices.pop(0),
+    )
+    task_id = orchestrator.create_task("review fix after extension", workflow_type=BUGFIX)
+    role_calls: list[tuple[str, int]] = []
+    gate_rounds: list[int] = []
+    patch_rounds: list[int] = []
+
+    def fake_run_role_phase(
+        role: str,
+        phase: str,
+        round_id: int,
+        required_outputs: list[str],
+        user_prompt: str,
+        **kwargs,
+    ) -> list[AgentRunResult]:
+        role_calls.append((phase, round_id))
+        return []
+
+    def fake_patch_merge(task_id: str, round_id: int, user_prompt: str) -> bool:
+        patch_rounds.append(round_id)
+        return True
+
+    def fake_judge_phase(task_id: str, phase: str, round_id: int, user_prompt: str) -> dict[str, str]:
+        return {"decision": "pass" if round_id == 1002 else "fail"}
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+    monkeypatch.setattr(orchestrator, "run_patch_merge", fake_patch_merge)
+    monkeypatch.setattr(orchestrator, "run_harness_test_gate", lambda task_id, round_id: gate_rounds.append(round_id) or True)
+    monkeypatch.setattr(orchestrator, "run_judge_phase", fake_judge_phase)
+    monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: decision.get("decision") == "pass")
+
+    orchestrator._run_regression_test_fix_loop(task_id, "review fix after extension", review_round_id=1, merge_ok=True)
+
+    assert gate_rounds == [1000, 1001, 1002]
+    assert patch_rounds == [1001, 1002]
+    assert [round_id for phase, round_id in role_calls if phase == REVIEW_FIXING] == [1001, 1002]
 
 
 def test_planning_block_retries_until_plan_review_approves(monkeypatch, tmp_path: Path) -> None:
@@ -407,7 +459,7 @@ def test_planning_block_retries_until_plan_review_approves(monkeypatch, tmp_path
             )
         return results
 
-    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("planning should not run judge")))
+    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("planning should not run judge")))
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
 
     orchestrator._run_planning_block(task_id, "add a feature")
@@ -430,7 +482,7 @@ def test_planning_block_runs_peer_review_loop_then_plan_review(monkeypatch, tmp_
     orchestrator = Orchestrator(config)
     task_id = orchestrator.create_task("build peer reviewed plan")
 
-    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("planning should not run judge")))
+    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("planning should not run judge")))
 
     orchestrator._run_planning_block(task_id, "build peer reviewed plan")
 
@@ -475,7 +527,7 @@ def test_plan_review_rejection_enters_planner_fix_review_loop_without_peer_revie
             )
         return results
 
-    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("planning should not run judge")))
+    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("planning should not run judge")))
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
 
     orchestrator._run_planning_block(task_id, "fix merged planning feedback")
@@ -601,10 +653,8 @@ def test_artifact_visibility_rule_table_covers_role_phases() -> None:
         ("tester", REGRESSION_TESTING),
         ("reviewer", PLAN_REVIEW),
         ("reviewer", REVIEWING),
-        ("judge", PLAN_JUDGEMENT),
         ("judge", TEST_JUDGEMENT),
         ("judge", REVIEW_JUDGEMENT),
-        ("judge", FINAL_JUDGEMENT),
         ("communicator", DELIVERY),
     }
 
@@ -934,9 +984,15 @@ def test_failed_phase_with_completed_agent_runs_is_recovered_on_resume(tmp_path:
     phase_id = orchestrator.repository.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
     for agent_id in ("planner-1", "planner-2"):
         run_id = orchestrator.repository.create_agent_run(task_id, phase_id, "planner", agent_id, 0)
+        output_dir = tmp_path / f"{agent_id}-output"
+        output_dir.mkdir()
         for artifact_type in required_outputs_for("planner", "PLANNING_DRAFT"):
-            path = tmp_path / f"{agent_id}-{artifact_type}"
-            content = "return_code: 0\n" if artifact_type == "delivery.md" else artifact_type
+            path = output_dir / artifact_type
+            content = (
+                "return_code: 0\n"
+                if artifact_type == "delivery.md"
+                else f"artifact_result_code: 0\n\n# {artifact_type}\n"
+            )
             path.write_text(content, encoding="utf-8")
             orchestrator.repository.create_artifact(
                 ArtifactRef(
@@ -1011,7 +1067,9 @@ def test_checkpoint_resume_prefers_latest_recoverable_phase(tmp_path: Path) -> N
     task_id = orchestrator.create_task("prefer latest checkpoint")
     old_phase_id = orchestrator.repository.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
     old_run_id = orchestrator.repository.create_agent_run(task_id, old_phase_id, "planner", "planner-1", 0)
-    old_delivery = tmp_path / "old-delivery.md"
+    old_output_dir = tmp_path / "old-output"
+    old_output_dir.mkdir()
+    old_delivery = old_output_dir / "delivery.md"
     old_delivery.write_text("return_code: 0\n", encoding="utf-8")
     orchestrator.repository.create_artifact(
         ArtifactRef(
@@ -1031,9 +1089,16 @@ def test_checkpoint_resume_prefers_latest_recoverable_phase(tmp_path: Path) -> N
 
     latest_phase_id = orchestrator.repository.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
     latest_run_id = orchestrator.repository.create_agent_run(task_id, latest_phase_id, "planner", "planner-1", 0)
+    latest_output_dir = tmp_path / "latest-output"
+    latest_output_dir.mkdir()
     for artifact_type in required_outputs_for("planner", PLANNING_DRAFT):
-        path = tmp_path / f"latest-{artifact_type}"
-        path.write_text("return_code: 0\n" if artifact_type == "delivery.md" else artifact_type, encoding="utf-8")
+        path = latest_output_dir / artifact_type
+        path.write_text(
+            "return_code: 0\n"
+            if artifact_type == "delivery.md"
+            else f"artifact_result_code: 0\n\n# {artifact_type}\n",
+            encoding="utf-8",
+        )
         orchestrator.repository.create_artifact(
             ArtifactRef(
                 artifact_id=str(uuid.uuid4()),
@@ -1059,6 +1124,48 @@ def test_checkpoint_resume_prefers_latest_recoverable_phase(tmp_path: Path) -> N
     )
 
     assert [result.phase_id for result in results] == [latest_phase_id]
+
+
+def test_checkpoint_resume_rejects_invalid_recovered_contract(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["roles"]["planner"]["count"] = 1
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("reject invalid checkpoint")
+    phase_id = orchestrator.repository.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+    run_id = orchestrator.repository.create_agent_run(task_id, phase_id, "planner", "planner-1", 0)
+    output_dir = tmp_path / "invalid-output"
+    output_dir.mkdir()
+    for artifact_type in required_outputs_for("planner", PLANNING_DRAFT):
+        path = output_dir / artifact_type
+        path.write_text(
+            "return_code: 0\n" if artifact_type == "delivery.md" else f"# {artifact_type}\n",
+            encoding="utf-8",
+        )
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id=phase_id,
+                role="planner",
+                agent_id="planner-1",
+                artifact_type=artifact_type,
+                path=path,
+                version=1,
+                hash="hash",
+            )
+        )
+    orchestrator.repository.update_agent_run_status(run_id, "COMPLETED")
+    orchestrator.repository.update_phase_status(phase_id, "COMPLETED")
+
+    results = orchestrator.run_role_phase(
+        "planner",
+        PLANNING_DRAFT,
+        0,
+        required_outputs_for("planner", PLANNING_DRAFT),
+        "rerun invalid checkpoint",
+    )
+
+    assert [result.phase_id for result in results] != [phase_id]
 
 
 def test_judge_checkpoint_resume_parses_existing_decision(tmp_path: Path) -> None:
@@ -1533,7 +1640,7 @@ def test_failed_materialization_does_not_leave_usable_repo(tmp_path: Path) -> No
     assert orchestrator._latest_materialized_repo(task_id) is None
 
 
-def test_latest_materialized_repo_requires_latest_success_artifact_and_marker(tmp_path: Path) -> None:
+def test_latest_materialized_repo_falls_back_to_previous_success_artifact_and_marker(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("materialized freshness")
     success_repo = orchestrator._materialized_repo_dir(task_id, 0)
@@ -1567,17 +1674,17 @@ def test_latest_materialized_repo_requires_latest_success_artifact_and_marker(tm
             )
         )
 
-    assert orchestrator._latest_materialized_repo(task_id) is None
+    assert orchestrator._latest_materialized_repo(task_id) == success_repo
 
 
-def test_missing_delivery_md_is_output_invalid_not_file_error(monkeypatch, tmp_path: Path) -> None:
+def test_uncompleted_markdown_template_is_output_invalid_not_file_error(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     config["roles"]["executor"]["count"] = 1
     config["limits"]["max_agent_retry"] = 0
     orchestrator = Orchestrator(config)
-    task_id = orchestrator.create_task("merge without delivery")
+    task_id = orchestrator.create_task("merge without merge report")
 
-    class MissingDeliveryAdapter:
+    class MissingMergeReportAdapter:
         def run(self, context):
             context.output_dir.mkdir(parents=True, exist_ok=True)
             context.log_dir.mkdir(parents=True, exist_ok=True)
@@ -1585,7 +1692,19 @@ def test_missing_delivery_md_is_output_invalid_not_file_error(monkeypatch, tmp_p
             (context.output_dir / "merged_patch_metadata.md").write_text(
                 "artifact_result_code: 0\n\npatch_artifact: merged_patch.diff\n", encoding="utf-8"
             )
-            (context.output_dir / "merge_report.md").write_text("artifact_result_code: 0\n\nmerged", encoding="utf-8")
+            (context.output_dir / "delivery.md").write_text(
+                json.dumps(
+                    {
+                        "return_code": 0,
+                        "task_status": "success",
+                        "role_return_code": 0,
+                        "produced_files": context.required_outputs,
+                        "known_risks": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             stdout = context.log_dir / "stdout.log"
             stderr = context.log_dir / "stderr.log"
             stdout.write_text("ok", encoding="utf-8")
@@ -1601,7 +1720,7 @@ def test_missing_delivery_md_is_output_invalid_not_file_error(monkeypatch, tmp_p
                 stderr_path=stderr,
             )
 
-    monkeypatch.setattr(orchestrator, "_adapter_for_backend", lambda backend: MissingDeliveryAdapter())
+    monkeypatch.setattr(orchestrator, "_adapter_for_backend", lambda backend: MissingMergeReportAdapter())
 
     try:
         orchestrator.run_role_phase(
@@ -1609,17 +1728,17 @@ def test_missing_delivery_md_is_output_invalid_not_file_error(monkeypatch, tmp_p
             PATCH_MERGE,
             0,
             required_outputs_for("executor", PATCH_MERGE),
-            "merge without delivery",
+            "merge without merge report",
         )
     except Exception as exc:
-        assert "Missing required output: delivery.md" in str(exc)
+        assert "merge_report.md still contains Harness output template marker" in str(exc)
         assert "No such file or directory" not in str(exc)
     else:
-        raise AssertionError("Expected missing delivery.md to fail validation")
+        raise AssertionError("Expected uncompleted merge_report.md template to fail validation")
 
     runs = orchestrator.repository.list_agent_runs(task_id)
     assert runs[-1]["status"] == "OUTPUT_INVALID"
-    assert runs[-1]["error_message"] == "Missing required output: delivery.md"
+    assert runs[-1]["error_message"] == "merge_report.md still contains Harness output template marker"
 
 
 def test_delivery_contract_review_accepts_format_only_failure(monkeypatch, tmp_path: Path) -> None:
@@ -1986,7 +2105,7 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
     assert "judge-round-0-materialized_repo.md" not in manifest
 
 
-def test_review_judgement_sees_latest_review_and_validation_evidence(tmp_path: Path) -> None:
+def test_review_judgement_legacy_visibility_is_lean_review_and_metadata_only(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("judge latest review evidence")
     old_merge_phase_id = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 1)
@@ -2050,19 +2169,19 @@ def test_review_judgement_sees_latest_review_and_validation_evidence(tmp_path: P
     manifest = staged[0].read_text(encoding="utf-8")
 
     assert "latest-merged-metadata.md" in manifest
-    assert "latest-bug-report.md" in manifest
     assert "current-review-report.md" in manifest
-    assert "review-judge-round-2-test_gate.md" in manifest
-    assert "review-judge-round-2-objective_gate.md" in manifest
-    assert "review-judge-round-2-patch_validation.md" in manifest
-    assert "review-judge-round-2-materialized_repo.md" in manifest
 
     assert "old-merged-metadata.md" not in manifest
     assert "old-bug-report.md" not in manifest
+    assert "latest-bug-report.md" not in manifest
     assert "review-judge-round-1-test_gate.md" not in manifest
     assert "review-judge-round-1-objective_gate.md" not in manifest
     assert "review-judge-round-1-patch_validation.md" not in manifest
     assert "review-judge-round-1-materialized_repo.md" not in manifest
+    assert "review-judge-round-2-test_gate.md" not in manifest
+    assert "review-judge-round-2-objective_gate.md" not in manifest
+    assert "review-judge-round-2-patch_validation.md" not in manifest
+    assert "review-judge-round-2-materialized_repo.md" not in manifest
 
 
 def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
@@ -2143,7 +2262,6 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
     )
     manifest = staged[0].read_text(encoding="utf-8")
 
-    assert "latest-merged.patch" in manifest
     assert "latest-merged-metadata.md" in manifest
     assert "latest-changed-files.md" in manifest
     assert "latest-self-check.md" in manifest
@@ -2151,6 +2269,7 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
 
     assert "latest-plan.md" not in manifest
     assert "old-plan.md" not in manifest
+    assert "latest-merged.patch" not in manifest
     assert "old-merged.patch" not in manifest
     assert "latest-fix-notes.md" not in manifest
     assert "latest-merge-report.md" not in manifest
@@ -2206,6 +2325,86 @@ def test_review_loop_fails_immediately_on_blocked_environment_json(monkeypatch, 
 
     with pytest.raises(orchestrator_module.TaskFailedError, match="requires Linux-only system package"):
         orchestrator._run_review_loop(task_id, "deliver runtime-sensitive project")
+
+
+def test_review_approval_requires_verdict_json_environment_check(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("review strict environment verdict")
+    phase_id = "review-phase"
+    report_path = tmp_path / "review_report.md"
+    report_ref = ArtifactRef(
+        artifact_id=str(uuid.uuid4()),
+        task_id=task_id,
+        phase_id=phase_id,
+        role="reviewer",
+        agent_id="reviewer-1",
+        artifact_type="review_report.md",
+        path=report_path,
+        version=1,
+        hash="hash",
+    )
+    result = AgentRunResult(task_id, phase_id, "reviewer", "reviewer-1", "COMPLETED", artifacts=[report_ref])
+
+    report_path.write_text("artifact_result_code: 0\n\nreview_decision_code: 0\n", encoding="utf-8")
+    assert not orchestrator.workflow_engine.review_approved([result])
+
+    report_path.write_text(
+        "artifact_result_code: 0\n\n"
+        "review_decision_code: 0\n\n"
+        "## Review Verdict JSON\n\n"
+        "```json\n"
+        '{"review_status":"approved","environment_check":{"attempted":true,"status":"ready","commands_run":["pytest"],"fixable":true,"blocking_reason":""}}\n'
+        "```\n",
+        encoding="utf-8",
+    )
+    assert orchestrator.workflow_engine.review_approved([result])
+
+
+@pytest.mark.parametrize(
+    ("decision_code", "review_status", "environment_check", "expected"),
+    [
+        (0, "approved", {"status": "ready", "attempted": True, "commands_run": ["pytest"]}, True),
+        (0, "approved", {"status": "not_applicable", "attempted": False, "commands_run": []}, True),
+        (0, "approved", {"status": "blocked", "attempted": True, "commands_run": ["python app.py"]}, False),
+        (0, "changes_requested", {"status": "ready", "attempted": True, "commands_run": ["pytest"]}, False),
+        (0, "approved", None, False),
+        (1, "approved", {"status": "ready", "attempted": True, "commands_run": ["pytest"]}, False),
+    ],
+)
+def test_review_approval_requires_positive_code_approved_status_and_safe_environment(
+    tmp_path: Path,
+    decision_code: int,
+    review_status: str,
+    environment_check: dict | None,
+    expected: bool,
+) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("review verdict matrix")
+    report_path = tmp_path / "review_report.md"
+    report_ref = ArtifactRef(
+        artifact_id=str(uuid.uuid4()),
+        task_id=task_id,
+        phase_id="review-phase",
+        role="reviewer",
+        agent_id="reviewer-1",
+        artifact_type="review_report.md",
+        path=report_path,
+        version=1,
+        hash="hash",
+    )
+    result = AgentRunResult(task_id, "review-phase", "reviewer", "reviewer-1", "COMPLETED", artifacts=[report_ref])
+    payload = {"review_status": review_status, "environment_check": environment_check}
+    report_path.write_text(
+        "artifact_result_code: 0\n\n"
+        f"review_decision_code: {decision_code}\n\n"
+        "## Review Verdict JSON\n\n"
+        "```json\n"
+        f"{json.dumps(payload)}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    assert orchestrator.workflow_engine.review_approved([result]) is expected
 
 
 def test_tester_receives_no_executor_markdown_artifacts(tmp_path: Path) -> None:
@@ -2356,6 +2555,48 @@ def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_pat
     assert "old-fix.patch" not in manifest
 
 
+def test_single_candidate_patch_merge_uses_deterministic_fast_path(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("deterministic patch merge")
+    execution_phase_id = orchestrator.repository.create_phase(task_id, EXECUTION, "executor", 0, status="COMPLETED")
+    patch = tmp_path / "patch.diff"
+    patch.write_text(
+        "diff --git a/app.py b/app.py\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/app.py\n"
+        "@@ -0,0 +1 @@\n"
+        "+print('ok')\n",
+        encoding="utf-8",
+    )
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=execution_phase_id,
+            role="executor",
+            agent_id="executor-1",
+            artifact_type="patch.diff",
+            path=patch,
+            version=1,
+            hash="hash",
+        )
+    )
+
+    assert orchestrator.run_patch_merge(task_id, 0, "deterministic patch merge") is True
+
+    phases = [phase for phase in orchestrator.repository.list_phases(task_id) if phase["phase_type"] == PATCH_MERGE]
+    assert len(phases) == 1
+    runs = [run for run in orchestrator.repository.list_agent_runs(task_id) if run["phase_id"] == phases[0]["phase_id"]]
+    assert [run["agent_id"] for run in runs] == ["deterministic-patch-merge"]
+    metadata = Path(orchestrator.repository.list_artifacts(task_id, "merged_patch_metadata.md")[-1]["path"]).read_text(encoding="utf-8")
+    report = Path(orchestrator.repository.list_artifacts(task_id, "merge_report.md")[-1]["path"]).read_text(encoding="utf-8")
+    assert "merge_strategy: deterministic_single_candidate" in report
+    assert "changed_files: app.py" in metadata
+    assert "expected_apply_command: git apply --whitespace=nowarn merged_patch.diff" in metadata
+    assert "status: pass" in Path(orchestrator.repository.list_artifacts(task_id, "patch_validation.md")[-1]["path"]).read_text(encoding="utf-8")
+
+
 def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("fix latest test failure only")
@@ -2433,10 +2674,7 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
     assert "latest-bug-report.md" in manifest
     assert "latest-decision.json" in manifest
     assert "latest-decision-summary.md" in manifest
-    assert "round-1-test_gate.md" in manifest
     assert "round-1-objective_gate.md" in manifest
-    assert "round-1-patch_validation.md" in manifest
-    assert "round-1-materialized_repo.md" in manifest
 
     assert "latest-merged.patch" not in manifest
     assert "latest-merge-report.md" not in manifest
@@ -2448,6 +2686,9 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
     assert "old-decision.json" not in manifest
     assert "old-decision-summary.md" not in manifest
     assert "round-0-test_gate.md" not in manifest
+    assert "round-1-test_gate.md" not in manifest
+    assert "round-1-patch_validation.md" not in manifest
+    assert "round-1-materialized_repo.md" not in manifest
     assert "round-0-objective_gate.md" not in manifest
     assert "round-0-patch_validation.md" not in manifest
     assert "round-0-materialized_repo.md" not in manifest
@@ -2592,8 +2833,8 @@ def test_invalid_patch_merge_skips_testing_and_enters_fix_round(monkeypatch, tmp
         return True
 
     monkeypatch.setattr(orchestrator, "_run_patch_validation", fake_patch_validation)
-    monkeypatch.setattr(orchestrator, "_run_harness_test_gate", fake_test_gate)
-    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
+    monkeypatch.setattr(orchestrator, "run_harness_test_gate", fake_test_gate)
+    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
     monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: True)
 
     orchestrator._run_execution_test_loop(task_id, "repair invalid patch")
@@ -2622,8 +2863,8 @@ def test_final_execution_fix_round_is_tested_before_exhaustion(monkeypatch, tmp_
         return True
 
     monkeypatch.setattr(orchestrator, "_run_patch_validation", fake_patch_validation)
-    monkeypatch.setattr(orchestrator, "_run_harness_test_gate", fake_test_gate)
-    monkeypatch.setattr(orchestrator, "_run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
+    monkeypatch.setattr(orchestrator, "run_harness_test_gate", fake_test_gate)
+    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
     monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: True)
 
     orchestrator._run_execution_test_loop(task_id, "repair invalid patch")
@@ -2720,12 +2961,12 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     assert (final_delivery.parent / "success_path.md").exists()
     assert (final_delivery.parent / "usage_guide.md").exists()
     assert (final_delivery.parent / "patches" / "final.patch").exists()
-    assert (final_delivery.parent / "artifacts" / "merged_patch.diff").exists()
-    assert (final_delivery.parent / "artifacts" / "merged_patch_metadata.md").exists()
-    assert (final_delivery.parent / "artifacts" / "patch_validation.md").exists()
-    assert (final_delivery.parent / "artifacts" / "materialized_repo.md").exists()
-    assert (final_delivery.parent / "artifacts" / "merge_report.md").exists()
-    assert (final_delivery.parent / "artifacts" / "patch.diff").exists()
+    assert not (final_delivery.parent / "artifacts" / "merged_patch_metadata.md").exists()
+    assert not (final_delivery.parent / "artifacts" / "merged_patch.diff").exists()
+    assert not (final_delivery.parent / "artifacts" / "patch_validation.md").exists()
+    assert not (final_delivery.parent / "artifacts" / "materialized_repo.md").exists()
+    assert not (final_delivery.parent / "artifacts" / "merge_report.md").exists()
+    assert not (final_delivery.parent / "artifacts" / "patch.diff").exists()
     assert (final_delivery.parent / "source" / "mock.txt").read_text(encoding="utf-8") == "mock change\n"
     merged_artifacts = orchestrator.repository.list_artifacts(task_id, "merged_patch.diff")
     validation_artifacts = orchestrator.repository.list_artifacts(task_id, "patch_validation.md")
@@ -2747,8 +2988,8 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     assert f"success_path: {final_delivery.parent}" in manifest
     assert f"success_path: {final_delivery.parent}" in success_path
     assert "patches/final.patch" in manifest
-    assert "patch_validation.md" in manifest
-    assert "materialized_repo.md" in manifest
+    assert "patch_validation.md" not in manifest
+    assert "materialized_repo.md" not in manifest
     assert "source/mock.txt" in manifest
     tester_run = next(
         run
@@ -2769,6 +3010,28 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
         / "repo"
     )
     assert (tester_repo / "mock.txt").read_text(encoding="utf-8") == "mock change\n"
+
+
+def test_delivery_internal_artifacts_are_explicit_opt_in(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["system"]["deliver_root"] = str(tmp_path / "deliver")
+    config["delivery"] = {"include_internal_artifacts": True}
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("Build Weather Tool With Audit Artifacts")
+
+    final_delivery = orchestrator.run_task(task_id)
+
+    artifact_dir = final_delivery.parent / "artifacts"
+    assert (artifact_dir / "merged_patch_metadata.md").exists()
+    assert (artifact_dir / "changed_files.md").exists()
+    assert (artifact_dir / "self_check.md").exists()
+    assert (artifact_dir / "review_report.md").exists()
+    assert not (artifact_dir / "merged_patch.diff").exists()
+    assert not (artifact_dir / "patch_validation.md").exists()
+    assert not (artifact_dir / "materialized_repo.md").exists()
+    manifest = (final_delivery.parent / "artifacts_manifest.md").read_text(encoding="utf-8")
+    assert "artifacts/merged_patch_metadata.md" in manifest
+    assert "patch_validation.md" not in manifest
 
 
 def test_delivery_dependency_installer_infers_pytest_dependencies(tmp_path: Path) -> None:

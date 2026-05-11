@@ -7,12 +7,10 @@ from typing import Any
 from harness.core.state_machine import (
     DELIVERY,
     EXECUTION,
-    FINAL_JUDGEMENT,
     FIXING,
     MISC_RESPONSE,
     PATCH_MERGE,
     PLAN_REVIEW,
-    PLAN_JUDGEMENT,
     PLANNING_DRAFT,
     PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
@@ -78,9 +76,10 @@ def _phases(*phases: str) -> frozenset[str]:
 
 
 PLANNING_ARTIFACTS = _types("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md")
+PROJECT_CONTEXT_ARTIFACTS = _types("project_context.md")
 TEST_REPORT_ARTIFACTS = _types("bug_report.md")
 JUDGE_DECISION_ARTIFACTS = _types("decision.json", "decision_summary.md")
-PATCH_GATE_ARTIFACTS = _types("test_gate.md", "objective_gate.md", "patch_validation.md", "materialized_repo.md")
+PATCH_FIX_GATE_ARTIFACTS = _types("objective_gate.md")
 TEST_JUDGE_GATE_ARTIFACTS = _types("test_gate.md", "objective_gate.md")
 EXECUTOR_REVIEW_ARTIFACTS = _types(
     "changed_files.md",
@@ -90,14 +89,17 @@ EXECUTOR_REVIEW_ARTIFACTS = _types(
 )
 DELIVERY_EXECUTOR_ARTIFACTS = _types(
     "changed_files.md",
-    "merged_patch.diff",
     "merged_patch_metadata.md",
     "self_check.md",
 )
-FINAL_REVIEWER_ARTIFACTS = _types("selected_plan.md", "review_report.md")
-
-
 ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
+    ArtifactVisibilityRule("planner", PLANNING_DRAFT, "context", PROJECT_CONTEXT_ARTIFACTS),
+    ArtifactVisibilityRule("planner", PLANNING_REVISION, "context", PROJECT_CONTEXT_ARTIFACTS),
+    ArtifactVisibilityRule("reviewer", PLAN_REVIEW, "context", PROJECT_CONTEXT_ARTIFACTS),
+    ArtifactVisibilityRule("executor", EXECUTION, "context", PROJECT_CONTEXT_ARTIFACTS),
+    ArtifactVisibilityRule("executor", FIXING, "context", PROJECT_CONTEXT_ARTIFACTS),
+    ArtifactVisibilityRule("executor", REVIEW_FIXING, "context", PROJECT_CONTEXT_ARTIFACTS),
+    ArtifactVisibilityRule("executor", MISC_RESPONSE, "context", PROJECT_CONTEXT_ARTIFACTS),
     ArtifactVisibilityRule("planner", PLANNING_DRAFT, "planner", PLANNING_ARTIFACTS, round_policy=ROUND_BEFORE_CURRENT),
     ArtifactVisibilityRule("planner", PLANNING_DRAFT, "judge", JUDGE_DECISION_ARTIFACTS, round_policy=ROUND_BEFORE_CURRENT),
     ArtifactVisibilityRule(
@@ -143,22 +145,6 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         round_policy=ROUND_CURRENT,
     ),
     ArtifactVisibilityRule(
-        "judge",
-        PLAN_JUDGEMENT,
-        "planner",
-        PLANNING_ARTIFACTS | _types("peer_review.md"),
-        source_phases=_phases(PLANNING_DRAFT, PLANNING_REVISION, PLANNING_PEER_REVIEW),
-        round_policy=ROUND_CURRENT,
-    ),
-    ArtifactVisibilityRule(
-        "judge",
-        PLAN_JUDGEMENT,
-        "reviewer",
-        _types("selected_plan.md", "review_report.md"),
-        source_phases=_phases(PLAN_REVIEW),
-        round_policy=ROUND_CURRENT,
-    ),
-    ArtifactVisibilityRule(
         "executor",
         EXECUTION,
         "reviewer",
@@ -182,7 +168,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         source_phases=_phases(PATCH_MERGE),
         round_policy=ROUND_LATEST_BEFORE_CURRENT_PER_TYPE,
     ),
-    ArtifactVisibilityRule("executor", FIXING, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_PREVIOUS),
+    ArtifactVisibilityRule("executor", FIXING, "orchestrator", PATCH_FIX_GATE_ARTIFACTS, round_policy=ROUND_PREVIOUS),
     ArtifactVisibilityRule(
         "executor",
         FIXING,
@@ -207,7 +193,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         source_phases=_phases(TEST_JUDGEMENT, REVIEW_JUDGEMENT),
         round_policy=ROUND_LATEST_COMPLETE_JUDGE_BEFORE_CURRENT,
     ),
-    ArtifactVisibilityRule("executor", REVIEW_FIXING, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_PREVIOUS),
+    ArtifactVisibilityRule("executor", REVIEW_FIXING, "orchestrator", PATCH_FIX_GATE_ARTIFACTS, round_policy=ROUND_PREVIOUS),
     ArtifactVisibilityRule(
         "executor",
         REVIEW_FIXING,
@@ -250,7 +236,6 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         source_phases=_phases(TESTING, REGRESSION_TESTING),
         round_policy=ROUND_CURRENT,
     ),
-    ArtifactVisibilityRule("judge", REVIEW_JUDGEMENT, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
     ArtifactVisibilityRule(
         "judge",
         REVIEW_JUDGEMENT,
@@ -259,7 +244,6 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         source_phases=_phases(PATCH_MERGE),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
-    ArtifactVisibilityRule("judge", REVIEW_JUDGEMENT, "tester", TEST_REPORT_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
     ArtifactVisibilityRule(
         "judge",
         REVIEW_JUDGEMENT,
@@ -268,11 +252,6 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         source_phases=_phases(REVIEWING),
         round_policy=ROUND_CURRENT,
     ),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "executor", DELIVERY_EXECUTOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "tester", TEST_REPORT_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "reviewer", FINAL_REVIEWER_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "judge", JUDGE_DECISION_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
-    ArtifactVisibilityRule("judge", FINAL_JUDGEMENT, "orchestrator", PATCH_GATE_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
     ArtifactVisibilityRule(
         "communicator",
         DELIVERY,
@@ -313,10 +292,8 @@ _contract("tester", TESTING, ("bug_report.md",))
 _contract("tester", REGRESSION_TESTING, ("bug_report.md",))
 _contract("reviewer", PLAN_REVIEW, ("review_report.md", "selected_plan.md"))
 _contract("reviewer", REVIEWING, ("review_report.md",))
-_contract("judge", PLAN_JUDGEMENT, ("decision.json", "decision_summary.md"))
 _contract("judge", TEST_JUDGEMENT, ("decision.json", "decision_summary.md"))
 _contract("judge", REVIEW_JUDGEMENT, ("decision.json", "decision_summary.md"))
-_contract("judge", FINAL_JUDGEMENT, ("decision.json", "decision_summary.md"))
 _contract("communicator", DELIVERY, ("final_delivery.md", "usage_guide.md"))
 
 

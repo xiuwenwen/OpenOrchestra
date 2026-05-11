@@ -88,7 +88,7 @@
 
 ## Remaining Architecture Work
 
-- [ ] 把 `WorkflowEngine` 对 `Orchestrator._*` 私有 helper 的调用改为协议接口，例如 `PhaseRunner`、`GateRunner`、`DeliveryService`。
+- [x] 把 `WorkflowEngine` 对 `Orchestrator._*` 私有 helper 的调用改为协议接口，例如 `PhaseRunner`、`GateRunner`、`DeliveryService`。
 - [ ] 把 `ROLE_INSTRUCTIONS` 也纳入 `RolePhaseContract` 或相邻 role contract，避免 prompt 合同散落。
 - [ ] 为 subprocess 安全加架构测试：禁止 `shell=True`，禁止字符串命令进入 `SubprocessRunner`。
 - [ ] 给 backend adapter 增加健康状态、退避和 circuit breaker，减少 provider 故障时的无效重试。

@@ -319,6 +319,12 @@ class Orchestrator:
             agent_count_override,
         )
 
+    def is_failed_resume(self, task_id: str) -> bool:
+        return self._active_task_id == task_id and self._active_task_resume_status == FAILED
+
+    def emit_progress(self, event: ProgressEvent) -> None:
+        self._emit(event)
+
     def _recover_phase_results(self, task_id: str, phase_id: str) -> list[AgentRunResult]:
         return self.agent_runner.recover_phase_results(task_id, phase_id)
 
@@ -394,7 +400,7 @@ class Orchestrator:
     def _run_adapter_with_heartbeat(self, adapter: AgentAdapter, context: AgentRunContext, attempt: int) -> AgentRunResult:
         return self.agent_runner.run_adapter_with_heartbeat(adapter, context, attempt)
 
-    def _run_judge_phase(self, task_id: str, phase: str, round_id: int, user_prompt: str) -> dict[str, Any]:
+    def run_judge_phase(self, task_id: str, phase: str, round_id: int, user_prompt: str) -> dict[str, Any]:
         results = self.run_role_phase("judge", phase, round_id, required_outputs_for("judge", phase), user_prompt)
         phase_id = results[-1].phase_id
 
@@ -412,6 +418,9 @@ class Orchestrator:
         normalized = self._apply_objective_gates_to_judge_decision(task_id, phase, round_id, normalized)
         self.repository.create_judge_decision(task_id, phase_id, phase, normalized)
         return normalized
+
+    def _run_judge_phase(self, task_id: str, phase: str, round_id: int, user_prompt: str) -> dict[str, Any]:
+        return self.run_judge_phase(task_id, phase, round_id, user_prompt)
 
     def _apply_objective_gates_to_judge_decision(
         self,
@@ -560,9 +569,12 @@ class Orchestrator:
                 return line.split(":", 1)[1].strip()
         return None
 
-    def _run_harness_test_gate(self, task_id: str, round_id: int) -> bool:
+    def run_harness_test_gate(self, task_id: str, round_id: int) -> bool:
         self.test_gate_service.latest_materialized_repo = self._latest_materialized_repo
         return self.test_gate_service.run(task_id, round_id)
+
+    def _run_harness_test_gate(self, task_id: str, round_id: int) -> bool:
+        return self.run_harness_test_gate(task_id, round_id)
 
     def _harness_test_command_argv(self, command: str) -> list[str]:
         return self.test_gate_service.harness_test_command_argv(command)
@@ -595,16 +607,22 @@ class Orchestrator:
     def _test_gate_status(self, task_id: str, round_id: int) -> str | None:
         return self.test_gate_service.status_for_round(task_id, round_id)
 
-    def _run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:
-        self.run_role_phase(
-            "executor",
-            PATCH_MERGE,
-            round_id,
-            required_outputs_for("executor", PATCH_MERGE),
-            user_prompt,
-            agent_count_override=1,
-        )
+    def run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:
+        if not self.patch_gate_service.latest_merged_patch_for_round(
+            task_id, round_id
+        ) and not self.patch_gate_service.try_deterministic_single_candidate_merge(task_id, round_id):
+            self.run_role_phase(
+                "executor",
+                PATCH_MERGE,
+                round_id,
+                required_outputs_for("executor", PATCH_MERGE),
+                user_prompt,
+                agent_count_override=1,
+            )
         return self._run_patch_validation(task_id, round_id)
+
+    def _run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:
+        return self.run_patch_merge(task_id, round_id, user_prompt)
 
     def _run_patch_validation(self, task_id: str, round_id: int) -> bool:
         return self.patch_gate_service.run_validation(task_id, round_id)
@@ -892,8 +910,14 @@ class Orchestrator:
     def _artifact_max_file_bytes(self, configured_max_file_bytes: int, staging_mode: str) -> int:
         return self.input_staging_service.artifact_max_file_bytes(configured_max_file_bytes, staging_mode)
 
-    def _publish_delivery(self, task_id: str, final_path: Path) -> Path:
+    def latest_final_delivery(self, task_id: str) -> Path | None:
+        return self.communicator.latest_final_delivery(task_id)
+
+    def publish_delivery(self, task_id: str, final_path: Path) -> Path:
         return self.delivery_publisher.publish_delivery(task_id, final_path)
+
+    def _publish_delivery(self, task_id: str, final_path: Path) -> Path:
+        return self.publish_delivery(task_id, final_path)
 
     def delivery_success_path(self, task_id: str) -> Path | None:
         return self.delivery_publisher.delivery_success_path(task_id)

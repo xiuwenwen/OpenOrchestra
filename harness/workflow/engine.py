@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from harness.agents.result import AgentRunResult
 from harness.artifacts.schemas import required_outputs_for
@@ -22,7 +22,6 @@ from harness.core.state_machine import (
     PLANNING_REVISION,
     REGRESSION_TESTING,
     REVIEW_FIXING,
-    REVIEW_JUDGEMENT,
     REVIEWING,
     TEST_JUDGEMENT,
     TESTING,
@@ -30,9 +29,58 @@ from harness.core.state_machine import (
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC
 
 
+REGRESSION_ROUND_STRIDE = 1000
+
+
+class PhaseRunner(Protocol):
+    def run_role_phase(
+        self,
+        role: str,
+        phase: str,
+        round_id: int,
+        required_outputs: list[str],
+        user_prompt: str | None = None,
+        agent_count_override: int | None = None,
+    ) -> list[AgentRunResult]:
+        ...
+
+
+class GateRunner(Protocol):
+    def run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:
+        ...
+
+    def run_harness_test_gate(self, task_id: str, round_id: int) -> bool:
+        ...
+
+    def run_judge_phase(self, task_id: str, phase: str, round_id: int, user_prompt: str) -> dict[str, Any]:
+        ...
+
+
+class DeliveryService(Protocol):
+    def latest_final_delivery(self, task_id: str) -> Path | None:
+        ...
+
+    def publish_delivery(self, task_id: str, final_path: Path) -> Path:
+        ...
+
+
+class WorkflowRuntime(PhaseRunner, GateRunner, DeliveryService, Protocol):
+    config: dict[str, Any]
+    repository: Any
+    logger: Any
+    judge: Any
+    fix_round_limit_callback: Any
+
+    def is_failed_resume(self, task_id: str) -> bool:
+        ...
+
+    def emit_progress(self, event: ProgressEvent) -> None:
+        ...
+
+
 class WorkflowEngine:
-    def __init__(self, orchestrator: Any):
-        self.orchestrator = orchestrator
+    def __init__(self, runtime: WorkflowRuntime):
+        self.runtime = runtime
 
     def run(self, task_id: str, workflow_type: str, user_prompt: str) -> Path:
         if workflow_type == BUGFIX:
@@ -50,7 +98,7 @@ class WorkflowEngine:
         return self.run_delivery(task_id, user_prompt)
 
     def run_bugfix_flow(self, task_id: str, user_prompt: str) -> Path:
-        o = self.orchestrator
+        o = self.runtime
         max_rounds = self.max_test_fix_rounds()
         start_round = self.bugfix_resume_start_round(task_id)
         round_id = start_round
@@ -58,11 +106,11 @@ class WorkflowEngine:
         while True:
             while max_rounds is None or attempts < max_rounds:
                 o.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
-                merge_ok = o._run_patch_merge(task_id, round_id, user_prompt)
+                merge_ok = o.run_patch_merge(task_id, round_id, user_prompt)
                 if merge_ok:
                     o.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
-                    o._run_harness_test_gate(task_id, round_id)
-                    test_decision = o._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
+                    o.run_harness_test_gate(task_id, round_id)
+                    test_decision = o.run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
                     if o.judge.is_test_pass(test_decision):
                         break
                 round_id += 1
@@ -76,12 +124,12 @@ class WorkflowEngine:
                 continue
             if o.judge.is_test_pass(test_decision):
                 break
-        o._run_review_loop(task_id, user_prompt)
-        return o._run_delivery(task_id, user_prompt)
+        self.run_review_loop(task_id, user_prompt)
+        return self.run_delivery(task_id, user_prompt)
 
     def bugfix_resume_start_round(self, task_id: str) -> int:
-        o = self.orchestrator
-        if o._active_task_id != task_id or o._active_task_resume_status != FAILED:
+        o = self.runtime
+        if not o.is_failed_resume(task_id):
             return 0
         highest_round = self.highest_bugfix_round_id(task_id)
         if highest_round is None:
@@ -96,7 +144,7 @@ class WorkflowEngine:
     def highest_bugfix_round_id(self, task_id: str) -> int | None:
         rounds = [
             int(phase["round_id"])
-            for phase in self.orchestrator.repository.list_phases(task_id)
+            for phase in self.runtime.repository.list_phases(task_id)
             if phase["phase_type"] in {FIXING, PATCH_MERGE, TESTING, TEST_JUDGEMENT}
             and phase["round_id"] is not None
         ]
@@ -109,7 +157,7 @@ class WorkflowEngine:
         return self.run_delivery(task_id, user_prompt)
 
     def run_misc_flow(self, task_id: str, user_prompt: str) -> Path:
-        o = self.orchestrator
+        o = self.runtime
         o.run_role_phase(
             "executor",
             MISC_RESPONSE,
@@ -124,7 +172,7 @@ class WorkflowEngine:
         return Path(artifacts[-1]["path"])
 
     def run_planning_block(self, task_id: str, user_prompt: str) -> None:
-        o = self.orchestrator
+        o = self.runtime
         planner_count = int(o.config["roles"]["planner"]["count"])
         loop_count = self.planning_peer_review_loop_count()
         effective_loop_count = loop_count if planner_count > 1 else 1
@@ -173,9 +221,9 @@ class WorkflowEngine:
         raise TaskFailedError("Planning merge review was not approved after peer-review loops")
 
     def planning_peer_review_loop_count(self) -> int:
-        configured = self.orchestrator.config.get("limits", {}).get(
+        configured = self.runtime.config.get("limits", {}).get(
             "planning_peer_review_loops",
-            self.orchestrator.config.get("limits", {}).get("max_planning_rounds", 3),
+            self.runtime.config.get("limits", {}).get("max_planning_rounds", 3),
         )
         try:
             return max(1, int(configured))
@@ -212,31 +260,31 @@ class WorkflowEngine:
         return False
 
     def run_execution_test_loop(self, task_id: str, user_prompt: str) -> None:
-        o = self.orchestrator
+        o = self.runtime
         max_rounds = self.max_test_fix_rounds()
         start_round = self.execution_resume_start_round(task_id)
         if start_round <= 0:
             o.run_role_phase("executor", EXECUTION, 0, required_outputs_for("executor", EXECUTION), user_prompt)
-            merge_ok = o._run_patch_merge(task_id, 0, user_prompt)
+            merge_ok = o.run_patch_merge(task_id, 0, user_prompt)
             round_id = 0
         else:
             round_id = start_round
             o.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
-            merge_ok = o._run_patch_merge(task_id, round_id, user_prompt)
+            merge_ok = o.run_patch_merge(task_id, round_id, user_prompt)
         end_round = self.execution_test_end_round(start_round, max_rounds)
         while True:
             while end_round is None or round_id <= end_round:
                 if merge_ok:
                     o.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
-                    o._run_harness_test_gate(task_id, round_id)
-                    test_decision = o._run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
+                    o.run_harness_test_gate(task_id, round_id)
+                    test_decision = o.run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
                     if o.judge.is_test_pass(test_decision):
                         return
                 if end_round is not None and round_id >= end_round:
                     break
                 next_round = round_id + 1
                 o.run_role_phase("executor", FIXING, next_round, required_outputs_for("executor", FIXING), user_prompt)
-                merge_ok = o._run_patch_merge(task_id, next_round, user_prompt)
+                merge_ok = o.run_patch_merge(task_id, next_round, user_prompt)
                 round_id = next_round
             updated_max_rounds = self.resolve_test_fix_round_limit(task_id, max_rounds)
             if updated_max_rounds == max_rounds:
@@ -245,7 +293,7 @@ class WorkflowEngine:
             end_round = self.execution_test_end_round(start_round, max_rounds)
             next_round = round_id + 1
             o.run_role_phase("executor", FIXING, next_round, required_outputs_for("executor", FIXING), user_prompt)
-            merge_ok = o._run_patch_merge(task_id, next_round, user_prompt)
+            merge_ok = o.run_patch_merge(task_id, next_round, user_prompt)
             round_id = next_round
 
     def execution_test_end_round(self, start_round: int, max_rounds: int | None) -> int | None:
@@ -256,8 +304,8 @@ class WorkflowEngine:
         return start_round + max(1, max_rounds) - 1
 
     def execution_resume_start_round(self, task_id: str) -> int:
-        o = self.orchestrator
-        if o._active_task_id != task_id or o._active_task_resume_status != FAILED:
+        o = self.runtime
+        if not o.is_failed_resume(task_id):
             return 0
         highest_round = self.highest_execution_test_round_id(task_id)
         if highest_round is None:
@@ -270,7 +318,7 @@ class WorkflowEngine:
         return highest_round + 1
 
     def max_test_fix_rounds(self) -> int | None:
-        value = self.orchestrator.config.get("limits", {}).get("max_test_fix_rounds", 10)
+        value = self.runtime.config.get("limits", {}).get("max_test_fix_rounds", 10)
         if isinstance(value, str):
             normalized = value.strip().lower()
             if normalized in {"", "0", "-1", "none", "no_limit", "nolimit", "infinite", "infinity", "unlimited"}:
@@ -281,12 +329,12 @@ class WorkflowEngine:
         return parsed if parsed > 0 else None
 
     def resolve_test_fix_round_limit(self, task_id: str, current_limit: int | None) -> int | None:
-        o = self.orchestrator
+        o = self.runtime
         if current_limit is None:
             return None
         message = f"[WARN] 已达最大修复轮次({current_limit})，任务终止。"
         o.logger.warning(message)
-        o._emit(
+        o.emit_progress(
             ProgressEvent(
                 "test_fix_round_limit_reached",
                 task_id=task_id,
@@ -310,29 +358,56 @@ class WorkflowEngine:
     def highest_execution_test_round_id(self, task_id: str) -> int | None:
         rounds = [
             int(phase["round_id"])
-            for phase in self.orchestrator.repository.list_phases(task_id)
+            for phase in self.runtime.repository.list_phases(task_id)
             if phase["phase_type"] in {EXECUTION, FIXING, PATCH_MERGE, TESTING, TEST_JUDGEMENT}
             and phase["round_id"] is not None
         ]
         return max(rounds) if rounds else None
 
     def run_review_loop(self, task_id: str, user_prompt: str) -> None:
-        o = self.orchestrator
+        o = self.runtime
         for round_id in range(o.config["limits"]["max_review_rounds"]):
             review_results = o.run_role_phase("reviewer", REVIEWING, round_id, required_outputs_for("reviewer", REVIEWING), user_prompt)
             blocked_reason = self.review_environment_block_reason(review_results)
             if blocked_reason:
                 raise TaskFailedError(f"Reviewer blocked delivery due to runtime environment conflict: {blocked_reason}")
-            review_decision = o._run_judge_phase(task_id, REVIEW_JUDGEMENT, round_id, user_prompt)
-            if o.judge.is_review_approved(review_decision):
+            if self.review_approved(review_results):
                 break
 
             next_review_round = round_id + 1
             o.run_role_phase("executor", REVIEW_FIXING, next_review_round, required_outputs_for("executor", REVIEW_FIXING), user_prompt)
-            merge_ok = o._run_patch_merge(task_id, next_review_round, user_prompt)
+            merge_ok = o.run_patch_merge(task_id, next_review_round, user_prompt)
             self.run_regression_test_fix_loop(task_id, user_prompt, next_review_round, merge_ok)
         else:
             raise TaskFailedError("Review was not approved within max_review_rounds")
+
+    def review_approved(self, results: list[AgentRunResult]) -> bool:
+        for result in results:
+            for artifact in result.artifacts:
+                if artifact.artifact_type != "review_report.md" or not artifact.path.exists():
+                    continue
+                text = artifact.path.read_text(encoding="utf-8", errors="replace")
+                if not re.search(r"(?m)^\s*review_decision_code\s*:\s*0\s*$", text):
+                    continue
+                payload = self._extract_review_verdict_json(text)
+                if self._review_verdict_json_approved(payload):
+                    return True
+        return False
+
+    def _review_verdict_json_approved(self, payload: dict[str, Any]) -> bool:
+        status = str(
+            payload.get("review_status")
+            or payload.get("decision")
+            or payload.get("status")
+            or ""
+        ).strip().lower()
+        if status not in {"approved", "approve", "pass", "passed", "success"}:
+            return False
+        environment_check = payload.get("environment_check")
+        if not isinstance(environment_check, dict):
+            return False
+        environment_status = str(environment_check.get("status") or "").strip().lower()
+        return environment_status in {"ready", "not_applicable", "pass", "passed", "success"}
 
     def review_environment_block_reason(self, results: list[AgentRunResult]) -> str | None:
         for result in results:
@@ -367,7 +442,7 @@ class WorkflowEngine:
         return payload if isinstance(payload, dict) else {}
 
     def run_regression_test_fix_loop(self, task_id: str, user_prompt: str, review_round_id: int, merge_ok: bool) -> None:
-        o = self.orchestrator
+        o = self.runtime
         max_rounds = self.max_test_fix_rounds()
         test_round_id = 0
         while True:
@@ -381,8 +456,8 @@ class WorkflowEngine:
                         required_outputs_for("tester", REGRESSION_TESTING),
                         user_prompt,
                     )
-                    o._run_harness_test_gate(task_id, phase_round_id)
-                    test_decision = o._run_judge_phase(task_id, TEST_JUDGEMENT, phase_round_id, user_prompt)
+                    o.run_harness_test_gate(task_id, phase_round_id)
+                    test_decision = o.run_judge_phase(task_id, TEST_JUDGEMENT, phase_round_id, user_prompt)
                     if o.judge.is_test_pass(test_decision):
                         return
 
@@ -394,7 +469,7 @@ class WorkflowEngine:
                     required_outputs_for("executor", REVIEW_FIXING),
                     user_prompt,
                 )
-                merge_ok = o._run_patch_merge(task_id, next_phase_round, user_prompt)
+                merge_ok = o.run_patch_merge(task_id, next_phase_round, user_prompt)
                 test_round_id += 1
             updated_max_rounds = self.resolve_test_fix_round_limit(task_id, max_rounds)
             if updated_max_rounds == max_rounds:
@@ -402,12 +477,12 @@ class WorkflowEngine:
             max_rounds = updated_max_rounds
 
     def regression_phase_round_id(self, review_round_id: int, test_round_id: int, max_rounds: int | None) -> int:
-        return (review_round_id + test_round_id) if max_rounds is None else (review_round_id * max_rounds) + test_round_id
+        return (review_round_id * REGRESSION_ROUND_STRIDE) + test_round_id
 
     def run_delivery(self, task_id: str, user_prompt: str) -> Path:
-        o = self.orchestrator
+        o = self.runtime
         o.run_role_phase("communicator", DELIVERY, 0, required_outputs_for("communicator", DELIVERY), user_prompt)
-        final_path = o.communicator.latest_final_delivery(task_id)
+        final_path = o.latest_final_delivery(task_id)
         if not final_path:
             raise TaskFailedError("Communicator did not produce final_delivery.md")
-        return o._publish_delivery(task_id, final_path)
+        return o.publish_delivery(task_id, final_path)

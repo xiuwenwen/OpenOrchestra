@@ -64,7 +64,7 @@ def _names(artifacts: list[dict]) -> set[str]:
     return {Path(artifact["path"]).name for artifact in artifacts}
 
 
-def test_tester_visibility_is_empty_except_project_context(tmp_path: Path) -> None:
+def test_tester_visibility_is_empty(tmp_path: Path) -> None:
     phases_by_id: dict[str, dict] = {}
     artifacts = [
         _project_context(tmp_path),
@@ -75,7 +75,30 @@ def test_tester_visibility_is_empty_except_project_context(tmp_path: Path) -> No
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "tester", TESTING, 0)
 
-    assert _names(visible) == {"project_context.md"}
+    assert _names(visible) == set()
+
+
+def test_project_context_visibility_is_role_scoped(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    artifacts = [_project_context(tmp_path)]
+
+    planner_visible = ArtifactVisibilityPolicy().filter_visible_artifacts(
+        artifacts,
+        phases_by_id,
+        "planner",
+        PLANNING_DRAFT,
+        0,
+    )
+    tester_visible = ArtifactVisibilityPolicy().filter_visible_artifacts(
+        artifacts,
+        phases_by_id,
+        "tester",
+        TESTING,
+        0,
+    )
+
+    assert _names(planner_visible) == {"project_context.md"}
+    assert _names(tester_visible) == set()
 
 
 def test_test_judge_visibility_is_current_test_reports_and_current_gate_only(tmp_path: Path) -> None:
@@ -238,6 +261,101 @@ def test_reviewer_visibility_excludes_test_and_gate_noise(tmp_path: Path) -> Non
     }
 
 
+def test_latest_visibility_uses_round_before_input_order(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    old_metadata = _artifact(
+        tmp_path,
+        phases_by_id,
+        role="executor",
+        agent_id="executor-1",
+        artifact_type="merged_patch_metadata.md",
+        phase_type=PATCH_MERGE,
+        round_id=1,
+        label="old-metadata",
+    )
+    old_metadata["version"] = 99
+    latest_metadata = _artifact(
+        tmp_path,
+        phases_by_id,
+        role="executor",
+        agent_id="executor-1",
+        artifact_type="merged_patch_metadata.md",
+        phase_type=PATCH_MERGE,
+        round_id=3,
+        label="latest-metadata",
+    )
+    latest_metadata["version"] = 1
+    artifacts = [latest_metadata, old_metadata]
+
+    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "reviewer", REVIEWING, 0)
+
+    assert _names(visible) == {"latest-metadata-merged_patch_metadata.md"}
+
+
+def test_latest_visibility_uses_version_when_rounds_match(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    old_version = _artifact(
+        tmp_path,
+        phases_by_id,
+        role="executor",
+        agent_id="executor-1",
+        artifact_type="merged_patch_metadata.md",
+        phase_type=PATCH_MERGE,
+        round_id=3,
+        label="old-version",
+    )
+    old_version["version"] = 1
+    latest_version = _artifact(
+        tmp_path,
+        phases_by_id,
+        role="executor",
+        agent_id="executor-1",
+        artifact_type="merged_patch_metadata.md",
+        phase_type=PATCH_MERGE,
+        round_id=3,
+        label="latest-version",
+    )
+    latest_version["version"] = 3
+    artifacts = [latest_version, old_version]
+
+    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "reviewer", REVIEWING, 0)
+
+    assert _names(visible) == {"latest-version-merged_patch_metadata.md"}
+
+
+def test_latest_visibility_uses_declared_round_when_phase_row_is_missing(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    old_metadata = _artifact(
+        tmp_path,
+        phases_by_id,
+        role="executor",
+        agent_id="executor-1",
+        artifact_type="merged_patch_metadata.md",
+        phase_type=PATCH_MERGE,
+        round_id=1,
+        label="declared-old",
+        content="round_id: 1\n",
+    )
+    old_metadata["phase_id"] = "missing-old-phase"
+    latest_metadata = _artifact(
+        tmp_path,
+        phases_by_id,
+        role="executor",
+        agent_id="executor-1",
+        artifact_type="merged_patch_metadata.md",
+        phase_type=PATCH_MERGE,
+        round_id=5,
+        label="declared-latest",
+        content="round_id: 5\n",
+    )
+    latest_metadata["phase_id"] = "missing-latest-phase"
+    artifacts = [latest_metadata, old_metadata]
+
+    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "reviewer", REVIEWING, 0)
+
+    assert _names(visible) == {"declared-latest-merged_patch_metadata.md"}
+
+
 def test_communicator_visibility_uses_only_plan_and_final_executor_artifacts(tmp_path: Path) -> None:
     phases_by_id: dict[str, dict] = {}
     artifacts = [
@@ -256,7 +374,6 @@ def test_communicator_visibility_uses_only_plan_and_final_executor_artifacts(tmp
 
     assert _names(visible) == {
         "selected-selected_plan.md",
-        "merged-merged_patch.diff",
         "metadata-merged_patch_metadata.md",
         "changed-changed_files.md",
         "self-self_check.md",
