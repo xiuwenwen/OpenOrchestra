@@ -34,7 +34,7 @@
 ## Completed Workflow Engine Boundary
 
 - [x] 新建 `harness/workflow/engine.py`。
-- [x] 迁移 new project flow：planning -> execution/test -> review judgement -> delivery。
+- [x] 迁移 new project flow：planning -> execution/test -> reviewer verdict -> delivery。
 - [x] 迁移 bugfix flow。
 - [x] 迁移 feature change flow。
 - [x] 迁移 misc flow。

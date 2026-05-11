@@ -63,7 +63,7 @@
 ### A3. Prompt 合同、角色指令、输出合同散落
 
 - 证据：
-  - `ROLE_INSTRUCTIONS` 在 `harness/core/orchestrator.py`。
+  - 已新增 `harness/contracts/role_contracts.py` 作为合同入口，但 prompt specialization 和 visibility 仍需继续向 contract registry 收敛。
   - planner/tester specializations 在 `harness/prompts/builder.py`。
   - output contract lines 在 `harness/artifacts/schemas.py`。
   - prompt template 文件也存在 `harness/prompts/templates/`。
@@ -96,7 +96,7 @@
 
 ### A8. Test gate 绕过统一 subprocess runner
 
-- 证据：Agent adapter 走 `SubprocessRunner`，但 `harness/gates/test_gate.py` 直接使用 `subprocess.run`。
+- 证据：已新增 `harness/adapters/command_runner.py`，test gate 和 patch gate 已收敛到统一 runner；后续还需把 classifier、delivery review 等新增命令路径持续纳入架构测试。
 - 风险：超时、日志、实时输出、命令安全、环境注入、未来 correlation id 行为不一致。
 - 目标：建立 `CommandRunner` port；Agent、test gate、patch gate、classifier、delivery review 都走同一执行抽象。
 
@@ -176,7 +176,7 @@
 
 ### Phase 0：冻结现有行为和文档真实度
 
-- [ ] T0.1 更新 `system_architecture_and_flow.md`
+- [x] T0.1 更新 `system_architecture_and_flow.md`
   - 范围：删除已废弃的 `FINAL_JUDGEMENT` 主流程，标明 `REVIEW_JUDGEMENT` 仅为 legacy/compat 或彻底移除。
   - 验收：文档里的 phase 顺序与 `WorkflowEngine` 一致；README 的 workflow 描述同步。
   - 测试：新增文档一致性测试，至少断言当前主流程 phase 名称不出现废弃路径。
@@ -193,7 +193,7 @@
 
 ### Phase 1：合同集中化
 
-- [ ] T1.1 建立 `harness/contracts/role_contracts.py`
+- [x] T1.1 建立 `harness/contracts/role_contracts.py`
   - 范围：迁移 role instruction、required outputs、visibility rules、output contract lines、prompt specialization selector。
   - 验收：`core/orchestrator.py` 不再定义 `ROLE_INSTRUCTIONS`；`prompts/builder.py` 从 contract registry 读取 specializations。
   - 测试：迁移并扩展 `tests/test_artifact_schemas.py`，覆盖每个 workflow_type + role + phase。
@@ -227,7 +227,7 @@
 
 ### Phase 3：执行与可靠性边界
 
-- [ ] T3.1 统一 command execution port
+- [x] T3.1 统一 command execution port
   - 范围：`SubprocessRunner` 扩展为 `CommandRunner`，覆盖 adapter、test gate、patch gate、classifier、delivery review。
   - 验收：所有 subprocess 调用都走统一 runner；禁止 `shell=True`；命令列表形式强制校验。
   - 测试：新增架构测试，扫描 `subprocess.run/Popen` 只允许在 runner 内部出现。
@@ -306,17 +306,17 @@
 
 这些任务会继续制造错误理解、错误实现或安全风险，应优先完成。
 
-1. [ ] T0.1 更新 `system_architecture_and_flow.md`
+1. [x] T0.1 更新 `system_architecture_and_flow.md`
    - 原因：当前文档仍描述已废弃或弱化的 judgement/final judgement 路径，会误导后续开发。
    - 交付：更新架构图、workflow 描述、README 对应段落。
    - 验收：文档中的主流程与 `WorkflowEngine` 当前行为一致。
 
-2. [ ] T1.1 建立 `harness/contracts/role_contracts.py`
+2. [x] T1.1 建立 `harness/contracts/role_contracts.py`
    - 原因：prompt、required outputs、visibility、输出合同散落，是 role 输入和合同码问题反复出现的根因。
    - 交付：`RoleContractRegistry`，统一 workflow_type + role + phase 的合同入口。
    - 验收：`core/orchestrator.py` 不再定义 `ROLE_INSTRUCTIONS`；prompt builder 和 validator 从合同入口读取。
 
-3. [ ] T3.1 统一 command execution port
+3. [x] T3.1 统一 command execution port
    - 原因：Agent、test gate、patch gate、classifier 等外部命令路径不完全统一，安全、超时、日志、取消语义会漂移。
    - 交付：`CommandRunner` port，所有外部命令调用统一走列表参数形式。
    - 验收：生产代码中 `subprocess.run/Popen` 只允许出现在 runner 实现内；无 `shell=True`。

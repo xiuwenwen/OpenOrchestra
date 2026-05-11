@@ -13,12 +13,12 @@ from harness.adapters.mock_adapter import MockAgentAdapter
 from harness.agents.result import AgentRunResult
 from harness.agents.runner import AgentPhaseRunner
 from harness.artifacts.manager import ArtifactManager
-from harness.artifacts.schemas import required_outputs_for
 from harness.artifacts.validator import ArtifactValidator
 from harness.artifacts.visibility import ARTIFACT_VISIBILITY_RULES, ArtifactVisibilityPolicy
 from harness.communication.communicator import Communicator
 from harness.config.loader import load_config
 from harness.config.runtime import RuntimeConfigService
+from harness.contracts.role_contracts import required_outputs_for, role_instruction_for as contract_role_instruction_for
 from harness.context.staging import InputStagingService
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressCallback, ProgressEvent
@@ -55,63 +55,6 @@ from harness.workflow.engine import WorkflowEngine
 from harness.workspace.manager import WorkspaceManager
 
 
-ROLE_INSTRUCTIONS = {
-    "planner": (
-        "Create planning artifacts only. Analyze the request, existing artifacts, assumptions, risks, "
-        "compatibility constraints, and an actionable task breakdown. Do not modify source files. "
-        "delivery.md is a JSON role return envelope. It must be exactly one JSON object with "
-        "`return_code` set to `0` when you produced the required planning files, even if you identify high risks. "
-        "Complete planning Markdown artifacts must contain `artifact_result_code: 0`."
-    ),
-    "executor": (
-        "Create the artifacts required by the current executor phase. For implementation and fix phases, "
-        "express code changes as unified diff files and supporting notes. For miscellaneous response phases, "
-        "answer the request without modifying project files. Do not decide workflow progression or communicate "
-        "with the user outside required artifacts. delivery.md is a JSON role return envelope. It must be exactly one "
-        "JSON object with `return_code` set to `0` when you produced the required files, regardless of the "
-        "implementation complexity. Complete executor Markdown artifacts must contain `artifact_result_code: 0`."
-    ),
-    "tester": (
-        "Evaluate executor artifacts and available repository state. Produce a single bug_report.md "
-        "with explicit build, test, and bug verdicts plus reproducible evidence. "
-        "IMPORTANT: delivery.md is a JSON role return envelope, not the test verdict. It must be exactly one "
-        "JSON object with `return_code` set to `0` as long as you completed the evaluation and produced the required report, "
-        "even if the test verdict is `test_result_code: -1` or you find critical bugs. "
-        "`artifact_result_code` must be `0` for a complete tester report; put build/test/bug outcomes only in "
-        "`build_result_code`, `test_result_code`, and `bug_result_code` inside bug_report.md."
-    ),
-    "reviewer": (
-        "Review the final executor implementation for correctness, scope control, regressions, maintainability, "
-        "and customer-machine runtime readiness. When this is a code delivery, run the repository on the current machine, "
-        "attempt local isolated dependency setup when needed, and verify the delivered environment actually works. "
-        "If runtime issues are fixable, request changes in `review_report.md`; if the runtime or system conflict is irreconcilable, "
-        "report a blocked environment through the required JSON section in `review_report.md`. delivery.md is a JSON role return envelope. "
-        "It must be exactly one JSON object with `return_code` set to `0` if you completed the review, regardless of whether "
-        "the review verdict is `review_decision_code: 0`, `review_decision_code: 1`, or `review_decision_code: -1`. "
-        "`review_report.md` must contain `artifact_result_code: 0` when complete."
-    ),
-    "judge": (
-        "Make the phase decision from collected artifacts only. Produce a strict machine-readable decision "
-        "and a concise rationale. Do not create implementation changes. delivery.md is a JSON role return envelope, "
-        "not the phase verdict. It must be exactly one JSON object with `return_code` set to `0` if you rendered a "
-        "clear decision, even when `decision.json` contains `decision: fail` or `decision: changes_required`. "
-        "`decision_summary.md` must contain `artifact_result_code: 0` when complete."
-    ),
-    "communicator": (
-        "Create customer-facing delivery artifacts only. Use the accepted plan and final executor implementation to "
-        "describe what was built, how it works, and how the customer should run it. delivery.md is a JSON role return envelope. "
-        "It must be exactly one JSON object with `return_code` set to `0` if the final delivery documentation is complete. "
-        "`final_delivery.md` and `usage_guide.md` must contain `artifact_result_code: 0` when complete."
-    ),
-}
-
-ROLE_INSTRUCTIONS_BY_WORKFLOW = {
-    NEW_PROJECT: ROLE_INSTRUCTIONS,
-    BUGFIX: ROLE_INSTRUCTIONS,
-    FEATURE_CHANGE: ROLE_INSTRUCTIONS,
-    MISC: ROLE_INSTRUCTIONS,
-}
-
 SINGLE_EXECUTOR_FIX_PHASES = {FIXING, REVIEW_FIXING}
 FixRoundLimitCallback = Callable[[str, int], str]
 
@@ -137,7 +80,6 @@ class Orchestrator:
         self.communicator = Communicator(self.repository)
         self.judge = MockJudge()
         self.prompt_builder = PromptBuilder()
-        self.role_instructions_by_workflow = ROLE_INSTRUCTIONS_BY_WORKFLOW
         self.materialized_repo_service = MaterializedRepoService(
             self.repository,
             self.workspace_manager,
@@ -580,7 +522,7 @@ class Orchestrator:
         return self.test_gate_service.harness_test_command_argv(command)
 
     def _timeout_output_to_text(self, value: str | bytes | None) -> str:
-        return self.test_gate_service.timeout_output_to_text(value)
+        return self.test_gate_service.command_runner.decode_timeout_stream(value)
 
     def _require_harness_test_commands(self) -> bool:
         return self.test_gate_service.require_harness_test_commands()
@@ -770,8 +712,7 @@ class Orchestrator:
         return metadata
 
     def role_instruction_for(self, role: str) -> str:
-        workflow_type = self._active_workflow_type or NEW_PROJECT
-        return self.role_instructions_by_workflow.get(workflow_type, ROLE_INSTRUCTIONS).get(role, ROLE_INSTRUCTIONS.get(role, ""))
+        return contract_role_instruction_for(role, self._active_workflow_type or NEW_PROJECT)
 
     def _workflow_prompt(self, user_prompt: str, workflow_type: str) -> str:
         if workflow_type == BUGFIX:

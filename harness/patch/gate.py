@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import re
 import shutil
-import subprocess
 import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+from harness.adapters.command_runner import CommandRunner
 
 
 FORBIDDEN_PATCH_TOP_LEVEL_NAMES = {"artifacts", "deliver", "deliveries", "workspaces"}
@@ -40,6 +41,7 @@ SENSITIVE_NAME_PATTERN = re.compile(
 
 
 CopySourceFn = Callable[[Path, Path], None]
+_COMMAND_RUNNER = CommandRunner()
 
 
 @dataclass(frozen=True)
@@ -410,12 +412,9 @@ def _run_apply_check(patch_path: Path, source_repo: Path | None, copy_source: Co
     with tempfile.TemporaryDirectory(prefix="harness-patch-check-") as tmp:
         check_dir = Path(tmp) / "repo"
         _prepare_source_tree(source_repo, check_dir, copy_source)
-        completed = subprocess.run(
+        completed = _COMMAND_RUNNER.run_capture(
             ["git", "apply", "--check", "--whitespace=nowarn", str(patch_path)],
             cwd=check_dir,
-            text=True,
-            capture_output=True,
-            check=False,
         )
         return CommandResult(
             "pass" if completed.returncode == 0 else "fail",
@@ -447,12 +446,9 @@ def _materialize_and_diff_check(
         shutil.rmtree(repo_dir)
     _prepare_source_tree(source_repo, tmp_repo_dir, copy_source)
     _initialize_diff_check_repo(tmp_repo_dir)
-    completed = subprocess.run(
+    completed = _COMMAND_RUNNER.run_capture(
         ["git", "apply", "--whitespace=nowarn", str(patch_path)],
         cwd=tmp_repo_dir,
-        text=True,
-        capture_output=True,
-        check=False,
     )
     materialize = CommandResult(
         "success" if completed.returncode == 0 else "failed",
@@ -465,12 +461,9 @@ def _materialize_and_diff_check(
         shutil.rmtree(tmp_repo_dir, ignore_errors=True)
         return None, materialize, CommandResult("skipped", diff_check_command, None, "", "Materialization failed.")
     _stage_new_files_for_diff_check(tmp_repo_dir, changed_files)
-    diff_check_completed = subprocess.run(
+    diff_check_completed = _COMMAND_RUNNER.run_capture(
         ["git", "diff", "--check"],
         cwd=tmp_repo_dir,
-        text=True,
-        capture_output=True,
-        check=False,
     )
     diff_check = CommandResult(
         "pass" if diff_check_completed.returncode == 0 else "fail",
@@ -516,20 +509,17 @@ def _prepare_source_tree(source_repo: Path | None, destination: Path, copy_sourc
 def _initialize_diff_check_repo(repo_dir: Path) -> None:
     if not shutil.which("git"):
         return
-    subprocess.run(["git", "init", "-q"], cwd=repo_dir, text=True, capture_output=True, check=False)
-    subprocess.run(["git", "add", "-A"], cwd=repo_dir, text=True, capture_output=True, check=False)
+    _COMMAND_RUNNER.run_capture(["git", "init", "-q"], cwd=repo_dir)
+    _COMMAND_RUNNER.run_capture(["git", "add", "-A"], cwd=repo_dir)
 
 
 def _stage_new_files_for_diff_check(repo_dir: Path, changed_files: list[Path]) -> None:
     safe_paths = [str(path) for path in changed_files if _is_safe_relative_path(path)]
     if not safe_paths:
         return
-    subprocess.run(
+    _COMMAND_RUNNER.run_capture(
         ["git", "add", "-N", "--", *safe_paths],
         cwd=repo_dir,
-        text=True,
-        capture_output=True,
-        check=False,
     )
 
 

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from harness.agents.result import AgentRunResult
-from harness.artifacts.schemas import required_outputs_for
+from harness.contracts.role_contracts import required_outputs_for
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressEvent
 from harness.core.state_machine import (

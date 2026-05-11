@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from harness.artifacts.schemas import ARTIFACT_VISIBILITY_RULES, output_contract_lines_for, required_outputs_for, role_phase_contract_for
+from pathlib import Path
+
+from harness.artifacts.schemas import ARTIFACT_VISIBILITY_RULES
+from harness.contracts.role_contracts import (
+    output_contract_lines_for,
+    required_outputs_for,
+    role_contract_for,
+    role_instruction_for,
+    role_phase_contract_for,
+)
 
 
 def test_required_outputs_always_include_delivery_envelope() -> None:
@@ -46,3 +55,18 @@ def test_role_phase_contract_binds_outputs_and_visibility() -> None:
         ("orchestrator", ("objective_gate.md", "test_gate.md")),
         ("tester", ("bug_report.md",)),
     }
+
+
+def test_role_contract_registry_binds_instruction_outputs_and_contract_lines() -> None:
+    contract = role_contract_for("feature_change", "tester", "TESTING")
+
+    assert contract.role_instruction == role_instruction_for("tester", "feature_change")
+    assert contract.required_outputs == ("bug_report.md", "delivery.md")
+    assert any("Do not copy `build_result_code`" in line for line in contract.output_contract_lines)
+
+
+def test_orchestrator_no_longer_owns_role_instruction_contracts() -> None:
+    source = Path("harness/core/orchestrator.py").read_text(encoding="utf-8")
+
+    assert "ROLE_INSTRUCTIONS =" not in source
+    assert "ROLE_INSTRUCTIONS_BY_WORKFLOW" not in source

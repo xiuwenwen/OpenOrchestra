@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 
 from harness.agents.context import AgentRunContext
-from harness.artifacts.schemas import output_contract_lines_for
+from harness.contracts.role_contracts import output_contract_lines_for
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE
 PLANNER_SPECIALIZATIONS: dict[int, list[tuple[str, str, list[str]]]] = {
     1: [

@@ -6,6 +6,7 @@ import sys
 import threading
 from pathlib import Path
 
+from harness.adapters.command_runner import CommandRunner
 from harness.ui.terminal import TerminalStatusLine
 
 
@@ -13,6 +14,7 @@ class SubprocessRunner:
     def __init__(self, stream_output: bool = False, stream_prefix: str = ""):
         self.stream_output = stream_output
         self.stream_prefix = stream_prefix
+        self.command_runner = CommandRunner()
 
     def run(
         self,
@@ -24,6 +26,7 @@ class SubprocessRunner:
         input_text: str | None = None,
         env: dict[str, str] | None = None,
     ) -> int:
+        self.command_runner.validate_command(command)
         timeout = timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,8 +71,8 @@ class SubprocessRunner:
                 return return_code
         except subprocess.TimeoutExpired as exc:
             # Kept for compatibility with tests or alternate subprocess implementations.
-            stdout_path.write_text(self._decode_timeout_stream(exc.stdout), encoding="utf-8")
-            stderr_path.write_text(self._decode_timeout_stream(exc.stderr) + "\nTIMEOUT\n", encoding="utf-8")
+            stdout_path.write_text(self.command_runner.decode_timeout_stream(exc.stdout), encoding="utf-8")
+            stderr_path.write_text(self.command_runner.decode_timeout_stream(exc.stderr) + "\nTIMEOUT\n", encoding="utf-8")
             return 124
 
     def _copy_stream(self, stream, handle, live_handle) -> None:
@@ -85,39 +88,3 @@ class SubprocessRunner:
                     TerminalStatusLine.write_live(f"{self.stream_prefix}{chunk}", live_handle)
         finally:
             stream.close()
-
-    def _legacy_run(
-        self,
-        command: list[str],
-        cwd: Path,
-        timeout: int | None,
-        stdout_path: Path,
-        stderr_path: Path,
-        input_text: str | None,
-        env: dict[str, str] | None,
-    ) -> int:
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=cwd,
-                input=input_text,
-                text=True,
-                capture_output=True,
-                timeout=timeout if timeout and timeout > 0 else None,
-                check=False,
-                env={**os.environ, **env} if env else None,
-            )
-            stdout_path.write_text(completed.stdout, encoding="utf-8")
-            stderr_path.write_text(completed.stderr, encoding="utf-8")
-            return completed.returncode
-        except subprocess.TimeoutExpired as exc:
-            stdout_path.write_text(self._decode_timeout_stream(exc.stdout), encoding="utf-8")
-            stderr_path.write_text(self._decode_timeout_stream(exc.stderr) + "\nTIMEOUT\n", encoding="utf-8")
-            return 124
-
-    def _decode_timeout_stream(self, value: str | bytes | None) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, bytes):
-            return value.decode("utf-8", errors="replace")
-        return value

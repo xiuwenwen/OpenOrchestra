@@ -225,9 +225,9 @@ OpenOrchestra 支持四类工作流。
 
 ### `new_project`
 
-用于从零创建项目。流程包含规划互审、方案合并审阅、执行、patch merge、测试、审查裁决和交付。
+用于从零创建项目。流程包含规划互审、方案合并审阅、执行、patch merge、测试、审查、必要的审查修复/回归测试和交付。
 
-Used to create a project from scratch. The flow includes planning peer review, plan merge review, execution, patch merge, testing, review judgement, and delivery.
+Used to create a project from scratch. The flow includes planning peer review, plan merge review, execution, patch merge, testing, reviewer verdict, optional review fixes/regression testing, and delivery.
 
 ```text
 PLANNING_DRAFT
@@ -236,22 +236,22 @@ PLAN_REVIEW
 EXECUTION
 PATCH_MERGE
 TESTING / TEST_JUDGEMENT / FIXING loop
-REVIEWING / REVIEW_JUDGEMENT / REVIEW_FIXING loop
+REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop
 DELIVERY
 ```
 
 ### `bugfix`
 
-用于修复已有项目。它跳过完整规划，先在修复、patch merge、测试和测试裁决之间循环，通过后进入审查裁决和交付。
+用于修复已有项目。它跳过完整规划，先在修复、patch merge、测试和测试裁决之间循环，通过后进入审查、必要的审查修复/回归测试和交付。
 
-Used to repair an existing project. It skips full planning, loops over fixing, patch merge, testing, and test judgement, then runs review judgement before delivery.
+Used to repair an existing project. It skips full planning, loops over fixing, patch merge, testing, and test judgement, then runs reviewer verdict handling before delivery.
 
 ```text
 FIXING
 PATCH_MERGE
 TESTING
 TEST_JUDGEMENT
-REVIEWING / REVIEW_JUDGEMENT / REVIEW_FIXING loop
+REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop
 DELIVERY
 ```
 
@@ -269,19 +269,18 @@ Used for explanations, analysis, and advice that do not create or modify project
 
 ## Artifact Contract / 交付契约
 
-Every role must write `delivery.md`. It must contain a numeric return code field:
+Every role must write `delivery.md`. It is a JSON role return envelope, not the business verdict:
 
-每个角色都必须写入 `delivery.md`。文件内必须包含 numeric return code 字段：
+每个角色都必须写入 `delivery.md`。它是 JSON 角色返回信封，不是业务判断：
 
-```markdown
-return_code: 0
-
-# Role Delivery
-
-role: executor
-phase: EXECUTION
-role_return_code: 0
-summary: Produced implementation artifacts.
+```json
+{
+  "return_code": 0,
+  "task_status": "success",
+  "role_return_code": 0,
+  "produced_files": ["delivery.md"],
+  "known_risks": []
+}
 ```
 
 Return code meanings:
@@ -298,17 +297,17 @@ Return code meanings:
 | `-2` | Required outputs are missing, empty, or invalid. |
 | `-3` | Tool, runtime, adapter, or internal execution error. |
 
-Every required Markdown artifact must also start with:
+Every required Markdown artifact must also contain:
 
-每个必需 Markdown artifact 也必须以此开头：
+每个必需 Markdown artifact 也必须包含：
 
 ```markdown
 artifact_result_code: 0
 ```
 
-Business verdicts must use numeric fields such as `test_result_code`, `review_decision_code`, `peer_review_code`, `decision_code`, and `final_delivery_code`. Do not use natural-language verdict fields as the delivery status.
+Business verdicts must use numeric fields such as `test_result_code`, `review_decision_code`, `peer_review_code`, `decision_code`, and `final_delivery_code`. Do not copy those verdict codes into `return_code` or `artifact_result_code`.
 
-业务判断必须使用 numeric 字段，例如 `test_result_code`、`review_decision_code`、`peer_review_code`、`decision_code` 和 `final_delivery_code`。不要用自然语言字段表达交付状态。
+业务判断必须使用 numeric 字段，例如 `test_result_code`、`review_decision_code`、`peer_review_code`、`decision_code` 和 `final_delivery_code`。不要把这些业务判断码复制到 `return_code` 或 `artifact_result_code`。
 
 ## Patch Gate / 补丁门禁
 

@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import shlex
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from harness.adapters.command_runner import CommandRunner
 from harness.artifacts.manager import ArtifactManager
 from harness.core.errors import TaskFailedError
 from harness.state.repository import StateRepository
@@ -26,12 +26,14 @@ class TestGateService:
         artifact_manager: ArtifactManager,
         latest_materialized_repo: MaterializedRepoProvider,
         markdown_field: MarkdownFieldReader,
+        command_runner: CommandRunner | None = None,
     ):
         self.config = config
         self.repository = repository
         self.artifact_manager = artifact_manager
         self.latest_materialized_repo = latest_materialized_repo
         self.markdown_field = markdown_field
+        self.command_runner = command_runner or CommandRunner()
 
     def run(self, task_id: str, round_id: int) -> bool:
         repo_dir = self.latest_materialized_repo(task_id)
@@ -48,24 +50,15 @@ class TestGateService:
             for index, command in enumerate(commands, start=1):
                 stdout_path = log_dir / f"command_{index}.stdout.log"
                 stderr_path = log_dir / f"command_{index}.stderr.log"
-                try:
-                    argv = self.harness_test_command_argv(command)
-                    completed = subprocess.run(
-                        argv,
-                        cwd=repo_dir,
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                        timeout=int(self.config.get("testing", {}).get("timeout_seconds", 120)),
-                    )
-                    exit_code: int | str = completed.returncode
-                    stdout = completed.stdout
-                    stderr = completed.stderr
-                except subprocess.TimeoutExpired as exc:
-                    exit_code = "timeout"
-                    stdout = self.timeout_output_to_text(exc.stdout)
-                    stderr = self.timeout_output_to_text(exc.stderr)
-                    stderr = (stderr + "\n" if stderr else "") + f"Command timed out after {exc.timeout}s."
+                argv = self.harness_test_command_argv(command)
+                completed = self.command_runner.run_capture(
+                    argv,
+                    cwd=repo_dir,
+                    timeout_seconds=int(self.config.get("testing", {}).get("timeout_seconds", 120)),
+                )
+                exit_code: int | str = "timeout" if completed.timed_out else completed.returncode
+                stdout = completed.stdout
+                stderr = completed.stderr
                 stdout_path.write_text(stdout, encoding="utf-8")
                 stderr_path.write_text(stderr, encoding="utf-8")
                 results.append(
@@ -99,13 +92,6 @@ class TestGateService:
         if not argv:
             raise TaskFailedError("Invalid Harness test command: command is empty")
         return argv
-
-    def timeout_output_to_text(self, value: str | bytes | None) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, bytes):
-            return value.decode("utf-8", errors="replace")
-        return value
 
     def require_harness_test_commands(self) -> bool:
         testing = self.config.get("testing", {})

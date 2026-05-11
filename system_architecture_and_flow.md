@@ -162,9 +162,9 @@ stateDiagram-v2
     
     state "Review Loop" as RL {
         TEST_JUDGEMENT --> REVIEWING: Passed (Tests OK)
-        REVIEWING --> REVIEW_JUDGEMENT: Reviewer evaluates code quality
-        
-        REVIEW_JUDGEMENT --> REVIEW_FIXING: Rejected (Code smells/Regressions)
+        REVIEWING --> DELIVERY: Reviewer approves with runtime-ready verdict
+
+        REVIEWING --> REVIEW_FIXING: Reviewer requests code or runtime fixes
         REVIEW_FIXING --> PATCH_MERGE_2: Update implementation
         PATCH_MERGE_2 --> REGRESSION_TESTING
         REGRESSION_TESTING --> TEST_JUDGEMENT_2
@@ -173,8 +173,6 @@ stateDiagram-v2
     }
     
     state "Delivery Block" as DB {
-        REVIEW_JUDGEMENT --> FINAL_JUDGEMENT: Review approved
-        FINAL_JUDGEMENT --> DELIVERY: Final Sanity Check Passed
         DELIVERY --> COMPLETED: Communicator generates final_delivery.md
     }
     

@@ -7,7 +7,7 @@ from typing import Any
 
 from harness.agents.result import ArtifactRef
 from harness.artifacts.hashing import sha256_file
-from harness.artifacts.schemas import required_outputs_for
+from harness.contracts.role_contracts import required_outputs_for
 
 
 MATERIALIZED_SUCCESS_MARKER = ".harness_materialized_success.json"
