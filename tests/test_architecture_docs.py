@@ -33,3 +33,11 @@ def test_delivery_handoff_logic_is_not_embedded_in_main_entrypoint() -> None:
     assert "from harness.delivery.handoff import" in text
     assert "def build_delivery_handoff" not in text
     assert "def _delivery_run_commands" not in text
+
+
+def test_terminal_dashboard_logic_is_not_embedded_in_main_entrypoint() -> None:
+    text = Path("harness/main.py").read_text(encoding="utf-8")
+
+    assert "from harness.ui.terminal_dashboard import" in text
+    assert "class DashboardProgressReporter" not in text
+    assert "class ConsoleProgressReporter" not in text
