@@ -72,9 +72,9 @@
 
 ### A4. 状态机仍以字符串和宽松表驱动
 
-- 证据：`harness/state/repository.py` 的 `TASK_STATUSES` 包含所有 phase type，且仍保留 `FINAL_JUDGEMENT`、`PLAN_JUDGEMENT` 等历史状态；phase/agent/task 更新主要是字符串检查。
-- 风险：非法状态跳转不容易被阻止，历史状态和当前工作流混杂会继续污染 UI、文档和 visibility 规则。
-- 目标：显式 `TaskStateMachine`、`PhaseStateMachine`、`AgentRunStateMachine`，用 transition table 限制状态转换，并把 legacy phase 标为 deprecated。
+- 证据：已新增 `harness/state/transitions.py`，task/phase/agent run 更新会校验 transition table；但 task 状态仍兼容历史 phase type，包括 `FINAL_JUDGEMENT`、`PLAN_JUDGEMENT`。
+- 风险：legacy phase 仍会出现在 UI/历史数据中，后续要继续把 legacy phase 标为 deprecated 并从新流程入口移除。
+- 目标：保留 transition table，继续收紧 task status 与 phase type 的关系，并为 legacy resume 提供显式兼容层。
 
 ### A5. Round ID 语义过载
 
@@ -215,7 +215,7 @@
   - 验收：workflow、visibility、delivery 不再直接依赖裸 dict；UI adapter 可在边界转换成 JSON。
   - 测试：repository contract tests 覆盖类型转换和缺省值。
 
-- [ ] T2.2 建立状态机 transition table
+- [x] T2.2 建立状态机 transition table
   - 范围：task/phase/agent run 的合法状态转换。
   - 验收：非法转换抛出明确异常；legacy resume 恢复路径有显式例外。
   - 测试：覆盖成功、失败、checkpoint recovery、timeout、OUTPUT_INVALID。
@@ -335,7 +335,7 @@
    - 交付：`TaskRecord`、`PhaseRecord`、`AgentRunRecord`、`ArtifactRecord`。
    - 验收：repository 边界负责 dict/dataclass 转换；业务层不直接读取裸 SQLite row。
 
-6. [ ] T2.2 建立状态机 transition table
+6. [x] T2.2 建立状态机 transition table
    - 原因：当前状态主要是字符串集合检查，不能表达合法跳转。
    - 交付：task/phase/agent run transition table。
    - 验收：非法状态转换抛明确异常；checkpoint recovery、timeout、OUTPUT_INVALID 有显式路径。

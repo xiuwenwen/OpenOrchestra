@@ -154,6 +154,43 @@ def test_repository_rejects_invalid_status_values(tmp_path: Path) -> None:
         repo.update_agent_run_status(run_id, "SKIPPED")
 
 
+def test_repository_enforces_phase_and_agent_transition_tables(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    task_id = repo.create_task("transition validation")
+    phase_id = repo.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+    run_id = repo.create_agent_run(task_id, phase_id, "planner", "planner-1", 0)
+
+    repo.update_agent_run_status(run_id, "COMPLETED")
+    repo.update_phase_status(phase_id, "COMPLETED")
+
+    with pytest.raises(ValueError, match="Invalid phase status transition"):
+        repo.update_phase_status(phase_id, "FAILED")
+    with pytest.raises(ValueError, match="Invalid agent run status transition"):
+        repo.update_agent_run_status(run_id, "FAILED")
+
+
+def test_repository_allows_explicit_checkpoint_recovery_transition(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    task_id = repo.create_task("checkpoint recovery")
+    phase_id = repo.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+
+    repo.update_phase_status(phase_id, "FAILED")
+    repo.update_phase_status(phase_id, "COMPLETED")
+
+    assert repo.list_phases(task_id)[0]["status"] == "COMPLETED"
+
+
+def test_repository_enforces_task_transition_table(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    task_id = repo.create_task("task transition")
+
+    repo.update_task(task_id, status="RUNNING")
+    repo.update_task(task_id, status="COMPLETED")
+
+    with pytest.raises(ValueError, match="Invalid task status transition"):
+        repo.update_task(task_id, status="RUNNING")
+
+
 def test_repository_assigns_artifact_version_inside_insert_lock(tmp_path: Path) -> None:
     repo = StateRepository(StateDB(tmp_path / "harness.db"))
     task_id = repo.create_task("artifact versions")
