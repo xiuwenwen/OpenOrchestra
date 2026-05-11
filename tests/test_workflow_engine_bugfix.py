@@ -108,6 +108,25 @@ def test_orchestrator_feature_change_flow_completes(tmp_path: Path) -> None:
     assert FINAL_JUDGEMENT not in phases
     assert final_delivery.exists()
 
+
+def test_completed_task_can_be_reused_for_followup_project_workflow(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("Build a small app", workflow_type=NEW_PROJECT)
+
+    first_delivery = orchestrator.run_task(task_id, workflow_type=NEW_PROJECT)
+    second_delivery = orchestrator.run_task(
+        task_id,
+        workflow_type=FEATURE_CHANGE,
+        user_prompt_override="Add CSV export to the existing app",
+    )
+
+    task = orchestrator.repository.get_task(task_id)
+    assert task["status"] == "COMPLETED"
+    assert "Follow-up request:\nAdd CSV export to the existing app" in task["user_prompt"]
+    assert first_delivery.exists()
+    assert second_delivery.exists()
+    assert len({phase["task_id"] for phase in orchestrator.repository.list_phases(task_id)}) == 1
+
 def test_source_repo_is_used_only_for_existing_project_workflows(tmp_path: Path) -> None:
     source_repo = tmp_path / "source"
     source_repo.mkdir()

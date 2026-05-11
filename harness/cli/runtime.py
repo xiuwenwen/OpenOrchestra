@@ -43,6 +43,26 @@ def run_once(
     return 0
 
 
+def run_existing(
+    orchestrator: Orchestrator,
+    task_id: str,
+    prompt: str,
+    workflow_type: str = NEW_PROJECT,
+    project_context_md: str | None = None,
+) -> int:
+    if project_context_md:
+        orchestrator.attach_project_context(task_id, project_context_md)
+    result_path = orchestrator.run_task(task_id, workflow_type=workflow_type, user_prompt_override=prompt)
+    if workflow_type == MISC:
+        print(f"response: {Path(result_path)}")
+    else:
+        usage_guide = orchestrator.communicator.latest_usage_guide(task_id)
+        for line in format_delivery_handoff(Path(result_path), usage_guide):
+            print(line)
+        print(format_total_elapsed(orchestrator.repository.get_task(task_id)))
+    return 0
+
+
 def classify_workflow(prompt: str, backend: str, config: dict[str, Any] | None = None) -> tuple[str, str | None]:
     workflow_type, _log_dir, fallback_answer = WorkflowClassifier(backend, config=config).classify_with_fallback(prompt)
     return workflow_type, fallback_answer

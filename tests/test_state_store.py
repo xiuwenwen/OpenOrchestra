@@ -295,6 +295,30 @@ def test_repository_enforces_task_transition_table(tmp_path: Path) -> None:
         repo.update_task(task_id, status="RUNNING")
 
 
+def test_repository_can_explicitly_reopen_completed_task_for_followup(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    task_id = repo.create_task("task transition")
+
+    repo.update_task(task_id, status="RUNNING")
+    repo.update_task(task_id, status="COMPLETED")
+    repo.reopen_task_for_followup(task_id)
+
+    task = repo.get_task(task_id)
+    assert task["status"] == "RUNNING"
+    assert task["current_phase"] == "RUNNING"
+
+
+def test_repository_appends_followup_prompt_turns(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    task_id = repo.create_task("Build a weather app")
+
+    repo.append_task_prompt_turn(task_id, "Add export")
+    repo.append_task_prompt_turn(task_id, "Add export")
+
+    prompt = repo.get_task(task_id)["user_prompt"]
+    assert prompt == "Build a weather app\n\nFollow-up request:\nAdd export"
+
+
 def test_repository_assigns_artifact_version_inside_insert_lock(tmp_path: Path) -> None:
     repo = StateRepository(StateDB(tmp_path / "harness.db"))
     task_id = repo.create_task("artifact versions")

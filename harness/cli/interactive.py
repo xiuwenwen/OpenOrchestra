@@ -35,7 +35,7 @@ except ModuleNotFoundError:
         pass
 
 from harness.cli.commands import bare_command_line, command_description, matching_commands, resolve_command
-from harness.cli.runtime import REAL_BACKENDS, classify_workflow, resolve_real_backend, run_once
+from harness.cli.runtime import REAL_BACKENDS, classify_workflow, resolve_real_backend, run_existing, run_once
 from harness.config.user_env import USER_ENV_PATH, save_user_env_value
 from harness.core.misc_chat import MiscChatRunner
 from harness.core.orchestrator import Orchestrator
@@ -336,13 +336,14 @@ class InteractiveCLI:
                     "  /diagnose                Export prompt/log/artifact/event diagnostics for the active task",
                     "  /goal                    Set test/fix loops to fix until done without asking",
                     "  /current                 Show selected historical context",
-                    "  /clear                   Clear selected historical context",
+                    "  /clear                   Clear selected context; the next project request starts a new task",
                     "  /ui                      Start/show the local Web execution viewer",
                     "  /help                    Show this help",
                     "  exit                     Quit",
                     "",
                     "One-shot usage: `orchestra /resume 1`, `orchestra /continue <task_id>`, `orchestra diagnose <task_id>`.",
-                    "Any non-command change request starts a task. If /resume is active, ordinary questions use the historical task as chat context without creating a new workspace.",
+                    "The first non-command project request starts a task. Follow-up project requests reuse the active task; use /clear to start a separate task.",
+                    "If /resume is active, ordinary questions use the historical task as chat context without creating a new workspace.",
                 ]
             )
         )
@@ -475,12 +476,20 @@ class InteractiveCLI:
             return
         if not self.default_workflow:
             print(f"[classifier] workflow_type={workflow_type}", flush=True)
-        effective_prompt = prompt
         project_context_md = None
         if self.active_task_id:
             project_context_md = self._build_project_context_md(self.active_task_id)
+            run_existing(
+                self.orchestrator,
+                self.active_task_id,
+                prompt,
+                workflow_type,
+                project_context_md=project_context_md,
+            )
+            self.ui_store.select_task(self.active_task_id)
+            return
         previous_latest = self._latest_task_id()
-        run_once(self.orchestrator, effective_prompt, workflow_type, project_context_md=project_context_md)
+        run_once(self.orchestrator, prompt, workflow_type, project_context_md=project_context_md)
         latest_task_id = self._latest_task_id()
         if latest_task_id and latest_task_id != previous_latest:
             self.active_task_id = latest_task_id

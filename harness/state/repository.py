@@ -68,6 +68,42 @@ class StateRepository:
                 (configuration, now, task_id),
             )
 
+    def append_task_prompt_turn(self, task_id: str, user_prompt: str) -> None:
+        task = self.get_task(task_id)
+        if not task:
+            raise KeyError(f"Task not found: {task_id}")
+        existing_prompt = str(task["user_prompt"])
+        clean_prompt = user_prompt.strip()
+        if not clean_prompt:
+            return
+        marker = f"\n\nFollow-up request:\n{clean_prompt}"
+        if marker in existing_prompt:
+            return
+        now = utc_now_iso()
+        with self._lock, self.db.connect() as conn:
+            conn.execute(
+                "UPDATE tasks SET user_prompt = ?, updated_at = ? WHERE task_id = ?",
+                (existing_prompt + marker, now, task_id),
+            )
+
+    def reopen_task_for_followup(self, task_id: str) -> None:
+        task = self.get_task(task_id)
+        if not task:
+            raise KeyError(f"Task not found: {task_id}")
+        if str(task["status"]) != COMPLETED:
+            self.update_task(task_id, status=RUNNING)
+            return
+        now = utc_now_iso()
+        with self._lock, self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE tasks
+                SET status = ?, current_phase = ?, current_role = NULL, updated_at = ?
+                WHERE task_id = ?
+                """,
+                (RUNNING, RUNNING, now, task_id),
+            )
+
     def set_task_workflow_type(self, task_id: str, workflow_type: str) -> None:
         now = utc_now_iso()
         with self._lock, self.db.connect() as conn:

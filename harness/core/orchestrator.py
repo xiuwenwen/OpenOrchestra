@@ -101,7 +101,7 @@ class Orchestrator:
         if content.strip():
             self.artifact_manager.create_text_artifact(task_id, "project_context.md", content)
 
-    def run_task(self, task_id: str, workflow_type: str | None = None) -> Path:
+    def run_task(self, task_id: str, workflow_type: str | None = None, user_prompt_override: str | None = None) -> Path:
         task = self.repository.get_task(task_id)
         if not task:
             raise KeyError(f"Task not found: {task_id}")
@@ -110,11 +110,17 @@ class Orchestrator:
         if not task.get("workflow_type"):
             self.repository.set_task_workflow_type(task_id, workflow_type)
 
-        user_prompt = self._workflow_prompt(task["user_prompt"], workflow_type)
+        raw_user_prompt = user_prompt_override or str(task["user_prompt"])
+        if user_prompt_override and user_prompt_override.strip() and user_prompt_override.strip() != str(task["user_prompt"]).strip():
+            self.repository.append_task_prompt_turn(task_id, user_prompt_override)
+        user_prompt = self._workflow_prompt(raw_user_prompt, workflow_type)
         self._active_task_id = task_id
         self._active_workflow_type = workflow_type
         self._active_task_resume_status = str(task.get("status") or "")
-        self.repository.update_task(task_id, status=RUNNING)
+        if str(task.get("status") or "") == COMPLETED:
+            self.repository.reopen_task_for_followup(task_id)
+        else:
+            self.repository.update_task(task_id, status=RUNNING)
         self._emit(
             ProgressEvent(
                 "task_started",

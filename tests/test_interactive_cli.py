@@ -96,20 +96,23 @@ def test_resume_context_does_not_pollute_project_workflow_classification(monkeyp
         captured["config_seen"] = "yes" if config else "no"
         return "feature_change", None
 
-    def fake_run_once(orchestrator, prompt: str, workflow_type: str, project_context_md: str | None = None) -> int:
+    def fake_run_existing(orchestrator, task_id: str, prompt: str, workflow_type: str, project_context_md: str | None = None) -> int:
+        captured["task_id"] = task_id
         captured["run_prompt"] = prompt
         captured["workflow_type"] = workflow_type
         captured["project_context_md"] = project_context_md or ""
         return 0
 
     monkeypatch.setattr(interactive_module, "classify_workflow", fake_classify)
-    monkeypatch.setattr(interactive_module, "run_once", fake_run_once)
+    monkeypatch.setattr(interactive_module, "run_existing", fake_run_existing)
+    monkeypatch.setattr(interactive_module, "run_once", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("active project follow-up must not create a new task")))
 
     cli._run_prompt("add an export button to this project")
 
     assert captured["classified_prompt"] == "add an export button to this project"
     assert captured["backend"] == "mock"
     assert captured["config_seen"] == "yes"
+    assert captured["task_id"] == historical_task_id
     assert captured["workflow_type"] == "feature_change"
     assert captured["run_prompt"] == "add an export button to this project"
     assert "Historical task id:" in captured["project_context_md"]
@@ -475,7 +478,7 @@ def test_history_context_recognizes_embedded_project_markers(tmp_path: Path) -> 
     assert f"- materialized_source_candidate: {source_dir}" in context
 
 
-def test_project_prompt_selects_new_task_for_followup_dashboard(monkeypatch, tmp_path: Path) -> None:
+def test_project_prompt_reuses_active_task_for_followup_dashboard(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     store = main_module.UiEventStore()
     cli = InteractiveCLI(config, "mock", ConsoleProgressReporter(), ui_store=store)
@@ -484,18 +487,18 @@ def test_project_prompt_selects_new_task_for_followup_dashboard(monkeypatch, tmp
 
     monkeypatch.setattr(interactive_module, "classify_workflow", lambda prompt, backend, config=None: ("new_project", None))
 
-    def fake_run_once(orchestrator, prompt: str, workflow_type: str, project_context_md: str | None = None) -> int:
-        task_id = orchestrator.create_task(prompt, workflow_type=workflow_type)
-        orchestrator.repository.update_task(task_id, status="RUNNING")
+    def fake_run_existing(orchestrator, task_id: str, prompt: str, workflow_type: str, project_context_md: str | None = None) -> int:
+        assert task_id == historical_task_id
         store(ProgressEvent("task_started", task_id=task_id, status="RUNNING"))
         return 0
 
-    monkeypatch.setattr(interactive_module, "run_once", fake_run_once)
+    monkeypatch.setattr(interactive_module, "run_once", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("active follow-up must reuse task")))
+    monkeypatch.setattr(interactive_module, "run_existing", fake_run_existing)
 
     cli._run_prompt("Build the next app")
 
-    assert cli.active_task_id != historical_task_id
-    assert store.latest_task_id == cli.active_task_id
+    assert cli.active_task_id == historical_task_id
+    assert store.latest_task_id == historical_task_id
 
 
 def test_bare_continue_invokes_continue_command(monkeypatch, tmp_path: Path) -> None:
