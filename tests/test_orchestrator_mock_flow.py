@@ -383,15 +383,15 @@ def test_regression_testing_runs_harness_test_gate_before_judgement(monkeypatch,
 
     orchestrator._run_regression_test_fix_loop(task_id, "review fix", review_round_id=1, merge_ok=True)
 
-    assert gate_rounds == [1000]
+    assert gate_rounds == [1]
 
 
 def test_regression_round_id_does_not_depend_on_mutable_fix_limit(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
 
-    assert orchestrator.workflow_engine.regression_phase_round_id(2, 3, 5) == 2003
-    assert orchestrator.workflow_engine.regression_phase_round_id(2, 3, 15) == 2003
-    assert orchestrator.workflow_engine.regression_phase_round_id(2, 3, None) == 2003
+    assert orchestrator.workflow_engine.regression_phase_round_id(2, 3, 5) == 5
+    assert orchestrator.workflow_engine.regression_phase_round_id(2, 3, 15) == 5
+    assert orchestrator.workflow_engine.regression_phase_round_id(2, 3, None) == 5
 
 
 def test_regression_round_ids_stay_stable_after_fix_limit_extension(monkeypatch, tmp_path: Path) -> None:
@@ -404,6 +404,7 @@ def test_regression_round_ids_stay_stable_after_fix_limit_extension(monkeypatch,
     )
     task_id = orchestrator.create_task("review fix after extension", workflow_type=BUGFIX)
     role_calls: list[tuple[str, int]] = []
+    phase_scopes: list[dict[str, int | str | None] | None] = []
     gate_rounds: list[int] = []
     patch_rounds: list[int] = []
 
@@ -416,6 +417,7 @@ def test_regression_round_ids_stay_stable_after_fix_limit_extension(monkeypatch,
         **kwargs,
     ) -> list[AgentRunResult]:
         role_calls.append((phase, round_id))
+        phase_scopes.append(kwargs.get("phase_scope"))
         return []
 
     def fake_patch_merge(task_id: str, round_id: int, user_prompt: str) -> bool:
@@ -423,7 +425,7 @@ def test_regression_round_ids_stay_stable_after_fix_limit_extension(monkeypatch,
         return True
 
     def fake_judge_phase(task_id: str, phase: str, round_id: int, user_prompt: str) -> dict[str, str]:
-        return {"decision": "pass" if round_id == 1002 else "fail"}
+        return {"decision": "pass" if round_id == 3 else "fail"}
 
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
     monkeypatch.setattr(orchestrator, "run_patch_merge", fake_patch_merge)
@@ -433,9 +435,17 @@ def test_regression_round_ids_stay_stable_after_fix_limit_extension(monkeypatch,
 
     orchestrator._run_regression_test_fix_loop(task_id, "review fix after extension", review_round_id=1, merge_ok=True)
 
-    assert gate_rounds == [1000, 1001, 1002]
-    assert patch_rounds == [1001, 1002]
-    assert [round_id for phase, round_id in role_calls if phase == REVIEW_FIXING] == [1001, 1002]
+    assert gate_rounds == [1, 2, 3]
+    assert patch_rounds == [2, 3]
+    assert [round_id for phase, round_id in role_calls if phase == REVIEW_FIXING] == [2, 3]
+    assert [
+        scope
+        for (phase, _round_id), scope in zip(role_calls, phase_scopes)
+        if phase == REVIEW_FIXING
+    ] == [
+        {"loop_type": "regression_test_fix", "parent_round_id": 1, "iteration_id": 1},
+        {"loop_type": "regression_test_fix", "parent_round_id": 1, "iteration_id": 2},
+    ]
 
 
 def test_planning_block_retries_until_plan_review_approves(monkeypatch, tmp_path: Path) -> None:

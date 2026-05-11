@@ -29,9 +29,6 @@ from harness.core.state_machine import (
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC
 
 
-REGRESSION_ROUND_STRIDE = 1000
-
-
 class PhaseRunner(Protocol):
     def run_role_phase(
         self,
@@ -41,6 +38,7 @@ class PhaseRunner(Protocol):
         required_outputs: list[str],
         user_prompt: str | None = None,
         agent_count_override: int | None = None,
+        phase_scope: dict[str, int | str | None] | None = None,
     ) -> list[AgentRunResult]:
         ...
 
@@ -52,7 +50,14 @@ class GateRunner(Protocol):
     def run_harness_test_gate(self, task_id: str, round_id: int) -> bool:
         ...
 
-    def run_judge_phase(self, task_id: str, phase: str, round_id: int, user_prompt: str) -> dict[str, Any]:
+    def run_judge_phase(
+        self,
+        task_id: str,
+        phase: str,
+        round_id: int,
+        user_prompt: str,
+        phase_scope: dict[str, int | str | None] | None = None,
+    ) -> dict[str, Any]:
         ...
 
 
@@ -366,18 +371,34 @@ class WorkflowEngine:
 
     def run_review_loop(self, task_id: str, user_prompt: str) -> None:
         o = self.runtime
-        for round_id in range(o.config["limits"]["max_review_rounds"]):
-            review_results = o.run_role_phase("reviewer", REVIEWING, round_id, required_outputs_for("reviewer", REVIEWING), user_prompt)
+        review_round_id = 0
+        for review_iteration in range(o.config["limits"]["max_review_rounds"]):
+            review_results = o.run_role_phase(
+                "reviewer",
+                REVIEWING,
+                review_round_id,
+                required_outputs_for("reviewer", REVIEWING),
+                user_prompt,
+                phase_scope=self.phase_scope("review", iteration_id=review_iteration),
+            )
             blocked_reason = self.review_environment_block_reason(review_results)
             if blocked_reason:
                 raise TaskFailedError(f"Reviewer blocked delivery due to runtime environment conflict: {blocked_reason}")
             if self.review_approved(review_results):
                 break
 
-            next_review_round = round_id + 1
-            o.run_role_phase("executor", REVIEW_FIXING, next_review_round, required_outputs_for("executor", REVIEW_FIXING), user_prompt)
-            merge_ok = o.run_patch_merge(task_id, next_review_round, user_prompt)
-            self.run_regression_test_fix_loop(task_id, user_prompt, next_review_round, merge_ok)
+            fix_round_id = self.next_phase_round_id(task_id)
+            o.run_role_phase(
+                "executor",
+                REVIEW_FIXING,
+                fix_round_id,
+                required_outputs_for("executor", REVIEW_FIXING),
+                user_prompt,
+                phase_scope=self.phase_scope("review_fix", parent_round_id=review_round_id, iteration_id=0),
+            )
+            merge_ok = o.run_patch_merge(task_id, fix_round_id, user_prompt)
+            self.run_regression_test_fix_loop(task_id, user_prompt, fix_round_id, merge_ok)
+            review_round_id = self.next_phase_round_id(task_id)
         else:
             raise TaskFailedError("Review was not approved within max_review_rounds")
 
@@ -448,6 +469,11 @@ class WorkflowEngine:
         while True:
             while max_rounds is None or test_round_id < max_rounds:
                 phase_round_id = self.regression_phase_round_id(review_round_id, test_round_id, max_rounds)
+                phase_scope = self.phase_scope(
+                    "regression_test_fix",
+                    parent_round_id=review_round_id,
+                    iteration_id=test_round_id,
+                )
                 if merge_ok:
                     o.run_role_phase(
                         "tester",
@@ -455,19 +481,25 @@ class WorkflowEngine:
                         phase_round_id,
                         required_outputs_for("tester", REGRESSION_TESTING),
                         user_prompt,
+                        phase_scope=phase_scope,
                     )
                     o.run_harness_test_gate(task_id, phase_round_id)
                     test_decision = o.run_judge_phase(task_id, TEST_JUDGEMENT, phase_round_id, user_prompt)
                     if o.judge.is_test_pass(test_decision):
                         return
 
-                next_phase_round = phase_round_id + 1
+                next_phase_round = max(phase_round_id + 1, self.next_phase_round_id(task_id))
                 o.run_role_phase(
                     "executor",
                     REVIEW_FIXING,
                     next_phase_round,
                     required_outputs_for("executor", REVIEW_FIXING),
                     user_prompt,
+                    phase_scope=self.phase_scope(
+                        "regression_test_fix",
+                        parent_round_id=review_round_id,
+                        iteration_id=test_round_id + 1,
+                    ),
                 )
                 merge_ok = o.run_patch_merge(task_id, next_phase_round, user_prompt)
                 test_round_id += 1
@@ -477,7 +509,28 @@ class WorkflowEngine:
             max_rounds = updated_max_rounds
 
     def regression_phase_round_id(self, review_round_id: int, test_round_id: int, max_rounds: int | None) -> int:
-        return (review_round_id * REGRESSION_ROUND_STRIDE) + test_round_id
+        return review_round_id + test_round_id
+
+    def next_phase_round_id(self, task_id: str) -> int:
+        existing_rounds = [
+            int(phase["round_id"])
+            for phase in self.runtime.repository.list_phases(task_id)
+            if phase["round_id"] is not None
+        ]
+        return max(existing_rounds, default=-1) + 1
+
+    def phase_scope(
+        self,
+        loop_type: str,
+        *,
+        parent_round_id: int | None = None,
+        iteration_id: int | None = None,
+    ) -> dict[str, int | str | None]:
+        return {
+            "loop_type": loop_type,
+            "parent_round_id": parent_round_id,
+            "iteration_id": iteration_id,
+        }
 
     def run_delivery(self, task_id: str, user_prompt: str) -> Path:
         o = self.runtime

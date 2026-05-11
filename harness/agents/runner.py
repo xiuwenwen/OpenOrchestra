@@ -37,6 +37,7 @@ class AgentPhaseRunner:
         required_outputs: list[str],
         user_prompt: str | None = None,
         agent_count_override: int | None = None,
+        phase_scope: dict[str, int | str | None] | None = None,
     ) -> list[AgentRunResult]:
         o = self.orchestrator
         task_id = o._single_active_task_id(user_prompt)
@@ -91,7 +92,16 @@ class AgentPhaseRunner:
             return checkpoint_results
 
         o.repository.update_task(task_id, status=phase, current_phase=phase, current_role=role)
-        phase_id = o.repository.create_phase(task_id, phase, role, round_id)
+        phase_scope = phase_scope or {}
+        phase_id = o.repository.create_phase(
+            task_id,
+            phase,
+            role,
+            round_id,
+            loop_type=phase_scope.get("loop_type"),
+            parent_round_id=phase_scope.get("parent_round_id"),
+            iteration_id=phase_scope.get("iteration_id"),
+        )
         timeout_seconds = o.config_service.timeout_for(task_id, role)
         backend = o._backend_for(task_id, role)
         adapter = o._adapter_for_backend(backend)

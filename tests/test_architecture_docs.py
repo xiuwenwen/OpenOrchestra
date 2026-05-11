@@ -69,3 +69,14 @@ def test_interactive_cli_logic_is_not_embedded_in_main_entrypoint() -> None:
     assert "class HarnessCompleter" not in text
     assert "def run_once" not in text
     assert "def start_ui_server" not in text
+
+
+def test_regression_rounds_do_not_use_stride_encoding() -> None:
+    workflow_engine = Path("harness/workflow/engine.py").read_text(encoding="utf-8")
+    migrations = Path("harness/state/migrations.sql").read_text(encoding="utf-8")
+
+    assert "REGRESSION_ROUND_STRIDE" not in workflow_engine
+    assert "* 1000" not in workflow_engine
+    assert "loop_type TEXT" in migrations
+    assert "parent_round_id INTEGER" in migrations
+    assert "iteration_id INTEGER" in migrations

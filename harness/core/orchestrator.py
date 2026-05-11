@@ -257,6 +257,7 @@ class Orchestrator:
         required_outputs: list[str],
         user_prompt: str | None = None,
         agent_count_override: int | None = None,
+        phase_scope: dict[str, int | str | None] | None = None,
     ) -> list[AgentRunResult]:
         return self.agent_runner.run_role_phase(
             role,
@@ -265,6 +266,7 @@ class Orchestrator:
             required_outputs,
             user_prompt,
             agent_count_override,
+            phase_scope,
         )
 
     def is_failed_resume(self, task_id: str) -> bool:
@@ -348,8 +350,22 @@ class Orchestrator:
     def _run_adapter_with_heartbeat(self, adapter: AgentAdapter, context: AgentRunContext, attempt: int) -> AgentRunResult:
         return self.agent_runner.run_adapter_with_heartbeat(adapter, context, attempt)
 
-    def run_judge_phase(self, task_id: str, phase: str, round_id: int, user_prompt: str) -> dict[str, Any]:
-        results = self.run_role_phase("judge", phase, round_id, required_outputs_for("judge", phase), user_prompt)
+    def run_judge_phase(
+        self,
+        task_id: str,
+        phase: str,
+        round_id: int,
+        user_prompt: str,
+        phase_scope: dict[str, int | str | None] | None = None,
+    ) -> dict[str, Any]:
+        results = self.run_role_phase(
+            "judge",
+            phase,
+            round_id,
+            required_outputs_for("judge", phase),
+            user_prompt,
+            phase_scope=phase_scope,
+        )
         phase_id = results[-1].phase_id
 
         # Check if decision already recorded in state store

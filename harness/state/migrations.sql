@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS phases (
     role TEXT NOT NULL,
     status TEXT NOT NULL,
     round_id INTEGER DEFAULT 0,
+    loop_type TEXT,
+    parent_round_id INTEGER,
+    iteration_id INTEGER,
     started_at TEXT,
     completed_at TEXT
 );

@@ -84,6 +84,27 @@ def test_repository_returns_typed_records_with_mapping_compatibility(tmp_path: P
     assert task.to_dict()["user_prompt"] == "typed"
 
 
+def test_phase_records_include_structured_loop_metadata(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    task_id = repo.create_task("loop metadata")
+    repo.create_phase(
+        task_id,
+        "REGRESSION_TESTING",
+        "tester",
+        2,
+        loop_type="regression_test_fix",
+        parent_round_id=1,
+        iteration_id=1,
+    )
+
+    phase = repo.list_phases(task_id)[0]
+
+    assert phase["round_id"] == 2
+    assert phase["loop_type"] == "regression_test_fix"
+    assert phase["parent_round_id"] == 1
+    assert phase["iteration_id"] == 1
+
+
 def test_repository_row_conversion_goes_through_typed_records() -> None:
     source = Path("harness/state/repository.py").read_text(encoding="utf-8")
 
@@ -115,6 +136,44 @@ def test_state_store_upgrades_existing_tasks_table(tmp_path: Path) -> None:
     assert task is not None
     assert task["workflow_type"] == "new_project"
     assert repo.list_tasks(1)[0]["workflow_type"] == "new_project"
+
+
+def test_state_store_upgrades_existing_phases_table_with_loop_metadata(tmp_path: Path) -> None:
+    db_path = tmp_path / "old_harness.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE tasks (
+                task_id TEXT PRIMARY KEY,
+                user_prompt TEXT NOT NULL,
+                status TEXT NOT NULL,
+                current_phase TEXT,
+                current_role TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE phases (
+                phase_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                phase_type TEXT NOT NULL,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                round_id INTEGER DEFAULT 0,
+                started_at TEXT,
+                completed_at TEXT
+            )
+            """
+        )
+
+    repo = StateRepository(StateDB(db_path))
+    task_id = repo.create_task("upgrade phases")
+    repo.create_phase(task_id, "REGRESSION_TESTING", "tester", 1, loop_type="regression_test_fix")
+
+    assert repo.list_phases(task_id)[0]["loop_type"] == "regression_test_fix"
 
 
 def test_repository_task_workflow_and_latest_task_helpers(tmp_path: Path) -> None:

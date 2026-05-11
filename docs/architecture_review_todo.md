@@ -76,11 +76,11 @@
 - 风险：legacy phase 仍会出现在 UI/历史数据中，后续要继续把 legacy phase 标为 deprecated 并从新流程入口移除。
 - 目标：保留 transition table，继续收紧 task status 与 phase type 的关系，并为 legacy resume 提供显式兼容层。
 
-### A5. Round ID 语义过载
+### A5. Round ID 语义过载已开始结构化
 
-- 证据：普通 test/fix round 使用连续整数；regression round 使用 `review_round_id * 1000 + test_round_id` 编码。
-- 风险：round_id 同时表达 workflow loop、review loop、regression loop，后续查询、UI 展示、artifact visibility、resume 都要理解编码约定。
-- 目标：数据库和 domain model 引入 `loop_type`、`parent_round_id`、`attempt_round_id` 或 `iteration_id`，保留旧 `round_id` 作为显示兼容字段。
+- 证据：phase 表已新增 `loop_type`、`parent_round_id`、`iteration_id`；regression round 不再使用 `review_round_id * 1000 + test_round_id` 编码，而是沿用连续 round 并用结构字段表达 loop 归属。旧 `round_id` 仍保留用于路径、历史 artifact 和 UI 显示兼容。
+- 风险：大部分可见性和历史查询仍以 `round_id` 为排序键，虽然 regression stride 已移除，但后续如果要展示多层 loop，需要进一步让 UI 和 explain 工具展示结构字段。
+- 目标：保持 `round_id` 仅做兼容显示和路径字段，新的 loop 语义都写入结构字段。
 
 ### A6. Artifact 合同仍依赖 Markdown 字段搜索
 
@@ -220,9 +220,9 @@
   - 验收：非法转换抛出明确异常；legacy resume 恢复路径有显式例外。
   - 测试：覆盖成功、失败、checkpoint recovery、timeout、OUTPUT_INVALID。
 
-- [ ] T2.3 解开 round_id 编码
+- [x] T2.3 解开 round_id 编码
   - 范围：新增 `loop_type`、`parent_round_id`、`iteration_id` 字段；保留 `round_id` 显示兼容。
-  - 验收：regression round 不再依赖 `1000` stride；visibility 查询用结构字段。
+  - 验收：regression round 不再依赖 `1000` stride；phase 记录可用结构字段解释 loop 归属。
   - 测试：迁移现有 regression round tests，保留旧 artifact 兼容测试。
 
 ### Phase 3：执行与可靠性边界
@@ -354,7 +354,7 @@
 
 这些任务主要减少长任务、provider 故障、并发和磁盘增长带来的运行风险。
 
-9. [ ] T2.3 解开 round_id 编码
+9. [x] T2.3 解开 round_id 编码
    - 原因：普通 round、review round、regression round 共用一个整数，会污染 visibility、UI 和 resume 逻辑。
    - 交付：新增 `loop_type`、`parent_round_id`、`iteration_id` 或等价模型。
    - 验收：regression round 不再依赖 `1000` stride；旧 artifact 仍兼容读取。

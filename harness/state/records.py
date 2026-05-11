@@ -51,6 +51,9 @@ class PhaseRecord(RecordMapping):
     role: str
     status: str
     round_id: int | None
+    loop_type: str | None
+    parent_round_id: int | None
+    iteration_id: int | None
     started_at: str
     completed_at: str | None
 

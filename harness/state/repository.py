@@ -115,16 +115,50 @@ class StateRepository:
                 ),
             )
 
-    def create_phase(self, task_id: str, phase_type: str, role: str, round_id: int, status: str = "RUNNING") -> str:
+    def create_phase(
+        self,
+        task_id: str,
+        phase_type: str,
+        role: str,
+        round_id: int,
+        status: str = "RUNNING",
+        *,
+        loop_type: str | None = None,
+        parent_round_id: int | None = None,
+        iteration_id: int | None = None,
+    ) -> str:
         PHASE_TRANSITIONS.validate_initial(status)
         phase_id = str(uuid.uuid4())
         with self._lock, self.db.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO phases(phase_id, task_id, phase_type, role, status, round_id, started_at, completed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                INSERT INTO phases(
+                    phase_id,
+                    task_id,
+                    phase_type,
+                    role,
+                    status,
+                    round_id,
+                    loop_type,
+                    parent_round_id,
+                    iteration_id,
+                    started_at,
+                    completed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
-                (phase_id, task_id, phase_type, role, status, round_id, utc_now_iso()),
+                (
+                    phase_id,
+                    task_id,
+                    phase_type,
+                    role,
+                    status,
+                    round_id,
+                    loop_type,
+                    parent_round_id,
+                    iteration_id,
+                    utc_now_iso(),
+                ),
             )
         return phase_id
 
