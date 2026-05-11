@@ -112,6 +112,8 @@ function renderSnapshot(data){
     <div class="sum-sep"></div>
     <div class="sum-item">${pill(task.status)}</div>
     <div class="sum-sep"></div>
+    <div class="sum-item"><span class="sum-label">${uiLanguage==="en"?"Turns":"对话轮次"}</span><span class="sum-val">${esc((data.workflow_runs||[]).length||1)}</span></div>
+    <div class="sum-sep"></div>
     <div class="sum-item"><span class="sum-label">${uiLanguage==="en"?"Workflow":"工作流"}</span><span class="sum-val">${esc(task.workflow_type||"-")}</span></div>
     <div class="sum-sep"></div>
     <div class="sum-item"><span class="sum-label">${uiLanguage==="en"?"Phase":"阶段"}</span><span class="sum-val">${esc(labelPhase(task.current_phase||"-"))}</span></div>
@@ -121,7 +123,7 @@ function renderSnapshot(data){
     ${backendHealth}
     <button class="btn" style="margin-right:10px;padding:3px 8px;font-size:11px;flex-shrink:0" onclick="openConfig()">${uiLanguage==="en"?"Config":"配置"}</button>
     <div class="sum-prompt">${esc(task.user_prompt)}</div>`;
-  renderPipeline(data.workflow_timeline||data.phases||[],task.current_phase,data.workflow_loop_edges||[]);
+  renderPipeline(data.workflow_timeline||data.phases||[],task.current_phase,data.workflow_loop_edges||[],data.workflow_runs||[]);
   renderRoleBar(data.roles||{},runs);
   renderDetail(data);
   renderLog(data.events||[]);
@@ -133,21 +135,45 @@ function backendHealthSummary(health){
   return items.map(h=>`<div class="sum-item" title="${esc(h.message||"")}"><span class="sum-label">${esc(h.backend)}</span>${pill(String(h.state||"").toUpperCase())}</div><div class="sum-sep"></div>`).join("");
 }
 
-function renderPipeline(phases,curPhase,loopEdges){
+function renderPipeline(phases,curPhase,loopEdges,workflowRuns){
   const timeline=buildTimeline(phases,curPhase);
   const root=document.getElementById("pipeline");
   if(!timeline.length){root.innerHTML=`<div class="empty-msg">${esc(t("noPhases"))}</div>`;return}
+  if((workflowRuns||[]).length>1){
+    root.innerHTML=`<div class="pipeline-runs">${workflowRuns.map(run=>renderWorkflowRun(run,curPhase,loopEdges)).join("")}</div>`;
+    scrollCurrentPipelineNode(root);
+    return;
+  }
+  root.innerHTML=renderTimelineRow(timeline,curPhase,loopEdges);
+  scrollCurrentPipelineNode(root);
+}
+
+function renderWorkflowRun(run,curPhase,loopEdges){
+  const title=(uiLanguage==="en"?"Turn ":"对话 ")+(Number(run.turn_index||0)+1);
+  const prompt=short(run.prompt||"",90);
+  return `<div class="run-lane">
+    <div class="run-head">
+      <div class="run-title"><span>${esc(title)}</span>${pill(run.status||"RUNNING")}</div>
+      <div class="run-meta">${esc(run.workflow_type||"-")} · ${esc(run.phase_count||0)} ${uiLanguage==="en"?"phases":"个阶段"}</div>
+      <div class="run-prompt">${esc(prompt)}</div>
+    </div>
+    <div class="run-flow">${renderTimelineRow(run.phases||[],curPhase,loopEdges)}</div>
+  </div>`;
+}
+
+function renderTimelineRow(timeline,curPhase,loopEdges){
   const loopIdx=new Set((loopEdges||[]).map(e=>Number(e.to_index)));
   let html="";
   timeline.forEach((item,i)=>{
+    const globalIdx=Number(item.timeline_index??i);
     const st=item.status||(item.phase_type===curPhase?"RUNNING":"PENDING");
     const isCur=item.phase_type===curPhase&&st!=="COMPLETED";
-    const isLoop=Boolean(item.loop_revisit)||loopIdx.has(Number(item.timeline_index??i));
+    const isLoop=Boolean(item.loop_revisit)||loopIdx.has(globalIdx);
     let cls=st==="COMPLETED"?"done":st==="FAILED"?"fail":isCur?"run":"";
     if(isLoop&&cls!=="run")cls+=" loop";
-    const sel=i===selectedPhaseIdx?"sel":"";
+    const sel=globalIdx===selectedPhaseIdx?"sel":"";
     const icon=phaseIcons[item.phase_type]||"○";
-    html+=`<div class="pipe-node ${cls} ${sel}" onclick="selectPipeNode(${i})" title="${esc(labelPhase(item.phase_type))}">
+    html+=`<div class="pipe-node ${cls} ${sel}" onclick="selectPipeNode(${globalIdx})" title="${esc(labelPhase(item.phase_type))}">
       <div class="dot">${st==="COMPLETED"?"✓":st==="FAILED"?"✕":icon}</div>
       <div class="pipe-label">${esc(labelPhase(item.phase_type))}</div>
       <div class="pipe-round">R${esc(item.round_id??"0")}</div>
@@ -159,10 +185,12 @@ function renderPipeline(phases,curPhase,loopEdges){
       html+=`<div class="pipe-line ${lineCls}"></div>`;
     }
   });
-  root.innerHTML=html;
-  // auto-scroll to current if changed
+  return html;
+}
+
+function scrollCurrentPipelineNode(root){
   const cur=root.querySelector(".pipe-node.run")||root.querySelector(".pipe-node.sel");
-  const curIdx=cur?Array.from(root.children).indexOf(cur):-1;
+  const curIdx=cur?selectedPhaseIdx+":"+cur.textContent:-1;
   const scrollKey=currentTask+":"+curIdx;
   if(cur && lastScrolledKey!==scrollKey){
     cur.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"});

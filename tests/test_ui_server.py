@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -140,6 +141,33 @@ def test_ui_snapshot_preserves_workflow_loops(tmp_path: Path) -> None:
         {"phase_type": PATCH_MERGE, "from_index": 0, "to_index": 3, "from_round": 0, "to_round": 1},
         {"phase_type": TESTING, "from_index": 1, "to_index": 4, "from_round": 0, "to_round": 1},
     ]
+
+
+def test_ui_snapshot_groups_followup_workflow_runs(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    repo = StateRepository(StateDB(config["system"]["state_db"]))
+    store = UiEventStore()
+    task_id = repo.create_task("build app", workflow_type="new_project")
+    repo.record_event(event_type="task_started", task_id=task_id, status="RUNNING", payload={"workflow_type": "new_project"})
+    repo.create_phase(task_id, PLANNING_DRAFT, "planner", 0)
+    time.sleep(0.002)
+    repo.record_event(event_type="task_completed", task_id=task_id, status="COMPLETED")
+    repo.append_task_prompt_turn(task_id, "add export")
+    time.sleep(0.002)
+    repo.record_event(event_type="task_started", task_id=task_id, status="RUNNING", payload={"workflow_type": "feature_change"})
+    repo.create_phase(task_id, FIXING, "executor", 1)
+
+    snapshot = HarnessStateView(config, repo, store).snapshot(task_id)
+
+    runs = snapshot["workflow_runs"]
+    assert len(runs) == 2
+    assert runs[0]["turn_index"] == 0
+    assert runs[0]["status"] == "COMPLETED"
+    assert [phase["phase_type"] for phase in runs[0]["phases"]] == [PLANNING_DRAFT]
+    assert runs[1]["turn_index"] == 1
+    assert runs[1]["prompt"] == "add export"
+    assert runs[1]["workflow_type"] == "feature_change"
+    assert [phase["phase_type"] for phase in runs[1]["phases"]] == [FIXING]
 
 
 def test_ui_snapshot_exposes_backend_health_events(tmp_path: Path) -> None:
@@ -353,6 +381,14 @@ def test_ui_html_renders_workflow_loop_markers() -> None:
     assert "workflow_loop_edges" in html
     assert "loop-tag" in html
     assert "loop_revisit" in html
+
+
+def test_ui_html_renders_workflow_hierarchy() -> None:
+    html = _html()
+
+    assert "workflow_runs" in html
+    assert "pipeline-runs" in html
+    assert "run-lane" in html
 
 
 def test_ui_html_hides_low_value_run_summary_sections() -> None:
