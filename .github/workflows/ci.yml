@@ -29,5 +29,8 @@ jobs:
           python -m pip install -r requirements.lock
           python -m pip install -e .
 
+      - name: Check generated visibility matrix
+        run: python -m harness.contracts.visibility_matrix --check
+
       - name: Run tests
         run: python -m pytest

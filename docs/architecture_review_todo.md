@@ -88,11 +88,11 @@
 - 风险：人类可读和机器可读混在同一个文件，模型容易把业务失败码误写到合同码；后续字段扩展会继续靠正则。
 - 目标：每个交付文件旁边生成结构化 sidecar metadata，或统一交付 JSON envelope；Markdown 只负责人类说明，机器判定只读结构化文件。
 
-### A7. Visibility table 已集中，但缺少可解释性和生成物
+### A7. Visibility table 已集中，已生成 matrix
 
-- 证据：`harness/artifacts/schemas.py` 有 `ARTIFACT_VISIBILITY_RULES`，`harness/artifacts/visibility.py` 解释规则；但没有生成的 role/phase visibility matrix 文档和 explain 工具。
-- 风险：用户反复看到“某 role 拿到太多 md”时，只能靠阅读代码判断规则，调试成本高。
-- 目标：增加 `orchestra visibility explain <task_id> <role> <phase> [round]` 或内部命令，输出每个 artifact 被允许/拒绝的规则原因。
+- 证据：`harness/artifacts/schemas.py` 有 `ARTIFACT_VISIBILITY_RULES`，`harness/artifacts/visibility.py` 解释规则；`harness/contracts/visibility_matrix.py` 会从 `RolePhaseContract` 自动生成 `docs/generated_visibility_matrix.md`，CI 中用 `--check` 防止规则和文档漂移。
+- 风险：matrix 能说明静态允许规则，但还不能解释某一次 task 中每个 artifact 被允许/拒绝的动态原因。
+- 目标：继续增加 `orchestra visibility explain <task_id> <role> <phase> [round]` 或内部命令，输出每个 artifact 被允许/拒绝的规则原因。
 
 ### A8. Test gate 绕过统一 subprocess runner
 
@@ -181,7 +181,7 @@
   - 验收：文档里的 phase 顺序与 `WorkflowEngine` 一致；README 的 workflow 描述同步。
   - 测试：新增文档一致性测试，至少断言当前主流程 phase 名称不出现废弃路径。
 
-- [ ] T0.2 生成当前 role/phase visibility matrix
+- [x] T0.2 生成当前 role/phase visibility matrix
   - 范围：从 `RolePhaseContract` 自动生成 Markdown 表，列出 target role、phase、source role、artifact types、round policy。
   - 验收：生成文件进入 `docs/generated_visibility_matrix.md`；CI 检查生成内容未漂移。
   - 测试：新增 golden test 或 snapshot hash test。
@@ -383,7 +383,7 @@
 
 这些任务价值明确，但可以在 P0-P2 稳定后做。
 
-14. [ ] T0.2 生成当前 role/phase visibility matrix
+14. [x] T0.2 生成当前 role/phase visibility matrix
     - 原因：role 为什么看到某个 artifact 仍需要读代码。
     - 交付：`docs/generated_visibility_matrix.md`。
     - 验收：CI 检查生成内容未漂移。
