@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -707,20 +708,55 @@ class Orchestrator:
         return task_id
 
     def _emit(self, event: ProgressEvent) -> None:
+        trace_id = event.trace_id or event.task_id
+        span_id = event.span_id or self._event_span_id(event)
+        parent_span_id = event.parent_span_id or self._event_parent_span_id(event)
+        enriched = replace(event, trace_id=trace_id, span_id=span_id, parent_span_id=parent_span_id)
         self.repository.record_event(
-            event_type=event.event_type,
-            task_id=event.task_id,
-            phase=event.phase,
-            role=event.role,
-            agent_id=event.agent_id,
-            round_id=event.round_id,
-            attempt=event.attempt,
-            status=event.status,
-            message=event.message,
-            payload=event.data,
+            event_type=enriched.event_type,
+            task_id=enriched.task_id,
+            phase=enriched.phase,
+            role=enriched.role,
+            agent_id=enriched.agent_id,
+            round_id=enriched.round_id,
+            attempt=enriched.attempt,
+            status=enriched.status,
+            message=enriched.message,
+            trace_id=enriched.trace_id,
+            span_id=enriched.span_id,
+            parent_span_id=enriched.parent_span_id,
+            payload=enriched.data,
         )
         if self.progress_callback:
-            self.progress_callback(event)
+            self.progress_callback(enriched)
+
+    def _event_span_id(self, event: ProgressEvent) -> str | None:
+        if not event.task_id:
+            return None
+        parts = [event.event_type]
+        if event.phase:
+            parts.append(str(event.phase))
+        if event.role:
+            parts.append(str(event.role))
+        if event.agent_id:
+            parts.append(str(event.agent_id))
+        if event.round_id is not None:
+            parts.append(f"round-{event.round_id}")
+        if event.attempt is not None:
+            parts.append(f"attempt-{event.attempt}")
+        return ":".join(parts)
+
+    def _event_parent_span_id(self, event: ProgressEvent) -> str | None:
+        if not event.task_id:
+            return None
+        if event.agent_id and event.phase:
+            parts = ["phase", str(event.phase)]
+            if event.round_id is not None:
+                parts.append(f"round-{event.round_id}")
+            return ":".join(parts)
+        if event.phase:
+            return f"task:{event.task_id}"
+        return None
 
     def _context_metadata(self, task: dict[str, Any], role: str, phase: str) -> dict[str, Any]:
         metadata = {"workflow_type": task.get("workflow_type") or self._active_workflow_type or NEW_PROJECT}

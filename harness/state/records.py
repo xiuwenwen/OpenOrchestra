@@ -108,5 +108,8 @@ class EventRecord(RecordMapping):
     event_type: str
     status: str | None
     message: str | None
+    trace_id: str | None
+    span_id: str | None
+    parent_span_id: str | None
     payload: str
     created_at: str

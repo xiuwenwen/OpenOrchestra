@@ -43,6 +43,14 @@ class StateDB:
             conn.execute("ALTER TABLE phases ADD COLUMN parent_round_id INTEGER")
         if "iteration_id" not in phase_columns:
             conn.execute("ALTER TABLE phases ADD COLUMN iteration_id INTEGER")
+        event_columns = self._table_columns(conn, "events")
+        if event_columns:
+            if "trace_id" not in event_columns:
+                conn.execute("ALTER TABLE events ADD COLUMN trace_id TEXT")
+            if "span_id" not in event_columns:
+                conn.execute("ALTER TABLE events ADD COLUMN span_id TEXT")
+            if "parent_span_id" not in event_columns:
+                conn.execute("ALTER TABLE events ADD COLUMN parent_span_id TEXT")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS events (
@@ -56,6 +64,9 @@ class StateDB:
                 event_type TEXT NOT NULL,
                 status TEXT,
                 message TEXT,
+                trace_id TEXT,
+                span_id TEXT,
+                parent_span_id TEXT,
                 payload TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );

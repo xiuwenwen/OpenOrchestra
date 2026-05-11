@@ -321,14 +321,33 @@ class StateRepository:
         attempt: int | None = None,
         status: str | None = None,
         message: str | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+        parent_span_id: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> str:
         event_id = str(uuid.uuid4())
         with self._lock, self.db.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO events(event_id, task_id, phase, role, agent_id, round_id, attempt, event_type, status, message, payload, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO events(
+                    event_id,
+                    task_id,
+                    phase,
+                    role,
+                    agent_id,
+                    round_id,
+                    attempt,
+                    event_type,
+                    status,
+                    message,
+                    trace_id,
+                    span_id,
+                    parent_span_id,
+                    payload,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -341,6 +360,9 @@ class StateRepository:
                     event_type,
                     status,
                     message,
+                    trace_id,
+                    span_id,
+                    parent_span_id,
                     json.dumps(payload or {}, ensure_ascii=False),
                     utc_now_iso(),
                 ),

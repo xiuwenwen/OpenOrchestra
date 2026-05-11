@@ -16,6 +16,9 @@ class ProgressEvent:
     status: str | None = None
     message: str | None = None
     data: dict[str, Any] = field(default_factory=dict)
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
 
 
 ProgressCallback = Callable[[ProgressEvent], None]

@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS events (
     event_type TEXT NOT NULL,
     status TEXT,
     message TEXT,
+    trace_id TEXT,
+    span_id TEXT,
+    parent_span_id TEXT,
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
 );

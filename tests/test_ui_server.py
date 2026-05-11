@@ -99,6 +99,26 @@ def test_ui_snapshot_includes_agent_logs_and_artifacts(tmp_path: Path) -> None:
     assert snapshot["events"][0]["event_type"] == "agent_completed"
 
 
+def test_ui_event_store_preserves_trace_fields() -> None:
+    store = UiEventStore()
+    store(
+        ProgressEvent(
+            "agent_started",
+            task_id="task-1",
+            role="executor",
+            agent_id="executor-1",
+            trace_id="trace-1",
+            span_id="span-1",
+            parent_span_id="parent-1",
+        )
+    )
+
+    event = store.events_for("task-1")[0]
+    assert event["trace_id"] == "trace-1"
+    assert event["span_id"] == "span-1"
+    assert event["parent_span_id"] == "parent-1"
+
+
 def test_ui_snapshot_preserves_workflow_loops(tmp_path: Path) -> None:
     config = _config(tmp_path)
     repo = StateRepository(StateDB(config["system"]["state_db"]))

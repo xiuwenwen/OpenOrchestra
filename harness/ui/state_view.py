@@ -37,6 +37,9 @@ class UiEventStore:
                 "attempt": event.attempt,
                 "status": event.status,
                 "message": event.message,
+                "trace_id": event.trace_id,
+                "span_id": event.span_id,
+                "parent_span_id": event.parent_span_id,
                 "data": event.data,
             }
             self.latest_task_id = event.task_id

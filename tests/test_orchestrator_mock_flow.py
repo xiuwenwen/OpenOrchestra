@@ -887,6 +887,9 @@ def test_orchestrator_emits_progress_events(tmp_path: Path) -> None:
     assert "elapsed_seconds" in completed_phase.data
     assert completed_agent.data["elapsed_seconds"] >= 0
     assert completed_phase.data["elapsed_seconds"] >= 0
+    assert completed_agent.trace_id == task_id
+    assert completed_agent.span_id
+    assert completed_agent.parent_span_id
 
 
 def test_same_role_agents_start_concurrently_when_configured(tmp_path: Path) -> None:

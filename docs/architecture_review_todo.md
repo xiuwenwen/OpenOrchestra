@@ -148,11 +148,11 @@
 - 风险：长期交互运行会堆积大量 workspace/artifact/deliver/state 文件，占用磁盘；用户已经多次关注空间浪费。
 - 目标：配置化 retention policy，按 task 状态、时间、大小、是否 delivered 决定清理策略。
 
-### A17. 可观测性不够“端到端”
+### A17. 可观测性已有基础 trace/span
 
-- 证据：有 progress event 和 UI event store，但 agent subprocess、gate command、artifact decision、retry、budget truncation 没有统一 correlation id/span id。
-- 风险：一次任务跨 CLI、agent、gate、judge、delivery 的问题排查仍要人工串多个文件。
-- 目标：引入 `trace_id=task_id`、`span_id=phase/run/command`，所有日志、events、artifacts manifest 都记录 correlation。
+- 证据：`ProgressEvent`、state DB events 和 UI event store 已带 `trace_id`、`span_id`、`parent_span_id`；`Orchestrator._emit` 会自动以 `task_id` 作为 trace_id 并生成默认 span。
+- 风险：当前 span 还没有覆盖外部 command 子步骤和 artifact manifest，后续诊断包仍需要继续整合日志路径。
+- 目标：继续让 gate command、artifact manifest、diagnostics bundle 复用同一 trace/span。
 
 ### A18. 配置层缺少统一 schema 和版本迁移
 
@@ -278,7 +278,7 @@
 
 ### Phase 6：可观测性和清理策略
 
-- [ ] T6.1 correlation id/span id
+- [x] T6.1 correlation id/span id
   - 范围：task event、phase event、agent run、command run、artifact manifest 统一记录 trace/span。
   - 验收：给定 task_id 可以完整追踪 agent prompt、stdout/stderr、gate command、artifact、delivery。
   - 测试：端到端 mock flow 中断言每类事件都有 trace 字段。
@@ -369,7 +369,7 @@
     - 交付：按 backend、role、全局并发限制排队执行。
     - 验收：配置 `backend_concurrency.claude=1` 时同一时刻只有一个 Claude run。
 
-12. [ ] T6.1 correlation id/span id
+12. [x] T6.1 correlation id/span id
     - 原因：任务排障仍要人工串 prompt、manifest、stdout/stderr、gate report、decision。
     - 交付：task/phase/run/command/artifact 全链路 trace/span。
     - 验收：一个 task_id 能追踪所有关键事件和文件。

@@ -176,6 +176,50 @@ def test_state_store_upgrades_existing_phases_table_with_loop_metadata(tmp_path:
     assert repo.list_phases(task_id)[0]["loop_type"] == "regression_test_fix"
 
 
+def test_state_store_upgrades_existing_events_table_with_trace_fields(tmp_path: Path) -> None:
+    db_path = tmp_path / "old_events.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE tasks (
+                task_id TEXT PRIMARY KEY,
+                user_prompt TEXT NOT NULL,
+                status TEXT NOT NULL,
+                current_phase TEXT,
+                current_role TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE events (
+                event_id TEXT PRIMARY KEY,
+                task_id TEXT,
+                phase TEXT,
+                role TEXT,
+                agent_id TEXT,
+                round_id INTEGER,
+                attempt INTEGER,
+                event_type TEXT NOT NULL,
+                status TEXT,
+                message TEXT,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
+    repo = StateRepository(StateDB(db_path))
+    task_id = repo.create_task("upgrade events")
+    repo.record_event(event_type="task_started", task_id=task_id, trace_id=task_id, span_id="task_started")
+
+    event = repo.list_events(task_id)[0]
+    assert event["trace_id"] == task_id
+    assert event["span_id"] == "task_started"
+
+
 def test_repository_task_workflow_and_latest_task_helpers(tmp_path: Path) -> None:
     repo = StateRepository(StateDB(tmp_path / "harness.db"))
     first_task_id = repo.create_task("same prompt")
@@ -285,10 +329,16 @@ def test_state_store_records_append_only_events(tmp_path: Path) -> None:
         phase="TESTING",
         role="tester",
         status="RUNNING",
+        trace_id=task_id,
+        span_id="phase:TESTING:round-1",
+        parent_span_id=f"task:{task_id}",
         payload={"round_id": 1},
     )
 
     events = repo.list_events(task_id)
     assert events[0]["event_id"] == event_id
     assert events[0]["event_type"] == "phase_started"
+    assert events[0]["trace_id"] == task_id
+    assert events[0]["span_id"] == "phase:TESTING:round-1"
+    assert events[0]["parent_span_id"] == f"task:{task_id}"
     assert events[0]["payload"] == '{"round_id": 1}'
