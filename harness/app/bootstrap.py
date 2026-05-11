@@ -72,16 +72,16 @@ def build_orchestrator_services(
         repository,
         workspace_manager,
         config=config,
-        markdown_field=orchestrator._markdown_field,
-        active_task_id=lambda: orchestrator._active_task_id,
-        active_workflow_type=lambda: orchestrator._active_workflow_type,
+        markdown_field=orchestrator.markdown_field,
+        active_task_id=orchestrator.active_task_id,
+        active_workflow_type=orchestrator.active_workflow_type,
     )
     test_gate_service = TestGateService(
         config=config,
         repository=repository,
         artifact_manager=artifact_manager,
         latest_materialized_repo=materialized_repo_service.latest_materialized_repo,
-        markdown_field=orchestrator._markdown_field,
+        markdown_field=orchestrator.markdown_field,
     )
     patch_gate_service = PatchGateService(
         config=config,
@@ -91,8 +91,8 @@ def build_orchestrator_services(
         materialized_repo_dir=materialized_repo_service.materialized_repo_dir,
         copy_source=materialized_repo_service.copy_source_for_patch_validation,
         write_success_marker=materialized_repo_service.write_materialized_success_marker,
-        emit=orchestrator._emit,
-        positive_int=orchestrator._positive_int,
+        emit=orchestrator.emit_progress,
+        positive_int=orchestrator.positive_int,
     )
     input_staging_service = InputStagingService(
         config=config,
@@ -100,7 +100,7 @@ def build_orchestrator_services(
         visibility=artifact_visibility,
         judge=judge,
         repo_context_metadata=materialized_repo_service.repo_context_metadata,
-        positive_int=orchestrator._positive_int,
+        positive_int=orchestrator.positive_int,
     )
     agent_runner = AgentPhaseRunner(orchestrator)
     delivery_publisher = DeliveryPublisher(

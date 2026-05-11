@@ -27,17 +27,23 @@ class BootstrapOwner:
     _active_task_id: str | None = None
     _active_workflow_type: str | None = None
 
-    def _markdown_field(self, content: str, field_name: str) -> str | None:
+    def markdown_field(self, content: str, field_name: str) -> str | None:
         prefix = f"{field_name}:"
         for line in content.splitlines():
             if line.startswith(prefix):
                 return line.split(":", 1)[1].strip()
         return None
 
-    def _emit(self, event: ProgressEvent) -> None:
+    def active_task_id(self) -> str | None:
+        return self._active_task_id
+
+    def active_workflow_type(self) -> str | None:
+        return self._active_workflow_type
+
+    def emit_progress(self, event: ProgressEvent) -> None:
         self.last_event = event
 
-    def _positive_int(self, value, default: int, field_name: str) -> int:
+    def positive_int(self, value, default: int, field_name: str) -> int:
         try:
             parsed = int(value)
         except (TypeError, ValueError):

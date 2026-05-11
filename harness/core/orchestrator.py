@@ -488,12 +488,15 @@ class Orchestrator:
             return status.lower() if status else None
         return None
 
-    def _markdown_field(self, content: str, field_name: str) -> str | None:
+    def markdown_field(self, content: str, field_name: str) -> str | None:
         prefix = f"{field_name}:"
         for line in content.splitlines():
             if line.startswith(prefix):
                 return line.split(":", 1)[1].strip()
         return None
+
+    def _markdown_field(self, content: str, field_name: str) -> str | None:
+        return self.markdown_field(content, field_name)
 
     def run_harness_test_gate(self, task_id: str, round_id: int) -> bool:
         self.test_gate_service.latest_materialized_repo = self._latest_materialized_repo
@@ -571,8 +574,14 @@ class Orchestrator:
     def _write_materialized_success_marker(self, repo_dir: Path, task_id: str, round_id: int, patch_path: Path) -> None:
         self.materialized_repo_service.write_materialized_success_marker(repo_dir, task_id, round_id, patch_path)
 
-    def _backend_for(self, task_id: str | None, role: str) -> str:
+    def backend_for(self, task_id: str | None, role: str) -> str:
         return self.config_service.backend_for(task_id, role)
+
+    def _backend_for(self, task_id: str | None, role: str) -> str:
+        return self.backend_for(task_id, role)
+
+    def adapter_for_backend(self, backend: str) -> AgentAdapter:
+        return self._adapter_for_backend(backend)
 
     def _adapter_for_backend(self, backend: str) -> AgentAdapter:
         if backend == "mock":
@@ -585,8 +594,11 @@ class Orchestrator:
             return HeadlessCLIAdapter(backend)
         raise ValueError(f"Unsupported agent backend: {backend}")
 
-    def _source_repo_for_workspace(self) -> Path | None:
+    def source_repo_for_workspace(self) -> Path | None:
         return self.materialized_repo_service.source_repo_for_workspace()
+
+    def _source_repo_for_workspace(self) -> Path | None:
+        return self.source_repo_for_workspace()
 
     def _source_repo_for_existing_project_task(self, task_id: str) -> Path | None:
         return self.materialized_repo_service.source_repo_for_existing_project_task(task_id)
@@ -603,7 +615,7 @@ class Orchestrator:
     def _context_line_value(self, line: str, prefix: str) -> str | None:
         return self.materialized_repo_service.context_line_value(line, prefix)
 
-    def _effective_agent_count(self, task_id: str, role: str, phase: str, agent_count_override: int | None = None) -> int:
+    def effective_agent_count(self, task_id: str, role: str, phase: str, agent_count_override: int | None = None) -> int:
         if role == "executor" and phase in SINGLE_EXECUTOR_FIX_PHASES:
             # Intentional hard rule for future AI maintainers: fix phases use one executor.
             # Multiple fix executors produce competing patches for the same defect, which
@@ -616,17 +628,26 @@ class Orchestrator:
             return agent_count_override
         return self.config_service.role_count(task_id, role)
 
+    def _effective_agent_count(self, task_id: str, role: str, phase: str, agent_count_override: int | None = None) -> int:
+        return self.effective_agent_count(task_id, role, phase, agent_count_override)
+
     def _should_use_materialized_repo(self, role: str, phase: str) -> bool:
         return self.materialized_repo_service.should_use_materialized_repo(role, phase)
 
-    def _prepare_materialized_workspace_repo(self, task_id: str, role: str, phase: str, repo_dir: Path) -> None:
+    def prepare_materialized_workspace_repo(self, task_id: str, role: str, phase: str, repo_dir: Path) -> None:
         self.materialized_repo_service.prepare_workspace_repo(task_id, role, phase, repo_dir)
+
+    def _prepare_materialized_workspace_repo(self, task_id: str, role: str, phase: str, repo_dir: Path) -> None:
+        self.prepare_materialized_workspace_repo(task_id, role, phase, repo_dir)
 
     def _copy_ignore_for_materialized_workspace(self, directory: str, names: list[str]) -> set[str]:
         return self.materialized_repo_service.copy_ignore_for_materialized_workspace(directory, names)
 
-    def _repo_context_metadata(self, task_id: str, role: str, phase: str) -> dict[str, Any]:
+    def repo_context_metadata(self, task_id: str, role: str, phase: str) -> dict[str, Any]:
         return self.materialized_repo_service.repo_context_metadata(task_id, role, phase)
+
+    def _repo_context_metadata(self, task_id: str, role: str, phase: str) -> dict[str, Any]:
+        return self.repo_context_metadata(task_id, role, phase)
 
     def _materialized_root(self, task_id: str) -> Path:
         return self.materialized_repo_service.materialized_root(task_id)
@@ -652,7 +673,13 @@ class Orchestrator:
     def _materialized_success_marker_ok(self, repo_dir: Path, task_id: str, round_id: int) -> bool:
         return self.materialized_repo_service.materialized_success_marker_ok(repo_dir, task_id, round_id)
 
-    def _single_active_task_id(self, user_prompt: str | None) -> str:
+    def active_task_id(self) -> str | None:
+        return self._active_task_id
+
+    def active_workflow_type(self) -> str | None:
+        return self._active_workflow_type
+
+    def single_active_task_id(self, user_prompt: str | None) -> str:
         if self._active_task_id:
             return self._active_task_id
         if user_prompt is not None:
@@ -663,6 +690,9 @@ class Orchestrator:
         if not task_id:
             raise TaskFailedError("No task exists")
         return task_id
+
+    def _single_active_task_id(self, user_prompt: str | None) -> str:
+        return self.single_active_task_id(user_prompt)
 
     def _emit(self, event: ProgressEvent) -> None:
         trace_id = event.trace_id or event.task_id
@@ -715,7 +745,7 @@ class Orchestrator:
             return f"task:{event.task_id}"
         return None
 
-    def _context_metadata(self, task: dict[str, Any], role: str, phase: str) -> dict[str, Any]:
+    def context_metadata(self, task: dict[str, Any], role: str, phase: str) -> dict[str, Any]:
         metadata = {"workflow_type": task.get("workflow_type") or self._active_workflow_type or NEW_PROJECT}
         if role != "communicator" or phase != DELIVERY:
             return metadata
@@ -729,6 +759,9 @@ class Orchestrator:
             "publish_timing": "Harness will publish these files after the communicator role succeeds.",
         })
         return metadata
+
+    def _context_metadata(self, task: dict[str, Any], role: str, phase: str) -> dict[str, Any]:
+        return self.context_metadata(task, role, phase)
 
     def role_instruction_for(self, role: str) -> str:
         return contract_role_instruction_for(role, self._active_workflow_type or NEW_PROJECT)
@@ -762,7 +795,7 @@ class Orchestrator:
             )
         return f"{instruction}\n\nOriginal user prompt:\n{user_prompt}"
 
-    def _stage_input_artifacts(
+    def stage_input_artifacts(
         self,
         task_id: str,
         input_dir: Path,
@@ -774,6 +807,28 @@ class Orchestrator:
         repo_dir: Path | None = None,
     ) -> list[Path]:
         return self.input_staging_service.stage(
+            task_id,
+            input_dir,
+            role,
+            phase,
+            exclude_phase_id=exclude_phase_id,
+            round_id=round_id,
+            current_agent_id=current_agent_id,
+            repo_dir=repo_dir,
+        )
+
+    def _stage_input_artifacts(
+        self,
+        task_id: str,
+        input_dir: Path,
+        role: str,
+        phase: str,
+        exclude_phase_id: str | None = None,
+        round_id: int | None = None,
+        current_agent_id: str | None = None,
+        repo_dir: Path | None = None,
+    ) -> list[Path]:
+        return self.stage_input_artifacts(
             task_id,
             input_dir,
             role,
@@ -818,7 +873,7 @@ class Orchestrator:
     def _artifact_input_limits(self, role: str | None = None, phase: str | None = None) -> dict[str, Any]:
         return self.input_staging_service.artifact_input_limits(role, phase)
 
-    def _positive_int(self, value: Any, default: int, field_name: str) -> int:
+    def positive_int(self, value: Any, default: int, field_name: str) -> int:
         if value is None:
             return default
         try:
@@ -828,6 +883,9 @@ class Orchestrator:
         if parsed <= 0:
             raise ValueError(f"{field_name} must be an integer > 0, got {parsed}")
         return parsed
+
+    def _positive_int(self, value: Any, default: int, field_name: str) -> int:
+        return self.positive_int(value, default, field_name)
 
     def _copy_artifact_with_budget(
         self,

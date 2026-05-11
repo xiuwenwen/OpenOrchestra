@@ -54,11 +54,11 @@
 - 风险：入口耦合风险已明显下降；后续风险转移到 `harness/cli/interactive.py` 内部方法仍偏多，需要在功能演进时继续拆 history/resume/cleanup 子服务。
 - 目标：保持 `main.py` 作为 wire-up 文件，禁止重新塞入交互逻辑、dashboard 渲染、handoff 推断、env 映射或 command registry。
 
-### A2. `Orchestrator` 仍是 facade 和兼容层的混合体
+### A2. `Orchestrator` 已收敛为 facade，legacy helper 仅兼容保留
 
-- 证据：`harness/app/bootstrap.py` 已接管服务构造和依赖注入，`Orchestrator.__init__` 只挂载 `ApplicationServices` 并维护 active task 状态；但 Orchestrator 仍暴露大量 `_run_*`、`_latest_*`、`_stage_*` 兼容方法。
-- 风险：服务构造耦合已下降，但调用方向仍以 Orchestrator facade 为中心。新功能如果继续依赖私有 helper，会让边界回流。
-- 目标：Orchestrator 仅作为应用服务 facade；服务组合搬到 bootstrap/container；兼容 `_run_*` 方法逐步移除或仅测试层保留。
+- 证据：`harness/app/bootstrap.py` 已接管服务构造和依赖注入，`AgentPhaseRunner` 和 `WorkflowEngine` 已改为调用公开 runtime API；`tests/test_workflow_engine_contract.py` 扫描生产代码，禁止继续通过 `o._*`、`orchestrator._*`、`runtime._*` 调用 Orchestrator 私有 helper。
+- 风险：Orchestrator 内部仍保留部分 `_run_*`、`_latest_*`、`_stage_*` 兼容包装给历史测试和外部调用，后续应逐步删除未使用包装。
+- 目标：保持 Orchestrator 作为应用服务 facade；新生产代码只调用公开 runtime/service API。
 
 ### A3. Prompt 合同、角色指令、输出合同散落
 
@@ -254,7 +254,7 @@
   - 验收：`DeliveryPublisher` 不调用任何 `o._*` 方法。
   - 测试：独立 delivery publisher tests，不依赖完整 Orchestrator。
 
-- [ ] T4.3 移除 Orchestrator legacy helper 依赖
+- [x] T4.3 移除 Orchestrator legacy helper 依赖
   - 范围：统计 `_run_*`、`_latest_*`、`_stage_*` 兼容方法调用点，迁移到 service port。
   - 验收：生产代码不再调用 Orchestrator 私有 helper；测试只通过公开 service API 或专用 fixture。
   - 测试：扩展 `test_workflow_engine_contract.py` 的架构扫描。
@@ -398,17 +398,17 @@
     - 交付：`harness/app/bootstrap.py`。
     - 验收：Orchestrator 不再手动 new 所有服务。
 
-17. [ ] T4.3 移除 Orchestrator legacy helper 依赖
+17. [x] T4.3 移除 Orchestrator legacy helper 依赖
     - 原因：兼容 helper 会诱导新代码继续绕过 service boundary。
     - 交付：迁移 `_run_*`、`_latest_*`、`_stage_*` 调用到公开 service API。
     - 验收：生产代码不再调用 Orchestrator 私有 helper。
 
-18. [ ] T5.2 拆 Dashboard
+18. [x] T5.2 拆 Dashboard
     - 原因：dashboard 与 CLI 主入口耦合，终端渲染问题会污染交互逻辑。
     - 交付：`harness/ui/terminal_dashboard.py`。
     - 验收：宽字符、截断、向上滚动、非 TTY fallback 独立测试。
 
-19. [ ] T5.3 Handoff 推断独立化
+19. [x] T5.3 Handoff 推断独立化
     - 原因：交付路径、run command、dependency install 推断不应留在 CLI。
     - 交付：`harness/delivery/handoff.py`。
     - 验收：Python/Node/partial materialized source/usage guide 命令提取独立测试。

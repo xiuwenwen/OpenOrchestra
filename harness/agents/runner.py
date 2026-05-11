@@ -40,12 +40,12 @@ class AgentPhaseRunner:
         phase_scope: dict[str, int | str | None] | None = None,
     ) -> list[AgentRunResult]:
         o = self.orchestrator
-        task_id = o._single_active_task_id(user_prompt)
+        task_id = o.single_active_task_id(user_prompt)
         task = o.repository.get_task(task_id)
         if not task:
             raise KeyError(f"Task not found: {task_id}")
         user_prompt = user_prompt if user_prompt is not None else task["user_prompt"]
-        agent_count = o._effective_agent_count(task_id, role, phase, agent_count_override)
+        agent_count = o.effective_agent_count(task_id, role, phase, agent_count_override)
 
         checkpoint_phase, checkpoint_results = self._recover_completed_checkpoint(
             task_id,
@@ -66,7 +66,7 @@ class AgentPhaseRunner:
                     round_id,
                 )
             o.logger.info("Resuming task %s: Skipping completed phase %s %s round=%s", task_id, role, phase, round_id)
-            o._emit(
+            o.emit_progress(
                 ProgressEvent(
                     "phase_skipped",
                     task_id=task_id,
@@ -77,7 +77,7 @@ class AgentPhaseRunner:
                     message=f"Skipping completed {phase} (resuming from checkpoint)",
                 )
             )
-            o._emit(
+            o.emit_progress(
                 ProgressEvent(
                     "phase_completed",
                     task_id=task_id,
@@ -103,12 +103,12 @@ class AgentPhaseRunner:
             iteration_id=phase_scope.get("iteration_id"),
         )
         timeout_seconds = o.config_service.timeout_for(task_id, role)
-        backend = o._backend_for(task_id, role)
-        adapter = o._adapter_for_backend(backend)
+        backend = o.backend_for(task_id, role)
+        adapter = o.adapter_for_backend(backend)
         agent_ids = [f"{role}-{index + 1}" for index in range(agent_count)]
         o.logger.info("Running %s phase %s with %s agent(s)", role, phase, agent_count)
         phase_started_at = time.monotonic()
-        o._emit(
+        o.emit_progress(
             ProgressEvent(
                 "phase_started",
                 task_id=task_id,
@@ -157,7 +157,7 @@ class AgentPhaseRunner:
                 raise TaskFailedError(f"Only {len(results)} of {agent_count} {role} agents completed")
             o.repository.update_phase_status(phase_id, "COMPLETED")
             elapsed_seconds = round(time.monotonic() - phase_started_at, 3)
-            o._emit(
+            o.emit_progress(
                 ProgressEvent(
                     "phase_completed",
                     task_id=task_id,
@@ -173,7 +173,7 @@ class AgentPhaseRunner:
         except Exception as exc:
             o.repository.update_phase_status(phase_id, "FAILED")
             elapsed_seconds = round(time.monotonic() - phase_started_at, 3)
-            o._emit(
+            o.emit_progress(
                 ProgressEvent(
                     "phase_failed",
                     task_id=task_id,
@@ -352,7 +352,7 @@ class AgentPhaseRunner:
             health = o.backend_health.check(backend)
             if not health.allowed:
                 message = health.reason or f"Backend {backend} circuit is open"
-                o._emit(
+                o.emit_progress(
                     ProgressEvent(
                         "backend_circuit_open",
                         task_id=task_id,
@@ -376,10 +376,10 @@ class AgentPhaseRunner:
                 agent_id,
                 round_id,
                 attempt,
-                source_repo=o._source_repo_for_workspace(),
+                source_repo=o.source_repo_for_workspace(),
             )
-            o._prepare_materialized_workspace_repo(task_id, role, phase, workspace.repo_dir)
-            input_artifacts = o._stage_input_artifacts(
+            o.prepare_materialized_workspace_repo(task_id, role, phase, workspace.repo_dir)
+            input_artifacts = o.stage_input_artifacts(
                 task_id,
                 workspace.input_dir,
                 role,
@@ -390,8 +390,8 @@ class AgentPhaseRunner:
                 repo_dir=workspace.repo_dir,
             )
             task_for_metadata = o.repository.get_task(task_id) or {"task_id": task_id, "user_prompt": user_prompt}
-            metadata = o._context_metadata(task_for_metadata, role, phase)
-            metadata.update(o._repo_context_metadata(task_id, role, phase))
+            metadata = o.context_metadata(task_for_metadata, role, phase)
+            metadata.update(o.repo_context_metadata(task_id, role, phase))
             context = AgentRunContext(
                 task_id=task_id,
                 phase_id=phase_id,
@@ -421,7 +421,7 @@ class AgentPhaseRunner:
             )
             context.log_dir.mkdir(parents=True, exist_ok=True)
             (context.log_dir / "prompt.md").write_text(o.prompt_builder.build(context), encoding="utf-8")
-            o._emit(
+            o.emit_progress(
                 ProgressEvent(
                     "agent_started",
                     task_id=task_id,
@@ -433,7 +433,7 @@ class AgentPhaseRunner:
                     status="RUNNING",
                     message=f"{agent_id} attempt {attempt + 1} invoking {adapter.__class__.__name__}",
                     data={
-                        "backend": o._backend_for(task_id, role),
+                        "backend": o.backend_for(task_id, role),
                         "workspace": str(context.workspace_dir),
                         "output": str(context.output_dir),
                         "logs": str(context.log_dir),
@@ -453,7 +453,7 @@ class AgentPhaseRunner:
                     review_data = self._review_delivery_contract(
                         context=context,
                         validation_result=validation_result,
-                        backend=o._backend_for(task_id, role),
+                        backend=o.backend_for(task_id, role),
                     )
                     if review_data.get("delivery_contract_review_decision") == "accept":
                         validation_result = o.validator.validate_required_outputs_result(workspace.output_dir, required_outputs)
@@ -472,7 +472,7 @@ class AgentPhaseRunner:
                     o.repository.update_agent_run_status(run_id, "COMPLETED")
                     self.record_backend_success(backend, context, attempt)
                     elapsed_seconds = round(time.monotonic() - attempt_started_at, 3)
-                    o._emit(
+                    o.emit_progress(
                         ProgressEvent(
                             "agent_completed",
                             task_id=task_id,
@@ -514,7 +514,7 @@ class AgentPhaseRunner:
                 }
                 if diagnostics_path.exists():
                     event_data["diagnostics"] = str(diagnostics_path)
-                o._emit(
+                o.emit_progress(
                     ProgressEvent(
                         "agent_failed" if terminal_failure else "agent_retryable_failure",
                         task_id=task_id,
@@ -552,7 +552,7 @@ class AgentPhaseRunner:
                 event_data = {"logs": str(context.log_dir), "elapsed_seconds": elapsed_seconds}
                 if diagnostics_path.exists():
                     event_data["diagnostics"] = str(diagnostics_path)
-                o._emit(
+                o.emit_progress(
                     ProgressEvent(
                         "agent_failed" if terminal_failure else "agent_retryable_failure",
                         task_id=task_id,
@@ -591,7 +591,7 @@ class AgentPhaseRunner:
         snapshot = o.backend_health.record_success(backend)
         if previous.state == "healthy":
             return
-        o._emit(
+        o.emit_progress(
             ProgressEvent(
                 "backend_health_changed",
                 task_id=context.task_id,
@@ -619,7 +619,7 @@ class AgentPhaseRunner:
         snapshot = o.backend_health.record_failure(backend, message, status=status)
         if snapshot.failure_kind in {"request_size", "output_contract"}:
             return snapshot
-        o._emit(
+        o.emit_progress(
             ProgressEvent(
                 "backend_health_changed",
                 task_id=context.task_id,
@@ -715,7 +715,7 @@ class AgentPhaseRunner:
         def beat() -> None:
             while not stop_event.wait(interval):
                 elapsed_seconds = int(time.monotonic() - started_at)
-                o._emit(
+                o.emit_progress(
                     ProgressEvent(
                         "agent_heartbeat",
                         task_id=context.task_id,
@@ -727,7 +727,7 @@ class AgentPhaseRunner:
                         status="RUNNING",
                         message=f"{context.agent_id} still running after {elapsed_seconds}s",
                         data={
-                            "backend": o._backend_for(context.task_id, context.role),
+                            "backend": o.backend_for(context.task_id, context.role),
                             "workspace": str(context.workspace_dir),
                             "logs": str(context.log_dir),
                             "elapsed_seconds": elapsed_seconds,
