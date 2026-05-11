@@ -10,7 +10,6 @@ import shutil
 import sys
 import threading
 import unicodedata
-from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -268,7 +267,6 @@ class DashboardState:
     result_type: str = "-"
     roles: dict[str, RoleView] = field(default_factory=dict)
     agents: dict[str, RoleView] = field(default_factory=dict)
-    events: deque[str] = field(default_factory=lambda: deque(maxlen=8))
 
 
 @dataclass(frozen=True)
@@ -287,13 +285,15 @@ class DashboardProgressReporter(ConsoleProgressReporter):
         for role in self.ROLES:
             self.state.roles[role] = RoleView(role=role)
         self.enabled = sys.stdout.isatty()
+        self._rendered_lines = 0
 
     def __call__(self, event: ProgressEvent) -> None:
         if not self.enabled:
             return super().__call__(event)
         with self._lock:
+            event_line = self._event_line(event)
             self._apply(event)
-            self._render_event(event)
+            self._render(event_line=event_line)
 
     def _apply(self, event: ProgressEvent) -> None:
         if event.event_type == "task_started" and event.task_id:
@@ -315,7 +315,6 @@ class DashboardProgressReporter(ConsoleProgressReporter):
                 row.phase = event.phase
                 row.round_id = event.round_id if event.round_id is not None else row.round_id
                 row.message = event.message or "Skipped (already completed)"
-            self.state.events.append(self._format(event))
             return
 
         if "backend" in event.data:
@@ -354,8 +353,6 @@ class DashboardProgressReporter(ConsoleProgressReporter):
                 agent_row = self.state.agents.setdefault(agent_key, RoleView(role=f"  {event.agent_id}"))
                 self._apply_row(agent_row, event, aggregate_artifacts=False, update_status=True)
 
-        self.state.events.append(self._format(event))
-
     def _reset_for_task(self, task_id: str) -> None:
         self.state = DashboardState(task_id=task_id)
         for role in self.ROLES:
@@ -390,41 +387,55 @@ class DashboardProgressReporter(ConsoleProgressReporter):
             row.elapsed_seconds = float(event.data["elapsed_seconds"])
         row.message = event.message or row.message
 
-    def _render(self) -> None:
-        sys.stdout.write("\x1b[2J\x1b[H")
-        sys.stdout.write("OpenOrchestra Execution Dashboard\n")
-        sys.stdout.write("=" * 88 + "\n")
-        sys.stdout.write(f"Task: {self.state.task_id}\n")
-        sys.stdout.write(
-            f"Status: {self.state.task_status}   Phase: {self.state.current_phase}   "
-            f"Backend: {self.state.backend}   Workflow: {self.state.workflow_type}\n"
-        )
-        sys.stdout.write(f"Test/Fix round: {self.state.test_round}   Review round: {self.state.review_round}\n")
-        sys.stdout.write("-" * 88 + "\n")
-        sys.stdout.write(f"{'Role':<14}{'Status':<14}{'Phase':<20}{'Round':<8}{'Agent':<18}{'Try':<6}{'Artifacts':<10}{'Delivery':<10}{'Elapsed':<10}\n")
-        sys.stdout.write("-" * 88 + "\n")
-        for role in self.ROLES:
-            row = self.state.roles[role]
-            self._render_row(row)
-            for agent_row in self._agent_rows_for_role(role):
-                self._render_row(agent_row)
-        sys.stdout.write("-" * 88 + "\n")
-        sys.stdout.write("Recent events:\n")
-        for line in self.state.events:
-            sys.stdout.write(f"  {truncate_display(line, 84)}\n")
-        sys.stdout.write("-" * 88 + "\n")
-        if self.state.result_type == "final_delivery" and self.state.result_path != "-":
-            for line in format_delivery_handoff(Path(self.state.result_path)):
-                sys.stdout.write(f"{line}\n")
-        elif self.state.result_path != "-":
-            sys.stdout.write(f"response: {self.state.result_path}\n")
+    def _render(self, event_line: str | None = None) -> None:
+        lines = self._dashboard_lines()
+        TerminalStatusLine.clear()
+        if self._rendered_lines:
+            sys.stdout.write(f"\x1b[{self._rendered_lines}F")
+        if event_line:
+            sys.stdout.write(f"\x1b[2K{event_line}\n")
+        for line in lines:
+            sys.stdout.write(f"\x1b[2K{line}\n")
+        surplus_lines = max(0, self._rendered_lines - len(lines) - (1 if event_line else 0))
+        for _ in range(surplus_lines):
+            sys.stdout.write("\x1b[2K\n")
+        if surplus_lines:
+            sys.stdout.write(f"\x1b[{surplus_lines}F")
+        self._rendered_lines = len(lines)
         sys.stdout.flush()
 
-    def _render_event(self, event: ProgressEvent) -> None:
+    def _dashboard_lines(self) -> list[str]:
+        lines = [
+            "OpenOrchestra Execution Dashboard",
+            "=" * 88,
+            f"Task: {self.state.task_id}",
+            (
+                f"Status: {self.state.task_status}   Phase: {self.state.current_phase}   "
+                f"Backend: {self.state.backend}   Workflow: {self.state.workflow_type}"
+            ),
+            f"Test/Fix round: {self.state.test_round}   Review round: {self.state.review_round}",
+            "-" * 88,
+            (
+                f"{'Role':<14}{'Status':<14}{'Phase':<20}{'Round':<8}{'Agent':<18}"
+                f"{'Try':<6}{'Artifacts':<10}{'Delivery':<10}{'Elapsed':<10}"
+            ),
+            "-" * 88,
+        ]
+        for role in self.ROLES:
+            row = self.state.roles[role]
+            lines.append(self._format_row(row))
+            for agent_row in self._agent_rows_for_role(role):
+                lines.append(self._format_row(agent_row))
+        lines.append("-" * 88)
+        if self.state.result_path != "-":
+            label = "response" if self.state.result_type == "response" else "result"
+            lines.append(f"{label}: {self.state.result_path}")
+        return lines
+
+    def _event_line(self, event: ProgressEvent) -> str:
         if event.event_type == "agent_heartbeat":
-            TerminalStatusLine.write_status(self._compact_line(event, prefix="[running]"))
-            return
-        TerminalStatusLine.write_line(self._compact_line(event))
+            return self._compact_line(event, prefix="[running]")
+        return self._compact_line(event)
 
     def _compact_line(self, event: ProgressEvent, *, prefix: str | None = None) -> str:
         event_prefixes = {
@@ -466,13 +477,16 @@ class DashboardProgressReporter(ConsoleProgressReporter):
         return truncate_display(" ".join(parts), 120)
 
     def _render_row(self, row: RoleView) -> None:
+        sys.stdout.write(self._format_row(row) + "\n")
+
+    def _format_row(self, row: RoleView) -> str:
         round_text = "-" if row.round_id is None else str(row.round_id)
         attempt_text = "-" if row.attempt is None else str(row.attempt)
         elapsed_text = "-" if row.elapsed_seconds is None else f"{row.elapsed_seconds:.3f}s"
-        sys.stdout.write(
+        return (
             f"{pad_display(row.role, 14)}{pad_display(row.status, 14)}{pad_display(row.phase, 20)}{pad_display(round_text, 8)}"
             f"{pad_display(row.agent_id, 18)}{pad_display(attempt_text, 6)}{pad_display(str(row.artifacts), 10)}"
-            f"{pad_display(row.delivery_status, 10)}{pad_display(elapsed_text, 10)}\n"
+            f"{pad_display(row.delivery_status, 10)}{pad_display(elapsed_text, 10)}"
         )
 
     def _agent_rows_for_role(self, role: str) -> list[RoleView]:
@@ -647,7 +661,10 @@ def _delivery_run_command_for_environment(
     has_dependency_installer: bool,
 ) -> str | None:
     for command in _delivery_run_commands(project_dir, result_path, usage_guide):
-        command = _use_project_virtualenv_python(command) if has_dependency_installer else command
+        if has_dependency_installer:
+            command = _use_project_virtualenv_python(command)
+        else:
+            command = _normalize_delivery_python_command(command)
         if _delivery_command_is_executable(project_dir, command, has_dependency_installer):
             return command
     return _infer_executable_delivery_command(project_dir, has_dependency_installer)
@@ -781,6 +798,15 @@ def _with_project_cd(project_dir: Path, command: str) -> str:
 
 def _use_project_virtualenv_python(command: str) -> str:
     return re.sub(r"(^|&& )python3?(?=\s)", r"\1.venv/bin/python", command, count=1)
+
+
+def _normalize_delivery_python_command(command: str) -> str:
+    if not re.search(r"(^|&& )python(?=\s)", command):
+        return command
+    python_bin = _available_python_command()
+    if not python_bin or python_bin == "python":
+        return command
+    return re.sub(r"(^|&& )python(?=\s)", rf"\1{python_bin}", command, count=1)
 
 
 def resolve_real_backend(requested: str) -> str:

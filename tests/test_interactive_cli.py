@@ -195,7 +195,12 @@ def test_misc_classifier_fallback_prints_raw_answer_only(monkeypatch, tmp_path: 
     assert "[classifier]" not in output
 
 
-def test_delivery_handoff_prefers_source_dir_and_requirements(tmp_path: Path) -> None:
+def test_delivery_handoff_prefers_source_dir_and_requirements(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        main_module.shutil,
+        "which",
+        lambda command: f"/usr/bin/{command}" if command in {"python", "python3"} else None,
+    )
     delivery_dir = tmp_path / "deliver" / "project-12345678"
     source_dir = delivery_dir / "source"
     source_dir.mkdir(parents=True)
@@ -311,8 +316,25 @@ def test_dashboard_tty_task_completed_does_not_duplicate_handoff(monkeypatch, tm
 
     rendered = output.getvalue()
     assert "\x1b[2J" not in rendered
+    assert "OpenOrchestra Execution Dashboard" in rendered
     assert "project_dir:" not in rendered
     assert "[ok] COMPLETED COMPLETED" in rendered
+
+
+def test_dashboard_tty_prints_events_above_bottom_panel(monkeypatch) -> None:
+    output = _TtyBuffer()
+    monkeypatch.setattr(sys, "stdout", output)
+    reporter = main_module.DashboardProgressReporter()
+
+    reporter(ProgressEvent("task_created", task_id="task-1", status="CREATED"))
+    reporter(ProgressEvent("task_started", task_id="task-1", status="RUNNING"))
+
+    rendered = output.getvalue()
+    assert "\x1b[2J" not in rendered
+    assert "\x1b[" in rendered and "F" in rendered
+    assert "OpenOrchestra Execution Dashboard" in rendered
+    assert "Recent events:" not in rendered
+    assert rendered.rfind("[task] RUNNING") < rendered.rfind("OpenOrchestra Execution Dashboard")
 
 
 def test_run_once_prints_user_handoff_not_internal_delivery_paths(tmp_path: Path, capsys) -> None:
