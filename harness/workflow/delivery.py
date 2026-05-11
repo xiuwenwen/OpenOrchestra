@@ -3,14 +3,17 @@ from __future__ import annotations
 import re
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from harness.agents.result import ArtifactRef
 from harness.artifacts.hashing import sha256_file
 from harness.contracts.role_contracts import required_outputs_for
+from harness.state.repository import StateRepository
 
 
 MATERIALIZED_SUCCESS_MARKER = ".harness_materialized_success.json"
+LatestPathProvider = Callable[[str], Path | None]
+SourceRepoProvider = Callable[[str], Path | None]
 
 
 def delivery_required_outputs() -> list[str]:
@@ -18,19 +21,30 @@ def delivery_required_outputs() -> list[str]:
 
 
 class DeliveryPublisher:
-    def __init__(self, orchestrator: Any):
-        self.orchestrator = orchestrator
+    def __init__(
+        self,
+        *,
+        config: dict[str, Any],
+        repository: StateRepository,
+        latest_usage_guide: LatestPathProvider,
+        latest_materialized_repo: LatestPathProvider,
+        source_repo_for_existing_project_task: SourceRepoProvider,
+    ):
+        self.config = config
+        self.repository = repository
+        self.latest_usage_guide = latest_usage_guide
+        self.latest_materialized_repo = latest_materialized_repo
+        self.source_repo_for_existing_project_task = source_repo_for_existing_project_task
 
     def publish_delivery(self, task_id: str, final_path: Path) -> Path:
-        o = self.orchestrator
-        task = o.repository.get_task(task_id)
+        task = self.repository.get_task(task_id)
         prompt = task["user_prompt"] if task else task_id
-        deliver_root = Path(o.config["system"].get("deliver_root", "./deliver")).expanduser().resolve()
+        deliver_root = self.deliver_root()
         project_dir = self.delivery_project_dir(task_id, prompt, deliver_root)
         project_dir.mkdir(parents=True, exist_ok=True)
         destination = project_dir / "final_delivery.md"
         shutil.copy2(final_path, destination)
-        usage_guide = o.communicator.latest_usage_guide(task_id)
+        usage_guide = self.latest_usage_guide(task_id)
         if usage_guide and usage_guide.exists():
             shutil.copy2(usage_guide, project_dir / "usage_guide.md")
         copied_artifacts = self.publish_supporting_artifacts(task_id, project_dir)
@@ -84,17 +98,19 @@ class DeliveryPublisher:
         return destination
 
     def delivery_success_path(self, task_id: str) -> Path | None:
-        o = self.orchestrator
-        task = o.repository.get_task(task_id)
+        task = self.repository.get_task(task_id)
         if not task:
             return None
-        deliver_root = Path(o.config["system"].get("deliver_root", "./deliver")).expanduser().resolve()
+        deliver_root = self.deliver_root()
         project_dir = self.delivery_project_dir(task_id, task["user_prompt"], deliver_root)
         return project_dir if project_dir.exists() else None
 
     def delivery_project_dir(self, task_id: str, prompt: str, deliver_root: Path | None = None) -> Path:
-        root = deliver_root or Path(self.orchestrator.config["system"].get("deliver_root", "./deliver")).expanduser().resolve()
+        root = deliver_root or self.deliver_root()
         return root / f"{self.slugify_project_name(prompt)}-{task_id[:8]}"
+
+    def deliver_root(self) -> Path:
+        return Path(self.config["system"].get("deliver_root", "./deliver")).expanduser().resolve()
 
     def write_success_path(self, task_id: str, project_dir: Path, final_delivery: Path, usage_guide: Path | None) -> Path:
         path = project_dir / "success_path.md"
@@ -119,7 +135,6 @@ class DeliveryPublisher:
         return path
 
     def record_published_artifact(self, task_id: str, artifact_type: str, path: Path) -> None:
-        o = self.orchestrator
         if not path.exists() or not path.is_file():
             return
 
@@ -136,14 +151,14 @@ class DeliveryPublisher:
                 hash=sha256_file(path),
             )
 
-        o.repository.create_artifact_with_next_version(
+        self.repository.create_artifact_with_next_version(
             task_id,
             artifact_type,
             build_ref,
         )
 
     def publish_supporting_artifacts(self, task_id: str, project_dir: Path) -> list[tuple[str, Path]]:
-        delivery_config = self.orchestrator.config.get("delivery", {})
+        delivery_config = self.config.get("delivery", {})
         include_internal_artifacts = (
             bool(delivery_config.get("include_internal_artifacts", False))
             if isinstance(delivery_config, dict)
@@ -164,7 +179,7 @@ class DeliveryPublisher:
         artifact_dir = project_dir / "artifacts"
         patch_dir = project_dir / "patches"
         for artifact_type in artifact_types:
-            artifacts = self.orchestrator.repository.list_artifacts(task_id, artifact_type)
+            artifacts = self.repository.list_artifacts(task_id, artifact_type)
             if not artifacts:
                 continue
             source = Path(artifacts[-1]["path"])
@@ -183,12 +198,11 @@ class DeliveryPublisher:
         return copied
 
     def publish_materialized_source(self, task_id: str, project_dir: Path) -> list[Path]:
-        o = self.orchestrator
         patch_path = project_dir / "patches" / "final.patch"
         source_dir = project_dir / "source"
         if source_dir.exists():
             shutil.rmtree(source_dir)
-        materialized_repo = o._latest_materialized_repo(task_id)
+        materialized_repo = self.latest_materialized_repo(task_id)
         if materialized_repo:
             shutil.copytree(materialized_repo, source_dir, ignore=self.copy_ignore_for_publish)
             return sorted(path for path in source_dir.rglob("*") if path.is_file())
@@ -196,7 +210,7 @@ class DeliveryPublisher:
             return []
         files = self.materialized_files_from_unified_diff(
             patch_path.read_text(encoding="utf-8", errors="replace"),
-            o._source_repo_for_existing_project_task(task_id),
+            self.source_repo_for_existing_project_task(task_id),
             include_modified=True,
         )
         if not files:
@@ -389,7 +403,7 @@ class DeliveryPublisher:
 
     def latest_patch_artifact(self, task_id: str) -> dict[str, Any] | None:
         for artifact_type in ("merged_patch.diff", "fix_patch.diff", "patch.diff"):
-            artifacts = self.orchestrator.repository.list_artifacts(task_id, artifact_type)
+            artifacts = self.repository.list_artifacts(task_id, artifact_type)
             if artifacts:
                 return artifacts[-1]
         return None

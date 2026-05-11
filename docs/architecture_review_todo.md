@@ -114,9 +114,9 @@
 
 ### A11. DeliveryPublisher 仍反向依赖 Orchestrator
 
-- 证据：`harness/workflow/delivery.py` 直接持有 `orchestrator: Any`，调用 `o._latest_materialized_repo()`、`o._source_repo_for_existing_project_task()` 等兼容方法。
-- 风险：Delivery context 无法独立测试和替换，Orchestrator facade 被继续保留。
-- 目标：改为注入 `RepositoryPort`、`ArtifactPort`、`MaterializedRepoPort`、`SourceRepoPort`、`CommunicatorPort`。
+- 证据：`harness/workflow/delivery.py` 已改为注入 config、repository、usage guide/materialized repo/source repo providers，不再持有 Orchestrator 或调用 `o._*` 私有方法。
+- 风险：Delivery context 的职责已收窄，但 Orchestrator 仍保留若干 `_publish_*` 兼容 helper 给旧测试和调用点。
+- 目标：继续缩小 Orchestrator 兼容 helper，最终让生产调用只通过公开 delivery publisher/service API。
 
 ### A12. Patch gate 分层仍偏混合
 
@@ -249,7 +249,7 @@
   - 验收：`Orchestrator.__init__` 不再手动 new 所有服务；测试可以单独构造 bounded context。
   - 测试：bootstrap wiring smoke test。
 
-- [ ] T4.2 DeliveryPublisher 改为 ports 注入
+- [x] T4.2 DeliveryPublisher 改为 ports 注入
   - 范围：移除 `orchestrator: Any`，注入 repository、communicator、materialized repo、source repo、artifact writer。
   - 验收：`DeliveryPublisher` 不调用任何 `o._*` 方法。
   - 测试：独立 delivery publisher tests，不依赖完整 Orchestrator。
@@ -340,7 +340,7 @@
    - 交付：task/phase/agent run transition table。
    - 验收：非法状态转换抛明确异常；checkpoint recovery、timeout、OUTPUT_INVALID 有显式路径。
 
-7. [ ] T4.2 DeliveryPublisher 改为 ports 注入
+7. [x] T4.2 DeliveryPublisher 改为 ports 注入
    - 原因：delivery 仍反向依赖 Orchestrator 私有 helper，边界没有真正独立。
    - 交付：注入 repository、communicator、materialized repo、source repo、artifact writer ports。
    - 验收：`DeliveryPublisher` 不调用任何 `o._*` 方法，可独立单测。

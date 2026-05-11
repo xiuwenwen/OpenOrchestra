@@ -115,7 +115,13 @@ class Orchestrator:
             positive_int=self._positive_int,
         )
         self.agent_runner = AgentPhaseRunner(self)
-        self.delivery_publisher = DeliveryPublisher(self)
+        self.delivery_publisher = DeliveryPublisher(
+            config=self.config,
+            repository=self.repository,
+            latest_usage_guide=self.communicator.latest_usage_guide,
+            latest_materialized_repo=self.materialized_repo_service.latest_materialized_repo,
+            source_repo_for_existing_project_task=self.materialized_repo_service.source_repo_for_existing_project_task,
+        )
         self.workflow_engine = WorkflowEngine(self)
         self.logger = get_logger(__name__)
         self._active_task_id: str | None = None
