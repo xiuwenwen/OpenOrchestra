@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import harness.main as main_module
+from harness.delivery import handoff as handoff_module
 from harness.agents.result import ArtifactRef
 from harness.core.progress import ProgressEvent
 from harness.main import ConsoleProgressReporter, InteractiveCLI
@@ -197,7 +198,7 @@ def test_misc_classifier_fallback_prints_raw_answer_only(monkeypatch, tmp_path: 
 
 def test_delivery_handoff_prefers_source_dir_and_requirements(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        main_module.shutil,
+        handoff_module.shutil,
         "which",
         lambda command: f"/usr/bin/{command}" if command in {"python", "python3"} else None,
     )
@@ -261,7 +262,7 @@ def test_delivery_handoff_infers_npm_script_when_available(monkeypatch, tmp_path
     (source_dir / "package.json").write_text('{"scripts":{"start":"vite --host 127.0.0.1"}}', encoding="utf-8")
     final_delivery = delivery_dir / "final_delivery.md"
     final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
-    monkeypatch.setattr(main_module.shutil, "which", lambda command: f"/usr/bin/{command}" if command == "npm" else None)
+    monkeypatch.setattr(handoff_module.shutil, "which", lambda command: f"/usr/bin/{command}" if command == "npm" else None)
 
     lines = main_module.format_delivery_handoff(final_delivery)
 

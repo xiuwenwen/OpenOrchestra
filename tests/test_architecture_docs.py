@@ -25,3 +25,11 @@ def test_readme_delivery_contract_documents_json_envelope() -> None:
     assert "It is a JSON role return envelope" in readme
     assert '"return_code": 0' in readme
     assert "Do not copy those verdict codes into `return_code` or `artifact_result_code`." in readme
+
+
+def test_delivery_handoff_logic_is_not_embedded_in_main_entrypoint() -> None:
+    text = Path("harness/main.py").read_text(encoding="utf-8")
+
+    assert "from harness.delivery.handoff import" in text
+    assert "def build_delivery_handoff" not in text
+    assert "def _delivery_run_commands" not in text

@@ -50,7 +50,7 @@
 
 ### A1. `main.py` 仍是超大入口模块
 
-- 证据：`harness/main.py` 约 1771 行，包含 env 映射、CLI 命令解析、dashboard、交互循环、handoff 推断、delivery 命令提取、UI 启动。
+- 证据：`harness/main.py` 仍超过 1500 行；delivery handoff 推断已抽到 `harness/delivery/handoff.py`，但 env 映射、CLI 命令解析、dashboard、交互循环、UI 启动仍集中在入口。
 - 风险：Task Intake、UI、Delivery Handoff、Dashboard 四个上下文被揉在一起，后续新增命令或 UI 行为时容易互相影响。
 - 目标：`main.py` 只保留 argparse、wire-up、process exit code；命令、dashboard、handoff、env config 各自独立。
 
@@ -271,7 +271,7 @@
   - 验收：dashboard 渲染、event line、状态更新可独立单测。
   - 测试：宽字符、截断、向上滚动、非 TTY fallback。
 
-- [ ] T5.3 Handoff 推断独立化
+- [x] T5.3 Handoff 推断独立化
   - 范围：delivery run command、dependency install、source path 判断移入 `harness/delivery/handoff.py`。
   - 验收：CLI 只调用 handoff service 并打印结果。
   - 测试：Python/Node/partial materialized source/usage guide 命令提取。
