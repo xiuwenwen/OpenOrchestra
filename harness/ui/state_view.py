@@ -82,7 +82,7 @@ class HarnessStateView:
         self.file_reader = HarnessFileReader(config)
 
     def tasks(self, limit: int = 20) -> list[dict[str, Any]]:
-        return self.repository.list_tasks(limit)
+        return [dict(task) for task in self.repository.list_tasks(limit)]
 
     def get_runtime_config(self) -> dict[str, Any]:
         return self.config_service.role_runtime_config()
@@ -103,10 +103,11 @@ class HarnessStateView:
         if not task_id:
             return {"task": None, "phases": [], "agent_runs": [], "artifacts": [], "events": []}
 
-        task = self.repository.get_task(task_id)
-        phases = self.repository.list_phases(task_id)
+        task_record = self.repository.get_task(task_id)
+        task = dict(task_record) if task_record else None
+        phases = [dict(phase) for phase in self.repository.list_phases(task_id)]
         phase_by_id = {phase["phase_id"]: phase for phase in phases}
-        artifacts = self.repository.list_artifacts(task_id)
+        artifacts = [dict(artifact) for artifact in self.repository.list_artifacts(task_id)]
         artifacts_by_run: dict[tuple[str | None, str | None], list[dict[str, Any]]] = defaultdict(list)
         for artifact in artifacts:
             enriched = dict(artifact)
@@ -116,7 +117,8 @@ class HarnessStateView:
             artifacts_by_run[(artifact.get("phase_id"), artifact.get("agent_id"))].append(enriched)
 
         agent_runs = []
-        for run in self.repository.list_agent_runs(task_id):
+        for run_record in self.repository.list_agent_runs(task_id):
+            run = dict(run_record)
             phase = phase_by_id.get(run["phase_id"], {})
             log_dir = self._log_dir_for_run(task_id, phase, run)
             run_artifacts = artifacts_by_run.get((run["phase_id"], run["agent_id"]), [])
@@ -142,7 +144,7 @@ class HarnessStateView:
             "agent_runs": agent_runs,
             "artifacts": artifacts,
             "events": self.event_store.events_for(task_id),
-            "event_log": list(reversed(self.repository.list_events(task_id, limit=200))),
+            "event_log": [dict(event) for event in reversed(self.repository.list_events(task_id, limit=200))],
             "roles": self._role_summary(agent_runs, phases),
             "role_rounds": self._role_rounds(agent_runs),
             "success_path": str(success_path) if success_path and success_path.exists() else None,

@@ -8,6 +8,7 @@ import pytest
 
 from harness.agents.result import ArtifactRef
 from harness.state.db import StateDB
+from harness.state.records import AgentRunRecord, ArtifactRecord, EventRecord, JudgeDecisionRecord, PhaseRecord, TaskRecord
 from harness.state.repository import StateRepository
 
 
@@ -39,6 +40,55 @@ def test_state_store_creates_and_queries_records(tmp_path: Path) -> None:
     assert repo.list_agent_runs(task_id)[0]["status"] == "COMPLETED"
     assert repo.list_artifacts(task_id)[0]["artifact_type"] == "plan.md"
     assert repo.list_judge_decisions(task_id)[0]["decision_type"] == "PLAN_JUDGEMENT"
+
+
+def test_repository_returns_typed_records_with_mapping_compatibility(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    task_id = repo.create_task("typed")
+    phase_id = repo.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+    run_id = repo.create_agent_run(task_id, phase_id, "planner", "planner-1", 0)
+    artifact_path = tmp_path / "plan.md"
+    artifact_path.write_text("plan", encoding="utf-8")
+    repo.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=phase_id,
+            role="planner",
+            agent_id="planner-1",
+            artifact_type="plan.md",
+            path=artifact_path,
+            version=1,
+            hash="abc",
+        )
+    )
+    repo.create_judge_decision(task_id, phase_id, "PLAN_JUDGEMENT", {"decision": "approved"})
+    repo.record_event(event_type="phase_started", task_id=task_id, phase="PLANNING_DRAFT")
+
+    task = repo.get_task(task_id)
+    phase = repo.list_phases(task_id)[0]
+    run = repo.list_agent_runs(task_id)[0]
+    artifact = repo.list_artifacts(task_id)[0]
+    decision = repo.list_judge_decisions(task_id)[0]
+    event = repo.list_events(task_id)[0]
+
+    assert isinstance(task, TaskRecord)
+    assert isinstance(phase, PhaseRecord)
+    assert isinstance(run, AgentRunRecord)
+    assert isinstance(artifact, ArtifactRecord)
+    assert isinstance(decision, JudgeDecisionRecord)
+    assert isinstance(event, EventRecord)
+    assert task["task_id"] == task_id
+    assert task.get("status") == "CREATED"
+    assert dict(artifact)["artifact_type"] == "plan.md"
+    assert task.to_dict()["user_prompt"] == "typed"
+
+
+def test_repository_row_conversion_goes_through_typed_records() -> None:
+    source = Path("harness/state/repository.py").read_text(encoding="utf-8")
+
+    assert "dict(row)" not in source
+    assert "from_row(row)" in source
 
 
 def test_state_store_upgrades_existing_tasks_table(tmp_path: Path) -> None:

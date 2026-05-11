@@ -168,9 +168,9 @@
 
 ### A20. 领域模型仍以 dict 穿透
 
-- 证据：repository 返回 `dict[str, Any]`；workflow、visibility、delivery、UI 都直接读取 `"phase_id"`、`"round_id"`、`"artifact_type"`。
-- 风险：字段拼写、缺省值、类型转换散落，重构时没有编译期保护。
-- 目标：逐步引入 `TaskRecord`、`PhaseRecord`、`AgentRunRecord`、`ArtifactRecord` dataclass，并让 repository 边界负责转换。
+- 证据：repository 已返回 `TaskRecord`、`PhaseRecord`、`AgentRunRecord`、`ArtifactRecord` 等兼容映射的 typed records；但 workflow、visibility、delivery 仍大量使用 `record["field"]` 访问。
+- 风险：字段拼写、缺省值、类型转换仍有一部分散落在业务层，后续应逐步改为属性访问或专用 query。
+- 目标：继续减少业务层字符串字段访问，让 repository/query service 提供更明确的领域查询。
 
 ## 分阶段 Todo
 
@@ -210,7 +210,7 @@
 
 ### Phase 2：状态和 round 模型硬化
 
-- [ ] T2.1 引入 typed records
+- [x] T2.1 引入 typed records
   - 范围：`TaskRecord`、`PhaseRecord`、`AgentRunRecord`、`ArtifactRecord`。
   - 验收：workflow、visibility、delivery 不再直接依赖裸 dict；UI adapter 可在边界转换成 JSON。
   - 测试：repository contract tests 覆盖类型转换和缺省值。
@@ -330,7 +330,7 @@
    - 交付：每个 role/phase 独立配置 max_files、max_bytes、large_artifact_mode、mandatory artifacts。
    - 验收：tester/judge/reviewer/communicator 的输入 manifest 有 exact-match 测试。
 
-5. [ ] T2.1 引入 typed records
+5. [x] T2.1 引入 typed records
    - 原因：裸 dict 穿透 workflow、visibility、delivery、UI，字段错误和类型漂移难以控制。
    - 交付：`TaskRecord`、`PhaseRecord`、`AgentRunRecord`、`ArtifactRecord`。
    - 验收：repository 边界负责 dict/dataclass 转换；业务层不直接读取裸 SQLite row。

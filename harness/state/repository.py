@@ -33,6 +33,7 @@ from harness.core.state_machine import (
     TESTING,
 )
 from harness.state.db import StateDB
+from harness.state.records import AgentRunRecord, ArtifactRecord, EventRecord, JudgeDecisionRecord, PhaseRecord, TaskRecord
 
 
 def utc_now_iso() -> str:
@@ -84,12 +85,12 @@ class StateRepository:
             )
         return task_id
 
-    def get_task(self, task_id: str) -> dict[str, Any] | None:
+    def get_task(self, task_id: str) -> TaskRecord | None:
         with self.db.connect() as conn:
             row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
-        return dict(row) if row else None
+        return TaskRecord.from_row(row) if row else None
 
-    def list_tasks(self, limit: int = 20) -> list[dict[str, Any]]:
+    def list_tasks(self, limit: int = 20) -> list[TaskRecord]:
         with self.db.connect() as conn:
             rows = conn.execute(
                 """
@@ -100,7 +101,7 @@ class StateRepository:
                 """,
                 (limit,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [TaskRecord.from_row(row) for row in rows]
 
     def update_task_configuration(self, task_id: str, configuration: str) -> None:
         now = utc_now_iso()
@@ -179,10 +180,10 @@ class StateRepository:
                 (status, completed_at, phase_id),
             )
 
-    def list_phases(self, task_id: str) -> list[dict[str, Any]]:
+    def list_phases(self, task_id: str) -> list[PhaseRecord]:
         with self.db.connect() as conn:
             rows = conn.execute("SELECT * FROM phases WHERE task_id = ? ORDER BY started_at", (task_id,)).fetchall()
-        return [dict(row) for row in rows]
+        return [PhaseRecord.from_row(row) for row in rows]
 
     def create_agent_run(
         self,
@@ -218,10 +219,10 @@ class StateRepository:
                 (status, completed_at, error_message, run_id),
             )
 
-    def list_agent_runs(self, task_id: str) -> list[dict[str, Any]]:
+    def list_agent_runs(self, task_id: str) -> list[AgentRunRecord]:
         with self.db.connect() as conn:
             rows = conn.execute("SELECT * FROM agent_runs WHERE task_id = ? ORDER BY started_at", (task_id,)).fetchall()
-        return [dict(row) for row in rows]
+        return [AgentRunRecord.from_row(row) for row in rows]
 
     def next_artifact_version(self, task_id: str, artifact_type: str) -> int:
         with self._lock, self.db.connect() as conn:
@@ -258,7 +259,7 @@ class StateRepository:
             self._insert_artifact(conn, ref)
             return ref
 
-    def list_artifacts(self, task_id: str, artifact_type: str | None = None) -> list[dict[str, Any]]:
+    def list_artifacts(self, task_id: str, artifact_type: str | None = None) -> list[ArtifactRecord]:
         query = "SELECT * FROM artifacts WHERE task_id = ?"
         params: list[Any] = [task_id]
         if artifact_type:
@@ -267,7 +268,7 @@ class StateRepository:
         query += " ORDER BY created_at, version"
         with self.db.connect() as conn:
             rows = conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+        return [ArtifactRecord.from_row(row) for row in rows]
 
     def _insert_artifact(self, conn: Any, ref: ArtifactRef) -> None:
         conn.execute(
@@ -301,13 +302,13 @@ class StateRepository:
             )
         return decision_id
 
-    def list_judge_decisions(self, task_id: str) -> list[dict[str, Any]]:
+    def list_judge_decisions(self, task_id: str) -> list[JudgeDecisionRecord]:
         with self.db.connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM judge_decisions WHERE task_id = ? ORDER BY created_at",
                 (task_id,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [JudgeDecisionRecord.from_row(row) for row in rows]
 
     def record_event(
         self,
@@ -347,7 +348,7 @@ class StateRepository:
             )
         return event_id
 
-    def list_events(self, task_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    def list_events(self, task_id: str | None = None, limit: int = 200) -> list[EventRecord]:
         query = "SELECT * FROM events"
         params: list[Any] = []
         if task_id is not None:
@@ -357,7 +358,7 @@ class StateRepository:
         params.append(limit)
         with self.db.connect() as conn:
             rows = conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+        return [EventRecord.from_row(row) for row in rows]
 
     def _require_status(self, status: str, allowed: set[str], label: str) -> None:
         if status not in allowed:
