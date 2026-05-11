@@ -54,10 +54,10 @@
 - 风险：入口耦合风险已明显下降；后续风险转移到 `harness/cli/interactive.py` 内部方法仍偏多，需要在功能演进时继续拆 history/resume/cleanup 子服务。
 - 目标：保持 `main.py` 作为 wire-up 文件，禁止重新塞入交互逻辑、dashboard 渲染、handoff 推断、env 映射或 command registry。
 
-### A2. `Orchestrator` 仍是服务定位器和兼容层的混合体
+### A2. `Orchestrator` 仍是 facade 和兼容层的混合体
 
-- 证据：`harness/core/orchestrator.py` 约 995 行，构造所有服务、保存 active task mutable state、暴露大量 `_run_*` 兼容方法，同时持有 `ROLE_INSTRUCTIONS`。
-- 风险：虽然业务逻辑已部分拆走，但模块依赖方向仍以 Orchestrator 为中心。新功能容易继续挂到 Orchestrator 上，导致边界回流。
+- 证据：`harness/app/bootstrap.py` 已接管服务构造和依赖注入，`Orchestrator.__init__` 只挂载 `ApplicationServices` 并维护 active task 状态；但 Orchestrator 仍暴露大量 `_run_*`、`_latest_*`、`_stage_*` 兼容方法。
+- 风险：服务构造耦合已下降，但调用方向仍以 Orchestrator facade 为中心。新功能如果继续依赖私有 helper，会让边界回流。
 - 目标：Orchestrator 仅作为应用服务 facade；服务组合搬到 bootstrap/container；兼容 `_run_*` 方法逐步移除或仅测试层保留。
 
 ### A3. Prompt 合同、角色指令、输出合同散落
@@ -244,7 +244,7 @@
 
 ### Phase 4：Orchestrator 和 Delivery 解耦
 
-- [ ] T4.1 拆 application bootstrap
+- [x] T4.1 拆 application bootstrap
   - 范围：新增 `harness/app/bootstrap.py`，负责服务构造和依赖注入。
   - 验收：`Orchestrator.__init__` 不再手动 new 所有服务；测试可以单独构造 bounded context。
   - 测试：bootstrap wiring smoke test。
@@ -393,7 +393,7 @@
     - 交付：核心文件 LOC、最大函数长度、测试文件 LOC baseline。
     - 验收：先警告不失败，后续逐步收紧。
 
-16. [ ] T4.1 拆 application bootstrap
+16. [x] T4.1 拆 application bootstrap
     - 原因：服务构造仍集中在 Orchestrator。
     - 交付：`harness/app/bootstrap.py`。
     - 验收：Orchestrator 不再手动 new 所有服务。

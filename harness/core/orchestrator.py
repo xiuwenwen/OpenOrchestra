@@ -4,27 +4,20 @@ import json
 import re
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from harness.adapters.base import AgentAdapter
 from harness.adapters.claude_code_adapter import ClaudeCodeAdapter
 from harness.adapters.codex_cli_adapter import CodexCLIAdapter
-from harness.adapters.health import BackendHealthMonitor
 from harness.adapters.headless_cli_adapter import HeadlessCLIAdapter
 from harness.adapters.mock_adapter import MockAgentAdapter
 from harness.agents.result import AgentRunResult
-from harness.agents.runner import AgentPhaseRunner
-from harness.artifacts.manager import ArtifactManager
-from harness.artifacts.validator import ArtifactValidator
-from harness.artifacts.visibility import ARTIFACT_VISIBILITY_RULES, ArtifactVisibilityPolicy
-from harness.communication.communicator import Communicator
+from harness.app.bootstrap import build_orchestrator_services
+from harness.artifacts.visibility import ARTIFACT_VISIBILITY_RULES
 from harness.config.loader import load_config
-from harness.config.runtime import RuntimeConfigService
 from harness.contracts.role_contracts import required_outputs_for, role_instruction_for as contract_role_instruction_for
-from harness.context.staging import InputStagingService
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressCallback, ProgressEvent
-from harness.core.scheduler import BackendBulkheadScheduler
 from harness.core.state_machine import (
     COMPLETED,
     CREATED,
@@ -45,17 +38,11 @@ from harness.core.state_machine import (
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT, normalize_workflow_type
 from harness.judge.decision_parser import parse_decision_file
-from harness.judge.judge_runner import MockJudge
-from harness.logs.logger import get_logger
-from harness.gates.patch_gate import PatchGateService
-from harness.gates.test_gate import TestGateService
-from harness.materialization.service import MaterializedRepoService
-from harness.prompts.builder import PromptBuilder
-from harness.state.db import StateDB
-from harness.state.repository import StateRepository
-from harness.workflow.delivery import DeliveryPublisher
-from harness.workflow.engine import WorkflowEngine
-from harness.workspace.manager import WorkspaceManager
+
+if TYPE_CHECKING:
+    from harness.artifacts.manager import ArtifactManager
+    from harness.state.repository import StateRepository
+    from harness.workspace.manager import WorkspaceManager
 
 
 SINGLE_EXECUTOR_FIX_PHASES = {FIXING, REVIEW_FIXING}
@@ -73,67 +60,37 @@ class Orchestrator:
         fix_round_limit_callback: FixRoundLimitCallback | None = None,
     ):
         self.config = config or load_config()
-        system = self.config["system"]
-        self.repository = repository or StateRepository(StateDB(system["state_db"]))
-        self.config_service = RuntimeConfigService(self.config, self.repository)
-        self.workspace_manager = workspace_manager or WorkspaceManager(system["workspace_root"])
-        self.artifact_manager = artifact_manager or ArtifactManager(system["artifact_root"], self.repository)
-        self.artifact_visibility = ArtifactVisibilityPolicy()
-        self.validator = ArtifactValidator()
-        self.communicator = Communicator(self.repository)
-        self.judge = MockJudge()
-        self.backend_health = BackendHealthMonitor.from_config(self.config)
-        self.scheduler = BackendBulkheadScheduler.from_config(self.config)
-        self.prompt_builder = PromptBuilder()
-        self.materialized_repo_service = MaterializedRepoService(
-            self.repository,
-            self.workspace_manager,
-            config=self.config,
-            markdown_field=self._markdown_field,
-            active_task_id=lambda: self._active_task_id,
-            active_workflow_type=lambda: self._active_workflow_type,
-        )
-        self.test_gate_service = TestGateService(
-            config=self.config,
-            repository=self.repository,
-            artifact_manager=self.artifact_manager,
-            latest_materialized_repo=self.materialized_repo_service.latest_materialized_repo,
-            markdown_field=self._markdown_field,
-        )
-        self.patch_gate_service = PatchGateService(
-            config=self.config,
-            repository=self.repository,
-            artifact_manager=self.artifact_manager,
-            source_repo_for_task=self.materialized_repo_service.source_repo_for_existing_project_task,
-            materialized_repo_dir=self.materialized_repo_service.materialized_repo_dir,
-            copy_source=self.materialized_repo_service.copy_source_for_patch_validation,
-            write_success_marker=self.materialized_repo_service.write_materialized_success_marker,
-            emit=self._emit,
-            positive_int=self._positive_int,
-        )
-        self.input_staging_service = InputStagingService(
-            config=self.config,
-            repository=self.repository,
-            visibility=self.artifact_visibility,
-            judge=self.judge,
-            repo_context_metadata=self.materialized_repo_service.repo_context_metadata,
-            positive_int=self._positive_int,
-        )
-        self.agent_runner = AgentPhaseRunner(self)
-        self.delivery_publisher = DeliveryPublisher(
-            config=self.config,
-            repository=self.repository,
-            latest_usage_guide=self.communicator.latest_usage_guide,
-            latest_materialized_repo=self.materialized_repo_service.latest_materialized_repo,
-            source_repo_for_existing_project_task=self.materialized_repo_service.source_repo_for_existing_project_task,
-        )
-        self.workflow_engine = WorkflowEngine(self)
-        self.logger = get_logger(__name__)
         self._active_task_id: str | None = None
         self._active_workflow_type: str | None = None
         self._active_task_resume_status: str | None = None
         self.progress_callback = progress_callback
         self.fix_round_limit_callback = fix_round_limit_callback
+        services = build_orchestrator_services(
+            self,
+            config=self.config,
+            repository=repository,
+            workspace_manager=workspace_manager,
+            artifact_manager=artifact_manager,
+        )
+        self.repository = services.repository
+        self.config_service = services.config_service
+        self.workspace_manager = services.workspace_manager
+        self.artifact_manager = services.artifact_manager
+        self.artifact_visibility = services.artifact_visibility
+        self.validator = services.validator
+        self.communicator = services.communicator
+        self.judge = services.judge
+        self.backend_health = services.backend_health
+        self.scheduler = services.scheduler
+        self.prompt_builder = services.prompt_builder
+        self.materialized_repo_service = services.materialized_repo_service
+        self.test_gate_service = services.test_gate_service
+        self.patch_gate_service = services.patch_gate_service
+        self.input_staging_service = services.input_staging_service
+        self.agent_runner = services.agent_runner
+        self.delivery_publisher = services.delivery_publisher
+        self.workflow_engine = services.workflow_engine
+        self.logger = services.logger
 
     def create_task(self, user_prompt: str, workflow_type: str | None = None) -> str:
         task_id = self.repository.create_task(user_prompt, CREATED, workflow_type=workflow_type)

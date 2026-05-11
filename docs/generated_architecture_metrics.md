@@ -8,11 +8,11 @@ These metrics are intentionally coarse. They give maintainers a stable baseline 
 
 | Metric | Value | Guardrail |
 | --- | ---: | ---: |
-| Production Python files | 97 | - |
-| Production total LOC | 13267 | 15000 |
-| Test Python files | 32 | - |
-| Test total LOC | 7982 | 10000 |
-| Largest production file | harness/core/orchestrator.py (1011) | 1200 |
+| Production Python files | 99 | - |
+| Production total LOC | 13361 | 15000 |
+| Test Python files | 33 | - |
+| Test total LOC | 8066 | 10000 |
+| Largest production file | harness/core/orchestrator.py (968) | 1200 |
 | Largest test file | tests/test_orchestrator_mock_flow.py (3116) | 3500 |
 | Longest function | harness/agents/runner.py:330 `AgentPhaseRunner.run_agent_with_retry` (257) | 300 |
 
@@ -20,7 +20,7 @@ These metrics are intentionally coarse. They give maintainers a stable baseline 
 
 | LOC | Path |
 | ---: | --- |
-| 1011 | `harness/core/orchestrator.py` |
+| 968 | `harness/core/orchestrator.py` |
 | 768 | `harness/cli/interactive.py` |
 | 744 | `harness/agents/runner.py` |
 | 741 | `harness/prompts/builder.py` |
@@ -63,9 +63,9 @@ These metrics are intentionally coarse. They give maintainers a stable baseline 
 | 100 | `harness/patch/gate.py:167` `analyze_unified_diff` |
 | 96 | `harness/prompts/builder.py:380` `PromptBuilder.build` |
 | 85 | `harness/artifacts/visibility.py:42` `ArtifactVisibilityPolicy.filter_visible_artifacts` |
+| 84 | `harness/app/bootstrap.py:51` `build_orchestrator_services` |
 | 83 | `harness/workflow/delivery.py:308` `DeliveryPublisher.materialized_files_from_unified_diff` |
 | 79 | `harness/main.py:44` `main` |
 | 77 | `harness/gates/patch_gate.py:53` `PatchGateService.try_deterministic_single_candidate_merge` |
 | 71 | `harness/agents/delivery_review.py:123` `DeliveryContractReviewer.build_prompt` |
-| 71 | `harness/core/orchestrator.py:66` `Orchestrator.__init__` |
 | 69 | `harness/adapters/claude_code_adapter.py:157` `ClaudeCodeAdapter._maybe_write_request_diagnostics` |
