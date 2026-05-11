@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_DOC_PATH = Path("docs/generated_architecture_metrics.md")
+DEFAULT_DOC_PATH = Path("logs/generated/architecture_metrics.md")
 PRODUCTION_ROOT = Path("harness")
 TEST_ROOT = Path("tests")
 

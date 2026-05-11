@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from harness.contracts.visibility_matrix import DEFAULT_DOC_PATH, render_visibility_matrix
+from harness.contracts.visibility_matrix import render_visibility_matrix
 
 
-def test_generated_visibility_matrix_is_current() -> None:
-    assert DEFAULT_DOC_PATH.read_text(encoding="utf-8") == render_visibility_matrix()
+def test_visibility_matrix_renders_contract_table() -> None:
+    text = render_visibility_matrix()
+
+    assert "# Generated Role/Phase Visibility Matrix" in text
+    assert "| Target role | Target phase | Required outputs | Input budget | Source role |" in text
+    assert "| judge | TEST_JUDGEMENT | `decision.json`, `decision_summary.md`, `delivery.md`" in text
 
 
 def test_generated_visibility_matrix_documents_empty_tester_inputs() -> None:

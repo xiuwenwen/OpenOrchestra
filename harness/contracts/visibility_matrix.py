@@ -8,7 +8,7 @@ from harness.artifacts.schemas import ROLE_PHASE_CONTRACTS, ArtifactVisibilityRu
 from harness.contracts.role_contracts import artifact_input_budget_for
 
 
-DEFAULT_DOC_PATH = Path("docs/generated_visibility_matrix.md")
+DEFAULT_DOC_PATH = Path("logs/generated/visibility_matrix.md")
 
 
 def render_visibility_matrix() -> str:
@@ -99,8 +99,8 @@ def _cell(value: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate or check the role/phase artifact visibility matrix.")
-    parser.add_argument("--write", action="store_true", help="write the generated matrix to docs/generated_visibility_matrix.md")
-    parser.add_argument("--check", action="store_true", help="fail if docs/generated_visibility_matrix.md is stale")
+    parser.add_argument("--write", action="store_true", help=f"write the generated matrix to {DEFAULT_DOC_PATH}")
+    parser.add_argument("--check", action="store_true", help=f"fail if {DEFAULT_DOC_PATH} is stale")
     parser.add_argument("--output", type=Path, default=DEFAULT_DOC_PATH, help="matrix output path")
     args = parser.parse_args(argv)
 
