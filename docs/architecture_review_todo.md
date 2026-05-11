@@ -160,11 +160,11 @@
 - 风险：新增配置项容易漏掉 env、UI、task override、README 四处之一。
 - 目标：建立 `ConfigSchema`，统一 defaults、env mapping、UI-editable metadata、task override validation、doc generation。
 
-### A19. 多 agent 并发模型缺少资源隔离策略
+### A19. 多 agent 并发模型已有基础资源隔离
 
-- 证据：同 role 可以并发运行；phase timeout 是 `(max_retry + 1) * (timeout + grace)`；但没有全局 worker pool、backend concurrency limit、per-backend token budget。
-- 风险：planner/executor 并发数被调大时，可能同时压垮本地 CPU、磁盘或同一 provider。
-- 目标：引入 `Scheduler` 级别的 backend bulkhead：每 backend 最大并发、每 role 最大并发、全局排队、取消传播。
+- 证据：`BackendBulkheadScheduler` 已支持 `backend_concurrency`、`role_concurrency` 和 `scheduler.global_concurrency`，并包住实际 adapter 调用；等待时会响应 phase cancel event。
+- 风险：当前 bulkhead 是进程内 semaphore，暂不适用于多进程或远程 worker；还没有 provider token budget。
+- 目标：如果未来引入远程 worker 或多进程执行，再把 bulkhead 状态提升到共享调度服务。
 
 ### A20. 领域模型仍以 dict 穿透
 
@@ -237,7 +237,7 @@
   - 验收：provider 系统性失败时不继续无效重试；UI 显示 backend degraded/open。
   - 测试：模拟连续 REQUEST_SIZE、timeout、auth failure、non-retryable failure。
 
-- [ ] T3.3 Scheduler bulkhead
+- [x] T3.3 Scheduler bulkhead
   - 范围：按 backend/role 全局限制并发，支持排队和取消。
   - 验收：配置 `backend_concurrency.claude=1` 时同一时刻只有一个 Claude run。
   - 测试：并发 phase 测试验证排队、超时、取消传播。
@@ -364,7 +364,7 @@
     - 交付：backend 健康状态、连续失败计数、cooldown、熔断、降级策略。
     - 验收：模拟 timeout/auth failure/context limit 时，backend 能进入 degraded/open 状态。
 
-11. [ ] T3.3 Scheduler bulkhead
+11. [x] T3.3 Scheduler bulkhead
     - 原因：多 agent 并发缺少 backend/role 级资源隔离。
     - 交付：按 backend、role、全局并发限制排队执行。
     - 验收：配置 `backend_concurrency.claude=1` 时同一时刻只有一个 Claude run。

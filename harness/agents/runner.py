@@ -441,7 +441,8 @@ class AgentPhaseRunner:
                 )
             )
             try:
-                result = self.run_adapter_with_heartbeat(adapter, context, attempt)
+                with o.scheduler.acquire(backend=backend, role=role, cancel_event=cancel_event):
+                    result = self.run_adapter_with_heartbeat(adapter, context, attempt)
                 if cancel_event and cancel_event.is_set():
                     message = "Phase timed out before this agent result was accepted; ignoring late result"
                     o.repository.update_agent_run_status(run_id, "TIMEOUT", message)

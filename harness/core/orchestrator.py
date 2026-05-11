@@ -23,6 +23,7 @@ from harness.contracts.role_contracts import required_outputs_for, role_instruct
 from harness.context.staging import InputStagingService
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressCallback, ProgressEvent
+from harness.core.scheduler import BackendBulkheadScheduler
 from harness.core.state_machine import (
     COMPLETED,
     CREATED,
@@ -81,6 +82,7 @@ class Orchestrator:
         self.communicator = Communicator(self.repository)
         self.judge = MockJudge()
         self.backend_health = BackendHealthMonitor.from_config(self.config)
+        self.scheduler = BackendBulkheadScheduler.from_config(self.config)
         self.prompt_builder = PromptBuilder()
         self.materialized_repo_service = MaterializedRepoService(
             self.repository,
