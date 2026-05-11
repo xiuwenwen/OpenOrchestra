@@ -4,6 +4,7 @@ from pathlib import Path
 
 from harness.artifacts.schemas import ARTIFACT_VISIBILITY_RULES
 from harness.contracts.role_contracts import (
+    artifact_input_budget_for,
     output_contract_lines_for,
     required_outputs_for,
     role_contract_for,
@@ -62,7 +63,23 @@ def test_role_contract_registry_binds_instruction_outputs_and_contract_lines() -
 
     assert contract.role_instruction == role_instruction_for("tester", "feature_change")
     assert contract.required_outputs == ("bug_report.md", "delivery.md")
+    assert contract.input_budget == artifact_input_budget_for("tester", "TESTING")
     assert any("Do not copy `build_result_code`" in line for line in contract.output_contract_lines)
+
+
+def test_role_phase_input_budgets_are_defined_for_context_heavy_roles() -> None:
+    expected = {
+        ("tester", "TESTING"): (8, "path_only"),
+        ("tester", "REGRESSION_TESTING"): (8, "path_only"),
+        ("judge", "TEST_JUDGEMENT"): (8, "auto"),
+        ("reviewer", "REVIEWING"): (12, "truncated"),
+        ("communicator", "DELIVERY"): (8, "path_only"),
+    }
+
+    for (role, phase), (max_files, large_artifact_mode) in expected.items():
+        budget = artifact_input_budget_for(role, phase)
+        assert budget.max_files == max_files
+        assert budget.large_artifact_mode == large_artifact_mode
 
 
 def test_orchestrator_no_longer_owns_role_instruction_contracts() -> None:

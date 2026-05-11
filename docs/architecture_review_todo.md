@@ -198,7 +198,7 @@
   - 验收：`core/orchestrator.py` 不再定义 `ROLE_INSTRUCTIONS`；`prompts/builder.py` 从 contract registry 读取 specializations。
   - 测试：迁移并扩展 `tests/test_artifact_schemas.py`，覆盖每个 workflow_type + role + phase。
 
-- [ ] T1.2 增加 role/phase artifact budget
+- [x] T1.2 增加 role/phase artifact budget
   - 范围：在 contract 中定义 `input_budget`，替代 staging 中的全局唯一 budget。
   - 验收：tester、judge、reviewer、communicator 的 budget 可分别配置；默认行为与当前测试一致。
   - 测试：为 tester/judge/reviewer/communicator 各加一个 budget exact-match 测试。
@@ -325,7 +325,7 @@
 
 这些任务不一定马上导致事故，但会决定后续重构是否越做越稳。
 
-4. [ ] T1.2 增加 role/phase artifact budget
+4. [x] T1.2 增加 role/phase artifact budget
    - 原因：tester、judge、reviewer、communicator 需要的上下文不同，全局 budget 不能表达差异。
    - 交付：每个 role/phase 独立配置 max_files、max_bytes、large_artifact_mode、mandatory artifacts。
    - 验收：tester/judge/reviewer/communicator 的输入 manifest 有 exact-match 测试。

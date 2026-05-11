@@ -8,7 +8,52 @@ from harness.artifacts.schemas import (
     required_outputs_for as schema_required_outputs_for,
     role_phase_contract_for as schema_role_phase_contract_for,
 )
+from harness.core.state_machine import (
+    DELIVERY,
+    EXECUTION,
+    FIXING,
+    MISC_RESPONSE,
+    PATCH_MERGE,
+    PLAN_REVIEW,
+    PLANNING_DRAFT,
+    PLANNING_PEER_REVIEW,
+    PLANNING_REVISION,
+    REGRESSION_TESTING,
+    REVIEW_FIXING,
+    REVIEW_JUDGEMENT,
+    REVIEWING,
+    TEST_JUDGEMENT,
+    TESTING,
+)
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT, normalize_workflow_type
+
+
+@dataclass(frozen=True)
+class ArtifactInputBudget:
+    max_files: int = 50
+    max_file_bytes: int = 262_144
+    max_total_bytes: int = 1_048_576
+    large_artifact_mode: str = "auto"
+
+
+DEFAULT_ARTIFACT_INPUT_BUDGET = ArtifactInputBudget()
+ROLE_PHASE_INPUT_BUDGETS: dict[tuple[str, str], ArtifactInputBudget] = {
+    ("planner", PLANNING_DRAFT): ArtifactInputBudget(max_files=32, max_file_bytes=131_072, max_total_bytes=786_432),
+    ("planner", PLANNING_PEER_REVIEW): ArtifactInputBudget(max_files=32, max_file_bytes=131_072, max_total_bytes=786_432),
+    ("planner", PLANNING_REVISION): ArtifactInputBudget(max_files=32, max_file_bytes=131_072, max_total_bytes=786_432),
+    ("executor", EXECUTION): ArtifactInputBudget(max_files=12, max_file_bytes=262_144, max_total_bytes=786_432),
+    ("executor", PATCH_MERGE): ArtifactInputBudget(max_files=8, max_file_bytes=262_144, max_total_bytes=786_432),
+    ("executor", MISC_RESPONSE): ArtifactInputBudget(max_files=8, max_file_bytes=131_072, max_total_bytes=524_288),
+    ("executor", FIXING): ArtifactInputBudget(max_files=12, max_file_bytes=131_072, max_total_bytes=524_288, large_artifact_mode="truncated"),
+    ("executor", REVIEW_FIXING): ArtifactInputBudget(max_files=12, max_file_bytes=131_072, max_total_bytes=524_288, large_artifact_mode="truncated"),
+    ("tester", TESTING): ArtifactInputBudget(max_files=8, max_file_bytes=131_072, max_total_bytes=524_288, large_artifact_mode="path_only"),
+    ("tester", REGRESSION_TESTING): ArtifactInputBudget(max_files=8, max_file_bytes=131_072, max_total_bytes=524_288, large_artifact_mode="path_only"),
+    ("reviewer", PLAN_REVIEW): ArtifactInputBudget(max_files=32, max_file_bytes=131_072, max_total_bytes=786_432),
+    ("reviewer", REVIEWING): ArtifactInputBudget(max_files=12, max_file_bytes=131_072, max_total_bytes=524_288, large_artifact_mode="truncated"),
+    ("judge", TEST_JUDGEMENT): ArtifactInputBudget(max_files=8, max_file_bytes=65_536, max_total_bytes=262_144),
+    ("judge", REVIEW_JUDGEMENT): ArtifactInputBudget(max_files=8, max_file_bytes=65_536, max_total_bytes=262_144),
+    ("communicator", DELIVERY): ArtifactInputBudget(max_files=8, max_file_bytes=131_072, max_total_bytes=524_288, large_artifact_mode="path_only"),
+}
 
 
 DEFAULT_ROLE_INSTRUCTIONS = {
@@ -76,6 +121,7 @@ class RoleContract:
     phase: str
     role_instruction: str
     phase_contract: RolePhaseContract
+    input_budget: ArtifactInputBudget
     required_outputs: tuple[str, ...]
     output_contract_lines: tuple[str, ...]
 
@@ -98,6 +144,10 @@ def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]
     return schema_output_contract_lines_for(role, phase, required_outputs)
 
 
+def artifact_input_budget_for(role: str, phase: str) -> ArtifactInputBudget:
+    return ROLE_PHASE_INPUT_BUDGETS.get((role, phase), DEFAULT_ARTIFACT_INPUT_BUDGET)
+
+
 def role_contract_for(workflow_type: str | None, role: str, phase: str) -> RoleContract:
     phase_contract = role_phase_contract_for(role, phase)
     required_outputs = tuple(phase_contract.required_outputs_with_delivery())
@@ -107,6 +157,7 @@ def role_contract_for(workflow_type: str | None, role: str, phase: str) -> RoleC
         phase=phase,
         role_instruction=role_instruction_for(role, workflow_type),
         phase_contract=phase_contract,
+        input_budget=artifact_input_budget_for(role, phase),
         required_outputs=required_outputs,
         output_contract_lines=tuple(output_contract_lines_for(role, phase, list(required_outputs))),
     )

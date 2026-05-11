@@ -1,5 +1,7 @@
 from harness.contracts.role_contracts import (
+    ArtifactInputBudget,
     RoleContract,
+    artifact_input_budget_for,
     output_contract_lines_for,
     required_outputs_for,
     role_contract_for,
@@ -8,7 +10,9 @@ from harness.contracts.role_contracts import (
 )
 
 __all__ = [
+    "ArtifactInputBudget",
     "RoleContract",
+    "artifact_input_budget_for",
     "output_contract_lines_for",
     "required_outputs_for",
     "role_contract_for",

@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from harness.artifacts.schemas import TEST_REPORT_ARTIFACTS
 from harness.artifacts.visibility import ArtifactVisibilityPolicy
+from harness.contracts.role_contracts import DEFAULT_ARTIFACT_INPUT_BUDGET, artifact_input_budget_for
 from harness.core.state_machine import FAILED, FIXING, REGRESSION_TESTING, REVIEW_FIXING, TEST_JUDGEMENT, TESTING
 from harness.judge.judge_runner import MockJudge
 from harness.state.repository import StateRepository
@@ -52,7 +53,7 @@ class InputStagingService:
         staged_paths: list[Path] = []
         manifest_lines = ["# Input Artifact Manifest", ""]
         manifest_lines.extend(self.test_target_manifest_lines(task_id, role, phase, round_id, repo_dir))
-        limits = self.artifact_input_limits()
+        limits = self.artifact_input_limits(role, phase)
         staged_file_count = 0
         staged_total_bytes = 0
         visible_artifacts = [
@@ -83,7 +84,13 @@ class InputStagingService:
             if not source.exists():
                 continue
             source_size = source.stat().st_size
-            staging_mode = self.artifact_staging_mode(role, phase, artifact, source)
+            staging_mode = self.artifact_staging_mode(
+                role,
+                phase,
+                artifact,
+                source,
+                large_artifact_mode=str(limits["large_artifact_mode"]),
+            )
             if staging_mode == "path_only":
                 self.append_path_only_artifact_manifest(
                     manifest_lines,
@@ -263,17 +270,76 @@ class InputStagingService:
                 failed_rounds.add(decision_round)
         return sorted(failed_rounds)
 
-    def artifact_input_limits(self) -> dict[str, int]:
+    def artifact_input_limits(self, role: str | None = None, phase: str | None = None) -> dict[str, Any]:
         configured = self.config.get("artifact_input", {})
+        if not isinstance(configured, dict):
+            configured = {}
+        contract_budget = artifact_input_budget_for(role, phase) if role and phase else DEFAULT_ARTIFACT_INPUT_BUDGET
+        role_phase_config = self.role_phase_artifact_input_config(configured, role, phase)
+        max_files = self.positive_int(
+            role_phase_config.get("max_files"),
+            contract_budget.max_files,
+            self.artifact_input_budget_config_name(role, phase, "max_files"),
+        )
+        max_file_bytes = self.positive_int(
+            role_phase_config.get("max_file_bytes"),
+            contract_budget.max_file_bytes,
+            self.artifact_input_budget_config_name(role, phase, "max_file_bytes"),
+        )
+        max_total_bytes = self.positive_int(
+            role_phase_config.get("max_total_bytes"),
+            contract_budget.max_total_bytes,
+            self.artifact_input_budget_config_name(role, phase, "max_total_bytes"),
+        )
+        if "max_files" in configured:
+            max_files = min(
+                max_files,
+                self.positive_int(configured.get("max_files"), 50, "artifact_input.max_files"),
+            )
+        if "max_file_bytes" in configured:
+            max_file_bytes = min(
+                max_file_bytes,
+                self.positive_int(configured.get("max_file_bytes"), 262_144, "artifact_input.max_file_bytes"),
+            )
+        if "max_total_bytes" in configured:
+            max_total_bytes = min(
+                max_total_bytes,
+                self.positive_int(configured.get("max_total_bytes"), 1_048_576, "artifact_input.max_total_bytes"),
+            )
+        large_artifact_mode = str(role_phase_config.get("large_artifact_mode") or contract_budget.large_artifact_mode)
+        if large_artifact_mode not in {"auto", "copy", "path_only", "truncated"}:
+            large_artifact_mode = contract_budget.large_artifact_mode
         return {
-            "max_files": self.positive_int(configured.get("max_files"), 50, "artifact_input.max_files"),
-            "max_file_bytes": self.positive_int(
-                configured.get("max_file_bytes"), 262_144, "artifact_input.max_file_bytes"
-            ),
-            "max_total_bytes": self.positive_int(
-                configured.get("max_total_bytes"), 1_048_576, "artifact_input.max_total_bytes"
-            ),
+            "max_files": max_files,
+            "max_file_bytes": max_file_bytes,
+            "max_total_bytes": max_total_bytes,
+            "large_artifact_mode": large_artifact_mode,
         }
+
+    def role_phase_artifact_input_config(
+        self,
+        configured: dict[str, Any],
+        role: str | None,
+        phase: str | None,
+    ) -> dict[str, Any]:
+        if not role or not phase:
+            return {}
+        role_phase = configured.get("role_phase")
+        if not isinstance(role_phase, dict):
+            return {}
+        direct = role_phase.get(f"{role}:{phase}")
+        if isinstance(direct, dict):
+            return direct
+        role_entry = role_phase.get(role)
+        if not isinstance(role_entry, dict):
+            return {}
+        phase_entry = role_entry.get(phase) or role_entry.get(phase.lower()) or role_entry.get("*")
+        return phase_entry if isinstance(phase_entry, dict) else {}
+
+    def artifact_input_budget_config_name(self, role: str | None, phase: str | None, key: str) -> str:
+        if role and phase:
+            return f"artifact_input.role_phase.{role}.{phase}.{key}"
+        return f"artifact_input.{key}"
 
     def copy_artifact_with_budget(
         self,
@@ -345,11 +411,20 @@ class InputStagingService:
             ]
         )
 
-    def artifact_staging_mode(self, role: str, phase: str, artifact: dict[str, Any], source: Path) -> str:
+    def artifact_staging_mode(
+        self,
+        role: str,
+        phase: str,
+        artifact: dict[str, Any],
+        source: Path,
+        large_artifact_mode: str = "auto",
+    ) -> str:
         if artifact["artifact_type"] != "merged_patch.diff":
             return "copy"
         if source.stat().st_size < 64_000:
             return "copy"
+        if large_artifact_mode != "auto":
+            return large_artifact_mode
         if role in {"tester", "judge", "communicator"}:
             return "path_only"
         if role == "reviewer":

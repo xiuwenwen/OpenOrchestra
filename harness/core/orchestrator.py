@@ -796,8 +796,8 @@ class Orchestrator:
     ) -> list[int]:
         return self.input_staging_service.failed_test_rounds_before(task_id, phases_by_id, round_id)
 
-    def _artifact_input_limits(self) -> dict[str, int]:
-        return self.input_staging_service.artifact_input_limits()
+    def _artifact_input_limits(self, role: str | None = None, phase: str | None = None) -> dict[str, Any]:
+        return self.input_staging_service.artifact_input_limits(role, phase)
 
     def _positive_int(self, value: Any, default: int, field_name: str) -> int:
         if value is None:
@@ -845,8 +845,21 @@ class Orchestrator:
     ) -> None:
         self.input_staging_service.append_path_only_artifact_manifest(manifest_lines, index, artifact, source, reason)
 
-    def _artifact_staging_mode(self, role: str, phase: str, artifact: dict[str, Any], source: Path) -> str:
-        return self.input_staging_service.artifact_staging_mode(role, phase, artifact, source)
+    def _artifact_staging_mode(
+        self,
+        role: str,
+        phase: str,
+        artifact: dict[str, Any],
+        source: Path,
+        large_artifact_mode: str = "auto",
+    ) -> str:
+        return self.input_staging_service.artifact_staging_mode(
+            role,
+            phase,
+            artifact,
+            source,
+            large_artifact_mode=large_artifact_mode,
+        )
 
     def _artifact_max_file_bytes(self, configured_max_file_bytes: int, staging_mode: str) -> int:
         return self.input_staging_service.artifact_max_file_bytes(configured_max_file_bytes, staging_mode)
