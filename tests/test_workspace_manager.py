@@ -26,6 +26,9 @@ def test_workspace_manager_copies_source_repo_without_generated_dirs(tmp_path: P
     (source_repo / "workspaces" / "old.txt").write_text("ignore", encoding="utf-8")
     (source_repo / ".venv").mkdir()
     (source_repo / ".venv" / "dep.py").write_text("ignore", encoding="utf-8")
+    (source_repo / "output" / "screenshots").mkdir(parents=True)
+    (source_repo / "output" / ".gitkeep").write_text("", encoding="utf-8")
+    (source_repo / "output" / "screenshots" / "runtime.png").write_bytes(b"png")
 
     manager = WorkspaceManager(tmp_path / "workspace-root")
     workspace = manager.create_workspace("task", "phase", "executor", "executor-1", 0, 0, source_repo=source_repo)
@@ -33,3 +36,5 @@ def test_workspace_manager_copies_source_repo_without_generated_dirs(tmp_path: P
     assert (workspace.repo_dir / "app.py").read_text(encoding="utf-8") == "print('ok')\n"
     assert not (workspace.repo_dir / "workspaces").exists()
     assert not (workspace.repo_dir / ".venv").exists()
+    assert (workspace.repo_dir / "output" / ".gitkeep").exists()
+    assert not (workspace.repo_dir / "output" / "screenshots").exists()

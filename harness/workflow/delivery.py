@@ -9,6 +9,7 @@ from harness.agents.result import ArtifactRef
 from harness.artifacts.hashing import sha256_file
 from harness.contracts.role_contracts import required_outputs_for
 from harness.state.repository import StateRepository
+from harness.workspace.manager import WorkspaceManager
 
 
 MATERIALIZED_SUCCESS_MARKER = ".harness_materialized_success.json"
@@ -300,6 +301,7 @@ class DeliveryPublisher:
             name
             for name in names
             if name in {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", MATERIALIZED_SUCCESS_MARKER}
+            or WorkspaceManager.is_generated_runtime_artifact((Path(directory) / name).resolve())
         }
 
     def new_files_from_unified_diff(self, patch_text: str) -> dict[Path, list[str]]:

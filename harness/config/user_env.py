@@ -60,6 +60,9 @@ ENV_CONFIG_SPECS: dict[str, tuple[tuple[str, ...], type]] = {
     "OO_POLICY_REQUIRE_ALL_TESTS_PASS": (("policy", "require_all_tests_pass"), bool),
 }
 LEGACY_ENV_ALIASES = {key.replace("OO_", "HARNESS_", 1): key for key in ENV_CONFIG_SPECS}
+LEGACY_GENERATED_DEFAULT_VALUES: dict[str, set[str]] = {
+    "OO_CLAUDE_CONTEXT_WINDOW_TOKENS": {"200000"},
+}
 
 
 def load_user_env(path: Path = USER_ENV_PATH) -> dict[str, str]:
@@ -105,10 +108,12 @@ def write_user_env(values: dict[str, str], path: Path = USER_ENV_PATH) -> None:
 def ensure_user_env_defaults(config: dict[str, Any], values: dict[str, str], path: Path = USER_ENV_PATH) -> None:
     updated = dict(values)
     for key, (config_path, _value_type) in ENV_CONFIG_SPECS.items():
+        value = get_nested_config(config, config_path)
         if key not in updated:
-            value = get_nested_config(config, config_path)
             if value is not None:
                 updated[key] = str(value).lower() if isinstance(value, bool) else str(value)
+        elif updated[key] in LEGACY_GENERATED_DEFAULT_VALUES.get(key, set()) and value is not None:
+            updated[key] = str(value).lower() if isinstance(value, bool) else str(value)
     if updated != values:
         write_user_env(updated, path)
 

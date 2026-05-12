@@ -207,6 +207,35 @@ def test_prompt_builder_uses_fix_modify_planner_profiles_for_existing_project_wo
     assert "Pragmatic Planner" not in prompt
 
 
+def test_prompt_builder_uses_distinct_bugfix_planner_profiles(tmp_path: Path) -> None:
+    builder = PromptBuilder()
+    base = make_context(tmp_path, role="planner", agent_id="planner-1", role_count=2)
+    planner_1 = builder.build(
+        AgentRunContext(
+            **{
+                **base.__dict__,
+                "agent_id": "planner-1",
+                "metadata": {"workflow_type": "bugfix"},
+            }
+        )
+    )
+    planner_2 = builder.build(
+        AgentRunContext(
+            **{
+                **base.__dict__,
+                "agent_id": "planner-2",
+                "metadata": {"workflow_type": "bugfix"},
+            }
+        )
+    )
+
+    assert "Specialization: Root Cause Minimal Fix Planner." in planner_1
+    assert "not just the first error message" in planner_1
+    assert "Specialization: Verification & Regression Bugfix Planner." in planner_2
+    assert "runnable tests or smoke checks must be run" in planner_2
+    assert planner_1 != planner_2
+
+
 def test_prompt_builder_specializes_two_planners(tmp_path: Path) -> None:
     builder = PromptBuilder()
 
@@ -229,6 +258,14 @@ def test_prompt_builder_specializes_four_testers(tmp_path: Path) -> None:
     assert "Mark build failure as a blocking bug." in tester_1
     assert "Specialization: Integration & Risk Tester." in tester_4
     assert "Delivery risk acceptability." in tester_4
+
+
+def test_tester_prompt_requires_runnable_validation_when_available(tmp_path: Path) -> None:
+    prompt = PromptBuilder().build(make_context(tmp_path, role="tester", agent_id="tester-1", role_count=1))
+
+    assert "you must run them" in prompt
+    assert "do not replace runnable verification with static inspection" in prompt
+    assert "set `test_result_code: -1` and `bug_result_code: -1`" in prompt
 
 
 def test_prompt_builder_has_planner_peer_review_contract(tmp_path: Path) -> None:

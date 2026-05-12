@@ -65,6 +65,10 @@ def _ascii_prompt_for_estimated_tokens(token_count: int) -> str:
     return "x" * (token_count * 4)
 
 
+def _available_output_tokens(prompt: str) -> int:
+    return DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - estimate_prompt_tokens(prompt)
+
+
 def _context(tmp_path: Path, config: dict, role: str = "planner", user_prompt: str = "plan") -> AgentRunContext:
     workspace = tmp_path / "workspace"
     repo = workspace / "repo"
@@ -137,9 +141,7 @@ def test_claude_adapter_uses_configured_max_output_tokens(tmp_path: Path) -> Non
 def test_claude_dynamic_max_output_tokens_respects_context_window() -> None:
     prompt = _ascii_prompt_for_estimated_tokens(145_000)
     estimated_input_tokens = estimate_prompt_tokens(prompt)
-    expected_available_output_tokens = (
-        DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - estimated_input_tokens
-    )
+    expected_available_output_tokens = _available_output_tokens(prompt)
 
     adjusted = claude_dynamic_max_output_tokens(
         {
@@ -202,7 +204,7 @@ def test_dynamic_max_output_tokens_keeps_128k_requests_below_200k_context() -> N
         prompt,
     )
 
-    assert adjusted == DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - estimate_prompt_tokens(prompt)
+    assert adjusted == _available_output_tokens(prompt)
     assert adjusted < 128_000
 
 
@@ -219,9 +221,7 @@ def test_prompt_token_estimate_uses_conservative_mixed_language_multiplier() -> 
 def test_claude_dynamic_max_output_tokens_raises_when_prompt_exceeds_budget() -> None:
     prompt = _ascii_prompt_for_estimated_tokens(DEFAULT_CONTEXT_WINDOW_TOKENS)
     estimated_input_tokens = estimate_prompt_tokens(prompt)
-    expected_available_output_tokens = (
-        DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - estimated_input_tokens
-    )
+    expected_available_output_tokens = _available_output_tokens(prompt)
 
     try:
         claude_dynamic_max_output_tokens(
@@ -275,7 +275,7 @@ def test_codex_adapter_applies_context_window_and_max_output_config(tmp_path: Pa
 
     assert runner.command is not None
     assert "-c" in runner.command
-    assert "model_context_window=200000" in runner.command
+    assert "model_context_window=199999" in runner.command
     assert "max_output_tokens=64000" in runner.command
     assert runner.env is None
 
@@ -302,9 +302,7 @@ def test_codex_adapter_lowers_max_output_for_large_prompt(tmp_path: Path) -> Non
     assert runner.input_text is not None
     max_output_arg = next(arg for arg in runner.command if arg.startswith("max_output_tokens="))
     adjusted_max_output_tokens = int(max_output_arg.split("=", 1)[1])
-    expected_available_output_tokens = (
-        DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_CONTEXT_WINDOW_BUFFER_TOKENS - estimate_prompt_tokens(runner.input_text)
-    )
+    expected_available_output_tokens = _available_output_tokens(runner.input_text)
     assert adjusted_max_output_tokens == expected_available_output_tokens
     assert adjusted_max_output_tokens < 128_000
 

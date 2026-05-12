@@ -627,7 +627,15 @@ class Orchestrator:
             # Multiple fix executors produce competing patches for the same defect, which
             # increases merge conflicts, context size, and risk of broad accidental changes.
             return 1
-        if role == "planner" and self._active_workflow_type in {BUGFIX, FEATURE_CHANGE}:
+        workflow_type = self._active_workflow_type
+        if not workflow_type and task_id:
+            task = self.repository.get_task(task_id)
+            workflow_type = str(task.get("workflow_type") or "") if task else None
+        if role == "planner" and workflow_type == BUGFIX:
+            if agent_count_override is not None:
+                return agent_count_override
+            return 2
+        if role == "planner" and workflow_type == FEATURE_CHANGE:
             configured = agent_count_override if agent_count_override is not None else self.config_service.role_count(task_id, role)
             return min(configured, 2)
         if agent_count_override is not None:
@@ -777,8 +785,10 @@ class Orchestrator:
             instruction = (
                 "Workflow classification: bugfix.\n"
                 "Use the repair workflow. Preserve existing behavior except where needed to fix the reported issue. "
-                "Keep the change scope minimal, produce fix artifacts, and rely on tester and judge artifacts to "
-                "decide whether the fix is complete. Do not perform full new-project planning."
+                "Start with two focused bugfix planners: one must localize the root cause and minimal repair, and "
+                "the other must define runnable validation, regression risks, and acceptance evidence. Keep the "
+                "change scope minimal, produce fix artifacts, and rely on tester and judge artifacts to decide "
+                "whether the fix is complete."
             )
         elif workflow_type == FEATURE_CHANGE:
             instruction = (

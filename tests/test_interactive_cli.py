@@ -67,7 +67,7 @@ def _config(tmp_path: Path) -> dict:
         "heartbeat": {"interval_seconds": 60},
         "visualization": {"host": "127.0.0.1", "port": 8765},
         "claude": {
-            "context_window_tokens": 200000,
+            "context_window_tokens": 199999,
             "context_window_buffer_tokens": 2048,
             "max_output_tokens": {
                 "classifier": 2048,
@@ -689,6 +689,197 @@ def test_main_dispatches_one_shot_slash_command(monkeypatch, tmp_path: Path) -> 
     assert calls == ["/resume 1"]
 
 
+def test_main_source_repo_argument_overrides_persistent_env(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("unused: true\n", encoding="utf-8")
+    configured_source = tmp_path / "configured-source"
+    cli_source = tmp_path / "cli-source"
+    configured_source.mkdir()
+    cli_source.mkdir()
+    captured: dict[str, str] = {}
+
+    def fake_load_config(path):
+        assert str(path) == str(config_path)
+        config = _config(tmp_path)
+        config["system"]["source_repo"] = str(configured_source)
+        return config
+
+    def fake_run_once(orchestrator, prompt: str, workflow_type: str) -> int:
+        captured["prompt"] = prompt
+        captured["workflow_type"] = workflow_type
+        captured["source_repo"] = orchestrator.config["system"]["source_repo"]
+        return 0
+
+    monkeypatch.setattr(main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(
+        main_module,
+        "load_user_env",
+        lambda path=main_module.USER_ENV_PATH: {"OO_BACKEND": "codex", "OO_SOURCE_REPO": str(configured_source)},
+    )
+    monkeypatch.setattr(main_module, "ensure_user_env_defaults", lambda config, values, path=main_module.USER_ENV_PATH: None)
+    monkeypatch.setattr(main_module, "resolve_real_backend", lambda requested: requested)
+    monkeypatch.setattr(main_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        main_module.sys,
+        "argv",
+        [
+            "harness",
+            "--config",
+            str(config_path),
+            "--no-ui",
+            "--workflow",
+            "bugfix",
+            "--source-repo",
+            str(cli_source),
+            "fix the bug",
+        ],
+    )
+
+    assert main_module.main() == 0
+
+    assert captured == {
+        "prompt": "fix the bug",
+        "workflow_type": "bugfix",
+        "source_repo": str(cli_source.resolve()),
+    }
+
+
+def test_main_prompt_file_supplies_one_shot_prompt(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("unused: true\n", encoding="utf-8")
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text("fix from file\n", encoding="utf-8")
+    captured: dict[str, str] = {}
+
+    def fake_load_config(path):
+        assert str(path) == str(config_path)
+        return _config(tmp_path)
+
+    def fake_run_once(orchestrator, prompt: str, workflow_type: str) -> int:
+        captured["prompt"] = prompt
+        captured["workflow_type"] = workflow_type
+        return 0
+
+    monkeypatch.setattr(main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(main_module, "load_user_env", lambda path=main_module.USER_ENV_PATH: {"OO_BACKEND": "codex"})
+    monkeypatch.setattr(main_module, "ensure_user_env_defaults", lambda config, values, path=main_module.USER_ENV_PATH: None)
+    monkeypatch.setattr(main_module, "resolve_real_backend", lambda requested: requested)
+    monkeypatch.setattr(main_module, "run_once", fake_run_once)
+    monkeypatch.setattr(
+        main_module.sys,
+        "argv",
+        [
+            "harness",
+            "--config",
+            str(config_path),
+            "--no-ui",
+            "--workflow",
+            "bugfix",
+            "--prompt-file",
+            str(prompt_file),
+        ],
+    )
+
+    assert main_module.main() == 0
+
+    assert captured == {"prompt": "fix from file", "workflow_type": "bugfix"}
+
+
+def test_main_rejects_prompt_file_with_extra_prompt_args(monkeypatch, tmp_path: Path, capsys) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("unused: true\n", encoding="utf-8")
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text("fix from file\n", encoding="utf-8")
+
+    def fake_load_config(path):
+        assert str(path) == str(config_path)
+        return _config(tmp_path)
+
+    monkeypatch.setattr(main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(main_module, "load_user_env", lambda path=main_module.USER_ENV_PATH: {"OO_BACKEND": "codex"})
+    monkeypatch.setattr(main_module, "ensure_user_env_defaults", lambda config, values, path=main_module.USER_ENV_PATH: None)
+    monkeypatch.setattr(main_module, "resolve_real_backend", lambda requested: requested)
+    monkeypatch.setattr(main_module, "run_once", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not run task")))
+    monkeypatch.setattr(
+        main_module.sys,
+        "argv",
+        [
+            "harness",
+            "--config",
+            str(config_path),
+            "--no-ui",
+            "--prompt-file",
+            str(prompt_file),
+            "extra prompt",
+        ],
+    )
+
+    assert main_module.main() == 2
+    assert "--prompt-file cannot be combined" in capsys.readouterr().err
+
+
+def test_main_rejects_empty_prompt_file(monkeypatch, tmp_path: Path, capsys) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("unused: true\n", encoding="utf-8")
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text(" \n", encoding="utf-8")
+
+    def fake_load_config(path):
+        assert str(path) == str(config_path)
+        return _config(tmp_path)
+
+    monkeypatch.setattr(main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(main_module, "load_user_env", lambda path=main_module.USER_ENV_PATH: {"OO_BACKEND": "codex"})
+    monkeypatch.setattr(main_module, "ensure_user_env_defaults", lambda config, values, path=main_module.USER_ENV_PATH: None)
+    monkeypatch.setattr(main_module, "resolve_real_backend", lambda requested: requested)
+    monkeypatch.setattr(main_module, "run_once", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not run task")))
+    monkeypatch.setattr(
+        main_module.sys,
+        "argv",
+        [
+            "harness",
+            "--config",
+            str(config_path),
+            "--no-ui",
+            "--prompt-file",
+            str(prompt_file),
+        ],
+    )
+
+    assert main_module.main() == 2
+    assert "--prompt-file must not be empty" in capsys.readouterr().err
+
+
+def test_main_rejects_invalid_prompt_file_before_starting_ui(monkeypatch, tmp_path: Path, capsys) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("unused: true\n", encoding="utf-8")
+    missing_prompt = tmp_path / "missing.md"
+
+    def fake_load_config(path):
+        assert str(path) == str(config_path)
+        return _config(tmp_path)
+
+    monkeypatch.setattr(main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(main_module, "load_user_env", lambda path=main_module.USER_ENV_PATH: {"OO_BACKEND": "codex"})
+    monkeypatch.setattr(main_module, "ensure_user_env_defaults", lambda config, values, path=main_module.USER_ENV_PATH: None)
+    monkeypatch.setattr(main_module, "resolve_real_backend", lambda requested: requested)
+    monkeypatch.setattr(main_module, "start_ui_server", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("ui should not start")))
+    monkeypatch.setattr(
+        main_module.sys,
+        "argv",
+        [
+            "harness",
+            "--config",
+            str(config_path),
+            "--prompt-file",
+            str(missing_prompt),
+        ],
+    )
+
+    assert main_module.main() == 2
+    assert "--prompt-file must be an existing file" in capsys.readouterr().err
+
+
 def test_main_cooldown_backend_persists_and_exits_without_ui(monkeypatch, tmp_path: Path, capsys) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("unused: true\n", encoding="utf-8")
@@ -816,8 +1007,30 @@ def test_ensure_user_env_defaults_adds_missing_config_values(tmp_path: Path) -> 
     assert values["OO_COMMUNICATOR_COUNT"] == "1"
     assert values["OO_WORKSPACE_ROOT"] == str(tmp_path / "workspaces")
     assert values["OO_UI_PORT"] == "8765"
+    assert values["OO_CLAUDE_CONTEXT_WINDOW_TOKENS"] == "199999"
     assert values["OO_CLAUDE_MAX_TOKENS_MISC"] == "64000"
     assert values["OO_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY"] == "true"
+
+
+def test_ensure_user_env_defaults_migrates_legacy_generated_context_window_default(tmp_path: Path) -> None:
+    env_path = tmp_path / ".openorchestra.env"
+    config = _config(tmp_path)
+    env_path.write_text(
+        "\n".join(
+            [
+                "OO_CLAUDE_CONTEXT_WINDOW_TOKENS=200000",
+                "OO_CLAUDE_MAX_TOKENS_EXECUTOR=48000",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    main_module.ensure_user_env_defaults(config, main_module.load_user_env(env_path), env_path)
+
+    values = main_module.load_user_env(env_path)
+    assert values["OO_CLAUDE_CONTEXT_WINDOW_TOKENS"] == "199999"
+    assert values["OO_CLAUDE_MAX_TOKENS_EXECUTOR"] == "48000"
 
 
 def test_env_role_counts_override_config(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import builtins
 import sys
+from pathlib import Path
 
 from harness.cli.interactive import InteractiveCLI
 from harness.cli.runtime import REAL_BACKENDS, classify_workflow, resolve_real_backend, run_once
@@ -41,6 +42,24 @@ from harness.ui.terminal_dashboard import (
 )
 
 
+def read_one_shot_prompt(args: argparse.Namespace) -> tuple[int, str]:
+    if args.prompt_file and args.prompt:
+        print("[ERROR] --prompt-file cannot be combined with prompt arguments", file=sys.stderr)
+        return 2, ""
+    if not args.prompt_file:
+        return 0, " ".join(args.prompt).strip()
+
+    prompt_file = Path(args.prompt_file).expanduser().resolve()
+    if not prompt_file.exists() or not prompt_file.is_file():
+        print(f"[ERROR] --prompt-file must be an existing file: {prompt_file}", file=sys.stderr)
+        return 2, ""
+    prompt = prompt_file.read_text(encoding="utf-8").strip()
+    if not prompt:
+        print(f"[ERROR] --prompt-file must not be empty: {prompt_file}", file=sys.stderr)
+        return 2, ""
+    return 0, prompt
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="orchestra",
@@ -70,6 +89,17 @@ def main() -> int:
         help="Override automatic workflow classification.",
     )
     parser.add_argument(
+        "--source-repo",
+        help=(
+            "Use this existing project directory for the current run only. "
+            "This overrides configured OO_SOURCE_REPO without writing ~/.openorchestra.env."
+        ),
+    )
+    parser.add_argument(
+        "--prompt-file",
+        help="Read the one-shot task prompt from this UTF-8 text file instead of command-line arguments.",
+    )
+    parser.add_argument(
         "--ui",
         dest="ui",
         action="store_true",
@@ -91,6 +121,12 @@ def main() -> int:
     ensure_user_env_defaults(config, user_env)
     user_env = load_user_env()
     apply_user_env_config(config, user_env)
+    if args.source_repo:
+        source_repo = Path(args.source_repo).expanduser().resolve()
+        if not source_repo.exists() or not source_repo.is_dir():
+            print(f"[ERROR] --source-repo must be an existing directory: {source_repo}", file=sys.stderr)
+            return 2
+        config.setdefault("system", {})["source_repo"] = str(source_repo)
     backend = resolve_real_backend(args.backend or user_env.get("OO_BACKEND", "auto"))
     config["agent_backend"]["default"] = backend
     for role in ("planner", "executor", "tester", "reviewer", "judge", "communicator"):
@@ -116,6 +152,9 @@ def main() -> int:
             flush=True,
         )
         return 0
+    prompt_status, prompt = read_one_shot_prompt(args)
+    if prompt_status:
+        return prompt_status
     ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port, args.config) if args.ui else None
     cli = InteractiveCLI(
         config,
@@ -127,7 +166,6 @@ def main() -> int:
         orchestrator=orchestrator,
         config_path=args.config,
     )
-    prompt = " ".join(args.prompt).strip()
     if prompt:
         command_line = cli.command_line_for_text(prompt)
         if command_line:

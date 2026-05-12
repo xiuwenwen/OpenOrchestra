@@ -56,7 +56,7 @@ visualization:
   port: 8765
 
 claude:
-  context_window_tokens: 200000
+  context_window_tokens: 199999
   context_window_buffer_tokens: 2048
   max_output_tokens:
     classifier: 2048

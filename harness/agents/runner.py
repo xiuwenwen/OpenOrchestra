@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import re
 import shutil
 import threading
 import time
@@ -9,6 +11,10 @@ from typing import Any
 
 from harness.adapters.base import AgentAdapter
 from harness.adapters.claude_code_adapter import REQUEST_SIZE_ERROR_PATTERNS
+from harness.adapters.claude_config import (
+    MIN_DYNAMIC_MAX_OUTPUT_TOKENS,
+    claude_context_window_tokens,
+)
 from harness.agents.context import AgentRunContext
 from harness.agents.delivery_review import DeliveryContractReviewer
 from harness.agents.output_policy import AgentOutputPolicy
@@ -21,6 +27,11 @@ from harness.core.progress import ProgressEvent
 
 class NonRetryableAgentError(TaskFailedError):
     """Agent failure that cannot be fixed by rerunning the same prompt."""
+
+
+REQUESTED_OUTPUT_TOKENS_RE = re.compile(r"requested\s+(\d+)\s+output tokens")
+INPUT_TOKENS_RE = re.compile(r"(?:prompt contains at least\s+|parameter=input_tokens,\s*value=)(\d+)")
+MAX_OUTPUT_TOKENS_ENV_RE = re.compile(r"max_output_tokens_env:\s*`(\d+)`")
 
 
 class AgentPhaseRunner:
@@ -346,6 +357,7 @@ class AgentPhaseRunner:
         max_retry = int(o.config["limits"]["max_agent_retry"])
         last_result: AgentRunResult | None = None
         last_error_message: str | None = None
+        downgraded_max_output_tokens: int | None = None
         for attempt in range(max_retry + 1):
             if cancel_event and cancel_event.is_set():
                 raise TaskFailedError(f"Agent {agent_id} cancelled because the phase timed out")
@@ -392,6 +404,13 @@ class AgentPhaseRunner:
             task_for_metadata = o.repository.get_task(task_id) or {"task_id": task_id, "user_prompt": user_prompt}
             metadata = o.context_metadata(task_for_metadata, role, phase)
             metadata.update(o.repo_context_metadata(task_id, role, phase))
+            context_config = o.config_service.config_for_task(task_id)
+            if downgraded_max_output_tokens is not None:
+                context_config = self.config_with_role_max_output_override(
+                    context_config,
+                    role,
+                    downgraded_max_output_tokens,
+                )
             context = AgentRunContext(
                 task_id=task_id,
                 phase_id=phase_id,
@@ -409,7 +428,7 @@ class AgentPhaseRunner:
                 input_artifacts=input_artifacts,
                 required_outputs=required_outputs,
                 timeout_seconds=timeout_seconds,
-                config=o.config_service.config_for_task(task_id),
+                config=context_config,
                 metadata=metadata,
             )
             seed_output_templates(
@@ -498,8 +517,17 @@ class AgentPhaseRunner:
                     message = f"Agent exit_code={result.exit_code} status={result.status}{suffix}"
                 else:
                     message = "; ".join(errors) if errors else f"Agent exit_code={result.exit_code} status={result.status}"
-                terminal_failure = self.is_request_size_failure(result, context, message)
-                if terminal_failure:
+                request_size_failure = self.is_request_size_failure(result, context, message)
+                next_max_output_tokens = (
+                    self.request_size_retry_max_output_tokens(context, result=result, message=message)
+                    if request_size_failure and attempt < max_retry
+                    else None
+                )
+                terminal_failure = request_size_failure and next_max_output_tokens is None
+                if request_size_failure and next_max_output_tokens is not None:
+                    status = "FAILED"
+                    message = self.request_size_retry_message(context, next_max_output_tokens)
+                elif terminal_failure:
                     status = "FAILED"
                     message = self.request_size_failure_message(context)
                 last_error_message = message
@@ -514,6 +542,8 @@ class AgentPhaseRunner:
                 }
                 if diagnostics_path.exists():
                     event_data["diagnostics"] = str(diagnostics_path)
+                if next_max_output_tokens is not None:
+                    event_data["next_max_output_tokens"] = next_max_output_tokens
                 o.emit_progress(
                     ProgressEvent(
                         "agent_failed" if terminal_failure else "agent_retryable_failure",
@@ -528,6 +558,10 @@ class AgentPhaseRunner:
                         data=event_data,
                     )
                 )
+                if next_max_output_tokens is not None:
+                    downgraded_max_output_tokens = next_max_output_tokens
+                    last_result = result
+                    continue
                 health = self.record_backend_failure(backend, context, attempt, message, status=status)
                 if not health.allowed:
                     raise NonRetryableAgentError(health.reason or message)
@@ -539,11 +573,20 @@ class AgentPhaseRunner:
             except Exception as exc:
                 last_error_message = str(exc)
                 failure_status = "TIMEOUT" if cancel_event and cancel_event.is_set() else "FAILED"
-                terminal_failure = self.text_contains_request_size_error(str(exc)) or self.logs_contain_request_size_error(
+                request_size_failure = self.text_contains_request_size_error(str(exc)) or self.logs_contain_request_size_error(
                     context.log_dir
                 )
+                next_max_output_tokens = (
+                    self.request_size_retry_max_output_tokens(context, result=None, message=str(exc))
+                    if request_size_failure and attempt < max_retry
+                    else None
+                )
+                terminal_failure = request_size_failure and next_max_output_tokens is None
                 status_message = str(exc)
-                if terminal_failure:
+                if request_size_failure and next_max_output_tokens is not None:
+                    status_message = self.request_size_retry_message(context, next_max_output_tokens)
+                    last_error_message = status_message
+                elif terminal_failure:
                     last_error_message = self.request_size_failure_message(context)
                     status_message = last_error_message
                 o.repository.update_agent_run_status(run_id, failure_status, status_message)
@@ -552,6 +595,8 @@ class AgentPhaseRunner:
                 event_data = {"logs": str(context.log_dir), "elapsed_seconds": elapsed_seconds}
                 if diagnostics_path.exists():
                     event_data["diagnostics"] = str(diagnostics_path)
+                if next_max_output_tokens is not None:
+                    event_data["next_max_output_tokens"] = next_max_output_tokens
                 o.emit_progress(
                     ProgressEvent(
                         "agent_failed" if terminal_failure else "agent_retryable_failure",
@@ -566,6 +611,10 @@ class AgentPhaseRunner:
                         data=event_data,
                     )
                 )
+                if next_max_output_tokens is not None:
+                    downgraded_max_output_tokens = next_max_output_tokens
+                    last_result = AgentRunResult(task_id, phase_id, role, agent_id, "FAILED", exit_code=1)
+                    continue
                 health = self.record_backend_failure(
                     backend,
                     context,
@@ -695,6 +744,71 @@ class AgentPhaseRunner:
 
     def text_contains_request_size_error(self, text: str) -> bool:
         return any(pattern in text for pattern in REQUEST_SIZE_ERROR_PATTERNS)
+
+    def request_size_retry_max_output_tokens(
+        self,
+        context: AgentRunContext,
+        *,
+        result: AgentRunResult | None,
+        message: str,
+    ) -> int | None:
+        text = self.request_size_failure_text(context, result, message)
+        input_tokens = self._max_regex_int(INPUT_TOKENS_RE, text)
+        requested_output_tokens = self._max_regex_int(REQUESTED_OUTPUT_TOKENS_RE, text)
+        if requested_output_tokens is None:
+            requested_output_tokens = self._max_regex_int(MAX_OUTPUT_TOKENS_ENV_RE, text)
+        context_window = claude_context_window_tokens(context.config)
+        if input_tokens is None or requested_output_tokens is None or context_window is None:
+            return None
+        next_max_output_tokens = context_window - input_tokens
+        if next_max_output_tokens >= requested_output_tokens:
+            return None
+        if next_max_output_tokens < MIN_DYNAMIC_MAX_OUTPUT_TOKENS:
+            return None
+        return next_max_output_tokens
+
+    def request_size_failure_text(
+        self,
+        context: AgentRunContext,
+        result: AgentRunResult | None,
+        message: str,
+    ) -> str:
+        texts = [message]
+        if result:
+            for path in (result.stdout_path, result.stderr_path):
+                if path and path.exists():
+                    texts.append(path.read_text(encoding="utf-8", errors="replace"))
+        diagnostics = context.log_dir / "request_diagnostics.md"
+        if diagnostics.exists():
+            texts.append(diagnostics.read_text(encoding="utf-8", errors="replace"))
+        return "\n".join(texts)
+
+    def _max_regex_int(self, pattern: re.Pattern[str], text: str) -> int | None:
+        values = [int(value) for value in pattern.findall(text)]
+        return max(values) if values else None
+
+    def config_with_role_max_output_override(
+        self,
+        config: dict[str, Any],
+        role: str,
+        max_output_tokens: int,
+    ) -> dict[str, Any]:
+        adjusted = copy.deepcopy(config)
+        claude_config = adjusted.setdefault("claude", {})
+        configured = claude_config.get("max_output_tokens")
+        if isinstance(configured, dict):
+            configured[role] = max_output_tokens
+        else:
+            claude_config["max_output_tokens"] = max_output_tokens
+        return adjusted
+
+    def request_size_retry_message(self, context: AgentRunContext, next_max_output_tokens: int) -> str:
+        diagnostics_path = context.log_dir / "request_diagnostics.md"
+        return (
+            "Agent request exceeded the model context/request-size budget; retrying next attempt with "
+            f"claude.max_output_tokens.{context.role}={next_max_output_tokens}. "
+            f"Diagnostics: {diagnostics_path}"
+        )
 
     def request_size_failure_message(self, context: AgentRunContext) -> str:
         diagnostics_path = context.log_dir / "request_diagnostics.md"

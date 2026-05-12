@@ -144,14 +144,19 @@ class MaterializedRepoService:
         if project_context_source_repo:
             return {
                 "repository_source_type": "project_context_source_repo",
-                "repository_source_path": str(project_context_source_repo),
-                "repository_source_note": "This role's repository directory was copied from the source repo selected from project_context.md.",
+                "repository_source_note": (
+                    "This role's repository directory was copied from the source repo selected from project_context.md. "
+                    "Use only the workspace Repository directory; the original source path is intentionally hidden."
+                ),
             }
         source_repo = self.source_repo_for_workspace()
         if source_repo:
             return {
                 "repository_source_type": "configured_source_repo",
-                "repository_source_path": str(source_repo),
+                "repository_source_note": (
+                    "This role's repository directory was copied from the configured source repo. "
+                    "Use only the workspace Repository directory; the original source path is intentionally hidden."
+                ),
             }
         return {"repository_source_type": "empty_workspace_repo"}
 
@@ -244,16 +249,31 @@ class MaterializedRepoService:
             ignore=lambda directory, names: {
                 name
                 for name in names
-                if name in WorkspaceManager.DEFAULT_COPY_IGNORE_NAMES
-                or self.is_relative_to((Path(directory) / name).resolve(), self.workspace_manager.workspace_root)
+                if self.should_ignore_copied_source_item(directory, name)
             },
+        )
+
+    def should_ignore_copied_source_item(self, directory: str, name: str) -> bool:
+        path = (Path(directory) / name).resolve()
+        return (
+            name in WorkspaceManager.DEFAULT_COPY_IGNORE_NAMES
+            or WorkspaceManager.is_generated_runtime_artifact(path)
+            or self.is_relative_to(path, self.workspace_manager.workspace_root)
         )
 
     def copy_ignore_for_materialized_workspace(self, directory: str, names: list[str]) -> set[str]:
         return {
             name
             for name in names
-            if name in {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", MATERIALIZED_SUCCESS_MARKER}
+            if name in {
+                ".git",
+                "__pycache__",
+                ".pytest_cache",
+                ".mypy_cache",
+                ".ruff_cache",
+                MATERIALIZED_SUCCESS_MARKER,
+            }
+            or WorkspaceManager.is_generated_runtime_artifact((Path(directory) / name).resolve())
         }
 
     def is_relative_to(self, path: Path, parent: Path) -> bool:

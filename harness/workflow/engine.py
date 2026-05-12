@@ -106,6 +106,8 @@ class WorkflowEngine:
         o = self.runtime
         max_rounds = self.max_test_fix_rounds()
         start_round = self.bugfix_resume_start_round(task_id)
+        if self.bugfix_needs_initial_planning(task_id, start_round):
+            self.run_planning_block(task_id, user_prompt)
         round_id = start_round
         attempts = 0
         while True:
@@ -131,6 +133,12 @@ class WorkflowEngine:
                 break
         self.run_review_loop(task_id, user_prompt)
         return self.run_delivery(task_id, user_prompt)
+
+    def bugfix_needs_initial_planning(self, task_id: str, start_round: int) -> bool:
+        if start_round > 0:
+            return False
+        planning_phases = {PLANNING_DRAFT, PLANNING_PEER_REVIEW, PLANNING_REVISION, PLAN_REVIEW}
+        return not any(phase["phase_type"] in planning_phases for phase in self.runtime.repository.list_phases(task_id))
 
     def bugfix_resume_start_round(self, task_id: str) -> int:
         o = self.runtime
@@ -178,7 +186,7 @@ class WorkflowEngine:
 
     def run_planning_block(self, task_id: str, user_prompt: str) -> None:
         o = self.runtime
-        planner_count = int(o.config["roles"]["planner"]["count"])
+        planner_count = int(o.effective_agent_count(task_id, "planner", PLANNING_DRAFT))
         loop_count = self.planning_peer_review_loop_count()
         effective_loop_count = loop_count if planner_count > 1 else 1
         next_round_id = 0

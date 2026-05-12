@@ -218,6 +218,97 @@ def test_context_window_failure_is_not_retried(monkeypatch, tmp_path: Path) -> N
     assert any(event.event_type == "agent_failed" for event in events)
     assert not any(event.event_type == "agent_retryable_failure" for event in events)
 
+
+def test_context_window_failure_with_exact_tokens_retries_with_downgraded_output(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config["roles"]["executor"]["count"] = 1
+    config["limits"]["max_agent_retry"] = 1
+    config["claude"] = {"context_window_tokens": 199999, "max_output_tokens": {"executor": 64000}}
+    events: list[ProgressEvent] = []
+    orchestrator = Orchestrator(config, progress_callback=events.append)
+    task_id = orchestrator.create_task("large context")
+
+    class ContextWindowThenSuccessAdapter:
+        def __init__(self):
+            self.seen_max_output_tokens: list[int | None] = []
+
+        def run(self, context):
+            context.log_dir.mkdir(parents=True, exist_ok=True)
+            stdout = context.log_dir / "stdout.log"
+            stderr = context.log_dir / "stderr.log"
+            configured = context.config.get("claude", {}).get("max_output_tokens")
+            self.seen_max_output_tokens.append(
+                configured.get("executor") if isinstance(configured, dict) else configured
+            )
+            if len(self.seen_max_output_tokens) == 1:
+                stdout.write_text(
+                    "ContextWindowExceededError: This model's maximum context length is 200000 tokens. "
+                    "However, you requested 64000 output tokens and your prompt contains at least "
+                    "136001 input tokens, for a total of at least 200001 tokens. "
+                    "(parameter=input_tokens, value=136001)",
+                    encoding="utf-8",
+                )
+                stderr.write_text("", encoding="utf-8")
+                return AgentRunResult(
+                    task_id=context.task_id,
+                    phase_id=context.phase_id,
+                    role=context.role,
+                    agent_id=context.agent_id,
+                    status="FAILED",
+                    exit_code=1,
+                    stdout_path=stdout,
+                    stderr_path=stderr,
+                )
+            context.output_dir.mkdir(parents=True, exist_ok=True)
+            (context.output_dir / "response.md").write_text("artifact_result_code: 0\n\nok\n", encoding="utf-8")
+            (context.output_dir / "notes.md").write_text("artifact_result_code: 0\n\nok\n", encoding="utf-8")
+            (context.output_dir / "delivery.md").write_text(
+                json.dumps(
+                    {
+                        "return_code": 0,
+                        "task_status": "success",
+                        "role_return_code": 0,
+                        "produced_files": context.required_outputs,
+                        "known_risks": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            stdout.write_text("ok", encoding="utf-8")
+            stderr.write_text("", encoding="utf-8")
+            return AgentRunResult(
+                task_id=context.task_id,
+                phase_id=context.phase_id,
+                role=context.role,
+                agent_id=context.agent_id,
+                status="COMPLETED",
+                exit_code=0,
+                stdout_path=stdout,
+                stderr_path=stderr,
+            )
+
+    adapter = ContextWindowThenSuccessAdapter()
+    monkeypatch.setattr(orchestrator, "_adapter_for_backend", lambda backend: adapter)
+
+    results = orchestrator.run_role_phase(
+        "executor",
+        "MISC_RESPONSE",
+        0,
+        required_outputs_for("executor", "MISC_RESPONSE"),
+        "large context",
+    )
+
+    assert len(results) == 1
+    assert adapter.seen_max_output_tokens == [64000, 63998]
+    runs = orchestrator.repository.list_agent_runs(task_id)
+    assert [run["status"] for run in runs] == ["FAILED", "COMPLETED"]
+    retry_event = next(event for event in events if event.event_type == "agent_retryable_failure")
+    assert retry_event.data["next_max_output_tokens"] == 63998
+
 def test_final_execution_fix_round_is_tested_before_exhaustion(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     config["limits"]["max_test_fix_rounds"] = 1

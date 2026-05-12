@@ -104,7 +104,7 @@ class TestGateService:
             return [str(command) for command in configured if str(command).strip()]
         if repo_dir is None:
             return []
-        if (repo_dir / "tests").exists():
+        if self.repo_has_pytest_tests(repo_dir):
             return [f"{sys.executable} -m pytest -q"]
         if self.repo_has_python_files(repo_dir):
             return [f"{sys.executable} -m compileall -q ."]
@@ -121,12 +121,24 @@ class TestGateService:
                 return ["npm run build"]
         return []
 
+    def repo_has_pytest_tests(self, repo_dir: Path) -> bool:
+        for path in repo_dir.rglob("*.py"):
+            if self._ignored_repo_path(path):
+                continue
+            if path.name.startswith("test_") or path.name.endswith("_test.py") or "tests" in path.parts:
+                return True
+        return False
+
     def repo_has_python_files(self, repo_dir: Path) -> bool:
         for path in repo_dir.rglob("*.py"):
-            if any(part in {".venv", "venv", "__pycache__"} for part in path.parts):
+            if self._ignored_repo_path(path):
                 continue
             return True
         return False
+
+    def _ignored_repo_path(self, path: Path) -> bool:
+        ignored_parts = {".git", ".venv", "venv", "env", "__pycache__", "node_modules", ".tox", ".nox"}
+        return any(part in ignored_parts for part in path.parts)
 
     def test_gate_report(
         self,

@@ -7,6 +7,7 @@ from harness.agents.context import AgentRunContext
 from harness.contracts.role_contracts import output_contract_lines_for
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE
 from harness.prompts.specializations import (
+    BUGFIX_PLANNER_SPECIALIZATIONS,
     FIX_MODIFY_PLANNER_SPECIALIZATIONS,
     PLANNER_SPECIALIZATIONS,
     TESTER_SPECIALIZATIONS,
@@ -200,9 +201,10 @@ class PromptBuilder:
                 "",
                 "## Required Test Work",
                 "- Inspect project structure and identify the likely build, install, startup, and test commands from files in the repository.",
-                "- Run the safest available build/import/static checks and existing automated tests when possible.",
+                "- If the repository exposes runnable build, install, test, startup, CLI, or smoke commands and the environment can execute them safely, you must run them; do not replace runnable verification with static inspection.",
+                "- Run the safest available build/import/static checks and existing automated tests; static inspection is only acceptable after documenting the exact command attempted and the concrete blocker.",
                 "- Run at least one smoke or CLI-level check when the repository exposes an entry point and doing so is safe.",
-                "- Verify the core user-facing requirements from the original request by execution when possible, otherwise by direct code/config inspection with explicit evidence.",
+                "- Verify the core user-facing requirements from the original request by execution whenever possible; if execution is blocked, include the blocker, attempted commands, and the smallest code-level evidence you used instead.",
                 "- Record exact commands run, exit codes, and important output excerpts in `bug_report.md`.",
                 "",
                 "## Tester Output",
@@ -212,6 +214,7 @@ class PromptBuilder:
                 "- Prefer running build, tests, and smoke checks directly in the repository directory when it contains materialized source.",
                 "- Use staged Harness evidence only when it is explicitly present in the input manifest; otherwise validate by executing or inspecting the repository directory.",
                 "- Do not treat executor planning notes, self-checks, or change summaries as test evidence.",
+                "- If you can run a relevant test or smoke check but did not run it, set `test_result_code: -1` and `bug_result_code: -1` because the validation contract was not satisfied.",
                 "- If no merged repository exists, report that the implementation is not ready for testing unless the current phase explicitly predates PATCH_MERGE.",
                 "- In `bug_report.md`, describe setup/build outcome or explain why build execution was not possible, and include `build_result_code: 0` for build passed/not required, `build_result_code: -1` for build failed, or `build_result_code: 2` for blocked/not run.",
                 "- In `bug_report.md`, include one machine-readable line: `test_result_code: 0` for tests passed, `test_result_code: -1` for tests failed, or `test_result_code: 2` for blocked/not testable.",
@@ -356,7 +359,9 @@ class PromptBuilder:
     def _specializations_for_context(self, context: AgentRunContext) -> dict[int, list[tuple[str, str, list[str]]]] | None:
         if context.role == "planner":
             workflow_type = str(context.metadata.get("workflow_type") or context.config.get("workflow_type") or "")
-            if workflow_type in {BUGFIX, FEATURE_CHANGE}:
+            if workflow_type == BUGFIX:
+                return BUGFIX_PLANNER_SPECIALIZATIONS
+            if workflow_type == FEATURE_CHANGE:
                 return FIX_MODIFY_PLANNER_SPECIALIZATIONS
             return PLANNER_SPECIALIZATIONS
         if context.role == "tester":

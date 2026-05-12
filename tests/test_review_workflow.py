@@ -49,7 +49,8 @@ def test_orchestrator_bugfix_flow_uses_persisted_workflow_and_runs_review(tmp_pa
     final_delivery = orchestrator.run_task(task_id)
 
     phases = [phase["phase_type"] for phase in orchestrator.repository.list_phases(task_id)]
-    assert "PLANNING_DRAFT" not in phases
+    assert "PLANNING_DRAFT" in phases
+    assert "PLAN_REVIEW" in phases
     assert "FIXING" in phases
     assert "TESTING" in phases
     assert "REVIEWING" in phases

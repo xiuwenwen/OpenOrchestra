@@ -195,6 +195,22 @@ def test_harness_test_gate_runs_detected_pytest(monkeypatch, tmp_path: Path) -> 
     assert "status: pass" in report
     assert "exit_code: 0" in report
 
+
+def test_harness_test_gate_runs_nested_package_tests(monkeypatch, tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("run package tests", workflow_type=BUGFIX)
+    repo = tmp_path / "repo"
+    package_tests = repo / "pkg" / "tests"
+    package_tests.mkdir(parents=True)
+    (package_tests / "test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    monkeypatch.setattr(orchestrator, "_latest_materialized_repo", lambda task_id: repo)
+
+    assert orchestrator._run_harness_test_gate(task_id, 0)
+    report = Path(orchestrator.repository.list_artifacts(task_id, "test_gate.md")[-1]["path"]).read_text(encoding="utf-8")
+
+    assert "-m pytest -q" in report
+    assert "status: pass" in report
+
 def test_harness_test_gate_records_timeout_failure(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     config["testing"] = {
@@ -477,6 +493,56 @@ def test_latest_materialized_repo_falls_back_to_previous_success_artifact_and_ma
         )
 
     assert orchestrator._latest_materialized_repo(task_id) == success_repo
+
+
+def test_materialized_workspace_repo_excludes_generated_runtime_screenshots(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("copy materialized source")
+    success_repo = orchestrator._materialized_repo_dir(task_id, 0)
+    (success_repo / "output" / "screenshots").mkdir(parents=True)
+    (success_repo / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    (success_repo / "output" / ".gitkeep").write_text("", encoding="utf-8")
+    (success_repo / "output" / "screenshots" / "runtime.png").write_bytes(b"png")
+    patch = tmp_path / "ok.patch"
+    patch.write_text("diff --git a/app.py b/app.py\n", encoding="utf-8")
+    orchestrator._write_materialized_success_marker(success_repo, task_id, 0, patch)
+    success_report = tmp_path / "materialized-success.md"
+    success_report.write_text(
+        "\n".join(
+            [
+                "# Materialized Repository",
+                "",
+                "status: success",
+                f"task_id: {task_id}",
+                "round_id: 0",
+                f"repo_path: {success_repo}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    phase_id = orchestrator.repository.create_phase(task_id, "PATCH_MERGE", "executor", 0, status="COMPLETED")
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id="materialized-success",
+            task_id=task_id,
+            phase_id=phase_id,
+            role="orchestrator",
+            agent_id="patch-materializer",
+            artifact_type="materialized_repo.md",
+            path=success_report,
+            version=1,
+            hash="hash",
+        )
+    )
+    workspace_repo = tmp_path / "workspace" / "repo"
+
+    orchestrator._prepare_materialized_workspace_repo(task_id, "executor", FIXING, workspace_repo)
+
+    assert (workspace_repo / "app.py").read_text(encoding="utf-8") == "print('ok')\n"
+    assert (workspace_repo / "output" / ".gitkeep").exists()
+    assert not (workspace_repo / "output" / "screenshots").exists()
+
 
 def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))

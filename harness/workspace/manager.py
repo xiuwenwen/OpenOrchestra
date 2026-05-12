@@ -28,6 +28,36 @@ class WorkspaceManager:
         "state",
         "workspaces",
     }
+    RUNTIME_OUTPUT_ROOT_NAMES = {
+        "output",
+        "outputs",
+        "reports",
+        "test-results",
+        "test_results",
+    }
+    RUNTIME_GENERATED_DIR_NAMES = {
+        "screenshots",
+        "screenshot",
+        "videos",
+        "video",
+        "recordings",
+        "recording",
+        "traces",
+        "trace",
+    }
+    RUNTIME_GENERATED_FILE_SUFFIXES = {
+        ".avi",
+        ".bmp",
+        ".gif",
+        ".jpeg",
+        ".jpg",
+        ".mov",
+        ".mp4",
+        ".png",
+        ".tiff",
+        ".webm",
+        ".webp",
+    }
 
     def __init__(self, workspace_root: str | Path):
         self.workspace_root = Path(workspace_root).expanduser().resolve()
@@ -69,9 +99,21 @@ class WorkspaceManager:
         base = Path(directory)
         for name in names:
             path = (base / name).resolve()
-            if name in self.DEFAULT_COPY_IGNORE_NAMES or self._is_relative_to(path, self.workspace_root):
+            if (
+                name in self.DEFAULT_COPY_IGNORE_NAMES
+                or self.is_generated_runtime_artifact(path)
+                or self._is_relative_to(path, self.workspace_root)
+            ):
                 ignored.add(name)
         return ignored
+
+    @classmethod
+    def is_generated_runtime_artifact(cls, path: Path) -> bool:
+        parts = tuple(part.lower() for part in path.parts)
+        if not any(part in cls.RUNTIME_OUTPUT_ROOT_NAMES for part in parts):
+            return False
+        name = path.name.lower()
+        return name in cls.RUNTIME_GENERATED_DIR_NAMES or path.suffix.lower() in cls.RUNTIME_GENERATED_FILE_SUFFIXES
 
     def _is_relative_to(self, path: Path, parent: Path) -> bool:
         try:

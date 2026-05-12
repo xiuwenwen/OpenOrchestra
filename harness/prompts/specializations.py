@@ -243,6 +243,117 @@ FIX_MODIFY_PLANNER_SPECIALIZATIONS: dict[int, list[tuple[str, str, list[str]]]] 
     ],
 }
 
+BUGFIX_PLANNER_SPECIALIZATIONS: dict[int, list[tuple[str, str, list[str]]]] = {
+    1: [
+        (
+            "Root Cause Bugfix Planner",
+            "Root-cause-first brownfield bugfix planning with strict scope control and executable validation.",
+            [
+                "Classify the reported defect and separate symptom, trigger, current behavior, and expected behavior.",
+                "Trace the likely code path from user-facing symptom through parsing/control/data flow to the defect location.",
+                "Identify the smallest safe repair and explicitly reject surface-only fixes that only silence the reported exception.",
+                "Define concrete executor todos with affected paths, forbidden paths, evidence needed, and rollback notes.",
+                "Define a minimal reproduction or smoke scenario that proves the fixed behavior end to end.",
+                "Record blocking unknowns instead of guessing; do not modify code, run tests, or ask the user directly.",
+            ],
+        )
+    ],
+    2: [
+        (
+            "Root Cause Minimal Fix Planner",
+            "Minimal, causality-driven bugfix planning focused on the exact defect and the smallest safe code path change.",
+            [
+                "Reconstruct current versus expected behavior from the user request and repository evidence.",
+                "Identify the most likely root cause, not just the first error message or missing parameter.",
+                "Map the repair to specific files/functions and list files that should not change.",
+                "Specify executor tasks that include investigation checkpoints before code edits.",
+                "Require a proof scenario that exercises the full behavior after the patch, not only syntax or import success.",
+                "Keep the patch small, reversible, and compatible with existing behavior.",
+            ],
+        ),
+        (
+            "Verification & Regression Bugfix Planner",
+            "Validation-first bugfix planning covering runnable tests, regression risk, edge cases, and acceptance evidence.",
+            [
+                "Define exactly how Tester should prove the bug is fixed, including commands, inputs, expected outputs, and failure signals.",
+                "Identify existing tests, likely targeted tests, smoke checks, and minimal manual reproductions when full tests are expensive.",
+                "List regression-sensitive behavior, compatibility expectations, and edge cases the fix must not break.",
+                "State that runnable tests or smoke checks must be run when the repository provides them and the environment allows it.",
+                "If automated tests may be blocked, define the smallest executable reproduction script or command Tester should try first.",
+                "Call out validation blind spots that should cause Tester or Judge to reject static-only approval.",
+            ],
+        ),
+    ],
+    3: [
+        (
+            "Diagnostic Bugfix Planner",
+            "Diagnostic clarity, reproduction, root-cause localization, and evidence-driven repair planning.",
+            [
+                "Clarify the reported symptom, trigger conditions, expected behavior, and likely affected code paths.",
+                "List evidence to collect before editing and mark any unknowns that block safe repair.",
+                "Define diagnostic, localization, minimal-fix, and validation todo items.",
+                "Do not jump directly to broad refactoring or unrelated implementation.",
+            ],
+        ),
+        (
+            "Minimal Patch Bugfix Planner",
+            "Minimal diff, strict scope boundaries, rollback-friendly implementation, and compatibility preservation.",
+            [
+                "Define the minimum required changes, forbidden changes, affected paths, and non-affected paths.",
+                "Avoid interface, data structure, dependency, and architecture changes unless required by the defect.",
+                "Give executor guardrails and validation hints for each todo.",
+            ],
+        ),
+        (
+            "Regression Validation Bugfix Planner",
+            "Regression protection, edge-case coverage, integration safety, and tester acceptance criteria.",
+            [
+                "Identify existing behavior that must remain unchanged and regression-sensitive paths.",
+                "Define runnable test, smoke, and reproduction commands when discoverable from repository files.",
+                "Define acceptance criteria and failure conditions precise enough for Tester to reject incomplete fixes.",
+            ],
+        ),
+    ],
+    4: [
+        (
+            "Reproduction Planner",
+            "Create a precise reproduction and localization plan before repair.",
+            [
+                "Define current behavior, expected behavior, trigger inputs, and the smallest reproduction route.",
+                "Identify code paths and evidence needed to prove the root cause.",
+                "Produce investigation and validation todo items.",
+            ],
+        ),
+        (
+            "Root Cause Planner",
+            "Trace causality from symptom to defect and avoid shallow exception-only fixes.",
+            [
+                "Analyze data flow, control flow, and state changes related to the failure.",
+                "Define likely defect locations and confirmation checks.",
+                "Separate root-cause repair from workarounds.",
+            ],
+        ),
+        (
+            "Minimal Patch Planner",
+            "Keep the fix small, reviewable, rollback-friendly, and compatible.",
+            [
+                "List required, optional, and forbidden changes.",
+                "Define affected paths, non-affected paths, and executor guardrails.",
+                "Avoid unrelated refactoring and new dependencies.",
+            ],
+        ),
+        (
+            "Verification Planner",
+            "Define proof, regression coverage, edge cases, and acceptance evidence.",
+            [
+                "List required tests, smoke checks, edge cases, expected outputs, and failure conditions.",
+                "Require runnable validation when project files expose runnable commands.",
+                "Identify validation blind spots that should block approval.",
+            ],
+        ),
+    ],
+}
+
 TESTER_SPECIALIZATIONS: dict[int, list[tuple[str, str, list[str]]]] = {
     1: [
         (
