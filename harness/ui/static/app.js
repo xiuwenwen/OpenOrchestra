@@ -368,13 +368,14 @@ function failureKind(e){
   const et=String(e.event_type||""),st=String(e.status||"");
   if(et==="patch_validated"&&(st==="FAILED"||st==="fail"))return uiLanguage==="en"?"[Patch gate failed]":"[patch gate失败]";
   if(et==="test_gate"&&(st==="FAILED"||st==="fail"))return uiLanguage==="en"?"[Business tests failed]":"[业务测试失败]";
+  if(et==="runtime_readiness"&&(st==="FAILED"||st==="fail"))return uiLanguage==="en"?"[Runtime readiness failed]":"[运行环境验证失败]";
   if(et==="agent_failed")return uiLanguage==="en"?"[Agent execution failed]":"[Agent执行失败]";
   if(st==="OUTPUT_INVALID")return uiLanguage==="en"?"[Output contract invalid]":"[产物合同无效]";
   return "";
 }
 function flowLabel(et){
-  const zh={task_created:"任务创建",task_started:"任务启动",task_completed:"任务完成",task_failed:"任务失败",phase_started:"阶段开始",phase_completed:"阶段完成",phase_skipped:"阶段跳过",agent_started:"Agent启动",agent_heartbeat:"Agent运行",agent_completed:"Agent完成",agent_failed:"Agent失败",agent_retryable_failure:"Agent重试",backend_health_changed:"后端健康",backend_circuit_open:"后端熔断",patch_validated:"补丁门禁",test_gate:"测试门禁",delivery_published:"交付发布",judge_decision:"裁决"};
-  const en={task_created:"Task Created",task_started:"Task Started",task_completed:"Task Done",task_failed:"Task Failed",phase_started:"Phase Start",phase_completed:"Phase Done",phase_skipped:"Phase Skip",agent_started:"Agent Start",agent_heartbeat:"Agent Run",agent_completed:"Agent Done",agent_failed:"Agent Fail",agent_retryable_failure:"Agent Retry",backend_health_changed:"Backend Health",backend_circuit_open:"Backend Open",patch_validated:"Patch Gate",test_gate:"Test Gate",delivery_published:"Delivery",judge_decision:"Judge"};
+  const zh={task_created:"任务创建",task_started:"任务启动",task_completed:"任务完成",task_failed:"任务失败",phase_started:"阶段开始",phase_completed:"阶段完成",phase_skipped:"阶段跳过",agent_started:"Agent启动",agent_heartbeat:"Agent运行",agent_completed:"Agent完成",agent_failed:"Agent失败",agent_retryable_failure:"Agent重试",backend_health_changed:"后端健康",backend_circuit_open:"后端熔断",patch_validated:"补丁门禁",test_gate:"测试门禁",runtime_readiness:"运行环境验证",delivery_published:"交付发布",judge_decision:"裁决"};
+  const en={task_created:"Task Created",task_started:"Task Started",task_completed:"Task Done",task_failed:"Task Failed",phase_started:"Phase Start",phase_completed:"Phase Done",phase_skipped:"Phase Skip",agent_started:"Agent Start",agent_heartbeat:"Agent Run",agent_completed:"Agent Done",agent_failed:"Agent Fail",agent_retryable_failure:"Agent Retry",backend_health_changed:"Backend Health",backend_circuit_open:"Backend Open",patch_validated:"Patch Gate",test_gate:"Test Gate",runtime_readiness:"Runtime Ready",delivery_published:"Delivery",judge_decision:"Judge"};
   return(uiLanguage==="en"?en[et]:zh[et])||et||"-";
 }
 

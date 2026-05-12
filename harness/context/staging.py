@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -11,6 +12,7 @@ from harness.contracts.role_contracts import DEFAULT_ARTIFACT_INPUT_BUDGET, arti
 from harness.core.state_machine import FAILED, FIXING, REGRESSION_TESTING, REVIEW_FIXING, TEST_JUDGEMENT, TESTING
 from harness.judge.judge_runner import MockJudge
 from harness.state.repository import StateRepository
+from harness.workspace.manager import WorkspaceManager
 
 
 RepoContextMetadata = Callable[[str, str, str], dict[str, Any]]
@@ -117,6 +119,7 @@ class InputStagingService:
                 destination,
                 max_file_bytes=self.artifact_max_file_bytes(limits["max_file_bytes"], staging_mode),
                 remaining_total_bytes=remaining_total_bytes,
+                artifact=artifact,
             )
             staged_total_bytes += copied_bytes
             staged_file_count += 1
@@ -171,6 +174,7 @@ class InputStagingService:
             "### Original User Request",
             str(task.get("user_prompt") or "unavailable"),
         ]
+        lines.extend(self.test_gate_manifest_lines(task_id, round_id))
         if repo_dir and repo_dir.exists():
             lines.extend(["", "### Repository Snapshot"])
             for child in sorted(repo_dir.iterdir(), key=lambda item: item.name)[:30]:
@@ -178,6 +182,86 @@ class InputStagingService:
                 lines.append(f"- {child.name}{suffix}")
         lines.append("")
         return lines
+
+    def test_gate_manifest_lines(self, task_id: str, round_id: int | None) -> list[str]:
+        if round_id is None:
+            return []
+        artifact = self.latest_test_gate_artifact_for_round(task_id, round_id)
+        if artifact is None:
+            return []
+        source = Path(artifact["path"])
+        if not source.exists():
+            return []
+        content = source.read_text(encoding="utf-8", errors="replace")
+        status = self.markdown_field(content, "status") or "unknown"
+        evidence = self.extract_evidence_json(content)
+        lines = [
+            "",
+            "## Harness Test Gate Evidence",
+            f"- test_gate_status: {status}",
+            f"- test_gate_artifact_path: {source}",
+            f"- test_gate_runtime: {evidence.get('runtime', 'unknown')}",
+            f"- test_gate_image: {evidence.get('image') or '-'}",
+            f"- test_gate_evidence_path: {evidence.get('evidence_path') or '-'}",
+            f"- test_gate_failure_type: {evidence.get('failure_type', 'unknown')}",
+            "- note: Harness already ran the commands listed in this test gate before the tester phase.",
+            "- tester_instruction: Use this evidence first, inspect referenced logs, and only rerun the same command when the evidence is incomplete, stale, or contradicts repository behavior.",
+        ]
+        commands = self.test_gate_commands(content)
+        if commands:
+            lines.append("- commands_already_run:")
+            lines.extend(f"  - {command}" for command in commands)
+        return lines
+
+    def latest_test_gate_artifact_for_round(self, task_id: str, round_id: int) -> dict[str, Any] | None:
+        matching: list[dict[str, Any]] = []
+        for artifact in self.repository.list_artifacts(task_id, "test_gate.md"):
+            source = Path(artifact["path"])
+            if not source.exists():
+                continue
+            content = source.read_text(encoding="utf-8", errors="replace")
+            if self.markdown_field(content, "round_id") == str(round_id):
+                matching.append(artifact)
+        if not matching:
+            return None
+        return max(matching, key=lambda item: int(item.get("version") or 0))
+
+    def markdown_field(self, content: str, field_name: str) -> str | None:
+        prefix = f"{field_name}:"
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.lower().startswith(prefix.lower()):
+                return stripped.split(":", 1)[1].strip()
+        return None
+
+    def test_gate_commands(self, content: str) -> list[str]:
+        commands: list[str] = []
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- command:"):
+                command = stripped.split(":", 1)[1].strip()
+                if command and command != "n/a":
+                    commands.append(command)
+        return commands
+
+    def extract_evidence_json(self, content: str) -> dict[str, Any]:
+        marker = "## Evidence JSON"
+        marker_index = content.find(marker)
+        if marker_index < 0:
+            return {}
+        block = content[marker_index + len(marker) :]
+        start = block.find("```json")
+        if start < 0:
+            return {}
+        start = block.find("\n", start)
+        end = block.find("```", start)
+        if start < 0 or end < 0:
+            return {}
+        try:
+            payload = json.loads(block[start:end].strip())
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
     def testing_failure_context_manifest_lines(
         self,
@@ -348,13 +432,18 @@ class InputStagingService:
         *,
         max_file_bytes: int,
         remaining_total_bytes: int,
+        artifact: dict[str, Any] | None = None,
     ) -> tuple[int, bool]:
         destination.parent.mkdir(parents=True, exist_ok=True)
         source_size = source.stat().st_size
         allowed_bytes = min(max_file_bytes, remaining_total_bytes)
         if source_size <= allowed_bytes:
-            shutil.copy2(source, destination)
+            WorkspaceManager.copy_file_fast(source, destination)
             return source_size, False
+        cached = self.cached_truncated_artifact(source, allowed_bytes, artifact)
+        if cached:
+            WorkspaceManager.copy_file_fast(cached, destination)
+            return destination.stat().st_size, True
         raw = source.read_bytes()
         if allowed_bytes <= 128:
             selected = raw[:allowed_bytes]
@@ -364,7 +453,54 @@ class InputStagingService:
             tail_size = max(1, allowed_bytes - len(marker) - head_size)
             selected = raw[:head_size] + marker + raw[-tail_size:]
         destination.write_text(selected.decode("utf-8", errors="replace"), encoding="utf-8")
+        self.store_truncated_artifact_cache(source, allowed_bytes, artifact, destination)
         return destination.stat().st_size, True
+
+    def cached_truncated_artifact(self, source: Path, allowed_bytes: int, artifact: dict[str, Any] | None) -> Path | None:
+        cache_path = self.truncated_artifact_cache_path(source, allowed_bytes, artifact)
+        if not cache_path.exists() or not cache_path.is_file():
+            return None
+        return cache_path
+
+    def store_truncated_artifact_cache(
+        self,
+        source: Path,
+        allowed_bytes: int,
+        artifact: dict[str, Any] | None,
+        staged_source: Path,
+    ) -> None:
+        cache_path = self.truncated_artifact_cache_path(source, allowed_bytes, artifact)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        if cache_path.exists():
+            return
+        temporary = cache_path.with_suffix(cache_path.suffix + ".tmp")
+        shutil.copy2(staged_source, temporary)
+        temporary.replace(cache_path)
+
+    def truncated_artifact_cache_path(self, source: Path, allowed_bytes: int, artifact: dict[str, Any] | None) -> Path:
+        cache_root = self.input_staging_cache_root()
+        digest = hashlib.sha256()
+        digest.update(str(source.resolve()).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(source.stat().st_size).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(source.stat().st_mtime_ns).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(allowed_bytes).encode("ascii"))
+        digest.update(b"\0")
+        if artifact:
+            digest.update(str(artifact.get("artifact_id") or "").encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(str(artifact.get("version") or "").encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(str(artifact.get("hash") or "").encode("utf-8"))
+        return cache_root / f"{digest.hexdigest()}.artifact"
+
+    def input_staging_cache_root(self) -> Path:
+        system = self.config.get("system", {})
+        artifact_root = system.get("artifact_root") if isinstance(system, dict) else None
+        root = Path(str(artifact_root or ".artifacts")).expanduser()
+        return root.resolve() / "_input_staging_cache"
 
     def append_skipped_artifact_manifest(
         self,

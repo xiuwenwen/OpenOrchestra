@@ -100,6 +100,18 @@ def main() -> int:
         help="Read the one-shot task prompt from this UTF-8 text file instead of command-line arguments.",
     )
     parser.add_argument(
+        "--test-runtime",
+        choices=["auto", "native", "docker", "swebench"],
+        help="Override test execution runtime for this invocation.",
+    )
+    parser.add_argument("--test-docker-image", help="Override the default Python Docker image for test execution.")
+    parser.add_argument(
+        "--docker-network",
+        choices=["none", "install_only", "always", "default"],
+        help="Docker network policy for test execution.",
+    )
+    parser.add_argument("--no-docker-test", action="store_true", help="Disable Docker test execution for this invocation.")
+    parser.add_argument(
         "--ui",
         dest="ui",
         action="store_true",
@@ -127,6 +139,16 @@ def main() -> int:
             print(f"[ERROR] --source-repo must be an existing directory: {source_repo}", file=sys.stderr)
             return 2
         config.setdefault("system", {})["source_repo"] = str(source_repo)
+    if args.test_runtime:
+        config.setdefault("testing", {})["runtime"] = args.test_runtime
+    if args.test_docker_image:
+        config.setdefault("testing", {}).setdefault("docker", {})["python_image"] = args.test_docker_image
+    if args.docker_network:
+        config.setdefault("testing", {}).setdefault("docker", {})["network"] = args.docker_network
+    if args.no_docker_test:
+        config.setdefault("testing", {}).setdefault("docker", {})["enabled"] = False
+        if str(config.get("testing", {}).get("runtime") or "auto") == "docker":
+            config["testing"]["runtime"] = "native"
     backend = resolve_real_backend(args.backend or user_env.get("OO_BACKEND", "auto"))
     config["agent_backend"]["default"] = backend
     for role in ("planner", "executor", "tester", "reviewer", "judge", "communicator"):

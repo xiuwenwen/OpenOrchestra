@@ -81,6 +81,7 @@ TEST_REPORT_ARTIFACTS = _types("bug_report.md")
 JUDGE_DECISION_ARTIFACTS = _types("decision.json", "decision_summary.md")
 PATCH_FIX_GATE_ARTIFACTS = _types("objective_gate.md")
 TEST_JUDGE_GATE_ARTIFACTS = _types("test_gate.md", "objective_gate.md")
+RUNTIME_READINESS_ARTIFACTS = _types("runtime_readiness.md")
 EXECUTOR_REVIEW_ARTIFACTS = _types(
     "changed_files.md",
     "merged_patch.diff",
@@ -227,6 +228,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
     ArtifactVisibilityRule("reviewer", REVIEWING, "executor", EXECUTOR_REVIEW_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
+    ArtifactVisibilityRule("reviewer", REVIEWING, "orchestrator", RUNTIME_READINESS_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
     ArtifactVisibilityRule("judge", TEST_JUDGEMENT, "orchestrator", TEST_JUDGE_GATE_ARTIFACTS, round_policy=ROUND_CURRENT),
     ArtifactVisibilityRule(
         "judge",

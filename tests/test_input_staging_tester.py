@@ -125,6 +125,76 @@ def test_tester_receives_no_executor_markdown_artifacts(tmp_path: Path) -> None:
     assert "patch.diff" not in manifest
     assert "fix_patch.diff" not in manifest
 
+def test_tester_manifest_includes_current_round_test_gate_evidence(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("test with harness gate evidence")
+    gate = tmp_path / "test_gate.md"
+    gate.write_text(
+        "# Harness Test Gate\n\n"
+        "status: pass\n"
+        "round_id: 2\n\n"
+        "## Commands\n\n"
+        f"- command: {sys.executable} -m pytest -q\n"
+        "  exit_code: 0\n",
+        encoding="utf-8",
+    )
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=None,
+            role="orchestrator",
+            agent_id="test-gate",
+            artifact_type="test_gate.md",
+            path=gate,
+            version=1,
+            hash="hash",
+        )
+    )
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input", "tester", "TESTING", round_id=2, repo_dir=repo_dir)
+    manifest = staged[0].read_text(encoding="utf-8")
+
+    assert "## Harness Test Gate Evidence" in manifest
+    assert "- test_gate_status: pass" in manifest
+    assert f"  - {sys.executable} -m pytest -q" in manifest
+
+
+def test_input_staging_reuses_truncated_artifact_cache(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    source = tmp_path / "large.md"
+    source.write_text("head\n" + ("body\n" * 1000) + "tail\n", encoding="utf-8")
+    artifact = {
+        "artifact_id": "artifact-1",
+        "version": 1,
+        "hash": "hash-1",
+    }
+    first = tmp_path / "first.md"
+    second = tmp_path / "second.md"
+
+    first_size, first_truncated = orchestrator.input_staging_service.copy_artifact_with_budget(
+        source,
+        first,
+        max_file_bytes=256,
+        remaining_total_bytes=256,
+        artifact=artifact,
+    )
+    second_size, second_truncated = orchestrator.input_staging_service.copy_artifact_with_budget(
+        source,
+        second,
+        max_file_bytes=256,
+        remaining_total_bytes=256,
+        artifact=artifact,
+    )
+    cache_files = list((Path(orchestrator.config["system"]["artifact_root"]).resolve() / "_input_staging_cache").glob("*.artifact"))
+
+    assert first_truncated and second_truncated
+    assert first_size == second_size
+    assert first.read_text(encoding="utf-8") == second.read_text(encoding="utf-8")
+    assert len(cache_files) == 1
+
 def test_tester_does_not_stage_large_authoritative_patch(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("test latest large patch only")

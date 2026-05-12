@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from harness.adapters.command_runner import CommandRunner
+from harness.workspace.manager import WorkspaceManager
 
 
 FORBIDDEN_PATCH_TOP_LEVEL_NAMES = {"artifacts", "deliver", "deliveries", "workspaces"}
@@ -501,7 +502,7 @@ def _prepare_source_tree(source_repo: Path | None, destination: Path, copy_sourc
         if copy_source:
             copy_source(source_repo, destination)
         else:
-            shutil.copytree(source_repo, destination)
+            shutil.copytree(source_repo, destination, copy_function=WorkspaceManager.copy_file_fast)
     else:
         destination.mkdir(parents=True, exist_ok=True)
 

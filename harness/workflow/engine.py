@@ -107,7 +107,7 @@ class WorkflowEngine:
         max_rounds = self.max_test_fix_rounds()
         start_round = self.bugfix_resume_start_round(task_id)
         if self.bugfix_needs_initial_planning(task_id, start_round):
-            self.run_planning_block(task_id, user_prompt)
+            self.run_bugfix_planning_block(task_id, user_prompt)
         round_id = start_round
         attempts = 0
         while True:
@@ -115,8 +115,8 @@ class WorkflowEngine:
                 o.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
                 merge_ok = o.run_patch_merge(task_id, round_id, user_prompt)
                 if merge_ok:
-                    o.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
                     o.run_harness_test_gate(task_id, round_id)
+                    o.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
                     test_decision = o.run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
                     if o.judge.is_test_pass(test_decision):
                         break
@@ -233,6 +233,33 @@ class WorkflowEngine:
             next_round_id = final_round_id + 1
         raise TaskFailedError("Planning merge review was not approved after peer-review loops")
 
+    def run_bugfix_planning_block(self, task_id: str, user_prompt: str) -> None:
+        o = self.runtime
+        planner_count = int(o.effective_agent_count(task_id, "planner", PLANNING_DRAFT))
+        next_round_id = 0
+        for approval_round in range(int(o.config["limits"]["max_planning_rounds"])):
+            phase = PLANNING_DRAFT if approval_round == 0 else PLANNING_REVISION
+            o.run_role_phase(
+                "planner",
+                phase,
+                next_round_id,
+                required_outputs_for("planner", phase),
+                user_prompt,
+                agent_count_override=planner_count,
+            )
+            review_results = o.run_role_phase(
+                "reviewer",
+                PLAN_REVIEW,
+                next_round_id,
+                required_outputs_for("reviewer", PLAN_REVIEW),
+                user_prompt,
+                agent_count_override=1,
+            )
+            if self.plan_review_approved(review_results):
+                return
+            next_round_id += 1
+        raise TaskFailedError("Bugfix planning merge review was not approved")
+
     def planning_peer_review_loop_count(self) -> int:
         configured = self.runtime.config.get("limits", {}).get(
             "planning_peer_review_loops",
@@ -288,8 +315,8 @@ class WorkflowEngine:
         while True:
             while end_round is None or round_id <= end_round:
                 if merge_ok:
-                    o.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
                     o.run_harness_test_gate(task_id, round_id)
+                    o.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
                     test_decision = o.run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
                     if o.judge.is_test_pass(test_decision):
                         return
@@ -381,6 +408,7 @@ class WorkflowEngine:
         o = self.runtime
         review_round_id = 0
         for review_iteration in range(o.config["limits"]["max_review_rounds"]):
+            o.run_runtime_readiness_gate(task_id, review_round_id)
             review_results = o.run_role_phase(
                 "reviewer",
                 REVIEWING,
@@ -483,6 +511,7 @@ class WorkflowEngine:
                     iteration_id=test_round_id,
                 )
                 if merge_ok:
+                    o.run_harness_test_gate(task_id, phase_round_id)
                     o.run_role_phase(
                         "tester",
                         REGRESSION_TESTING,
@@ -491,7 +520,6 @@ class WorkflowEngine:
                         user_prompt,
                         phase_scope=phase_scope,
                     )
-                    o.run_harness_test_gate(task_id, phase_round_id)
                     test_decision = o.run_judge_phase(task_id, TEST_JUDGEMENT, phase_round_id, user_prompt)
                     if o.judge.is_test_pass(test_decision):
                         return

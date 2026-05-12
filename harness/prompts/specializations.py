@@ -364,7 +364,7 @@ TESTER_SPECIALIZATIONS: dict[int, list[tuple[str, str, list[str]]]] = {
                 "Verify startup behavior.",
                 "Validate core functionality.",
                 "Check obvious edge-case failures.",
-                "Review whether changed files are reasonable.",
+                "Do not infer success from implementation shape alone.",
                 "Ensure bug_report includes reproduction steps.",
             ],
         )

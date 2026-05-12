@@ -205,7 +205,12 @@ class DeliveryPublisher:
             shutil.rmtree(source_dir)
         materialized_repo = self.latest_materialized_repo(task_id)
         if materialized_repo:
-            shutil.copytree(materialized_repo, source_dir, ignore=self.copy_ignore_for_publish)
+            shutil.copytree(
+                materialized_repo,
+                source_dir,
+                ignore=self.copy_ignore_for_publish,
+                copy_function=WorkspaceManager.copy_file_fast,
+            )
             return sorted(path for path in source_dir.rglob("*") if path.is_file())
         if not patch_path.exists():
             return []

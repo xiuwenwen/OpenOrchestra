@@ -13,6 +13,7 @@ from harness.config.runtime import RuntimeConfigService
 from harness.context.staging import InputStagingService
 from harness.core.scheduler import BackendBulkheadScheduler
 from harness.gates.patch_gate import PatchGateService
+from harness.gates.runtime_readiness import RuntimeReadinessGateService
 from harness.gates.test_gate import TestGateService
 from harness.judge.judge_runner import MockJudge
 from harness.logs.logger import get_logger
@@ -40,6 +41,7 @@ class ApplicationServices:
     prompt_builder: PromptBuilder
     materialized_repo_service: MaterializedRepoService
     test_gate_service: TestGateService
+    runtime_readiness_gate_service: RuntimeReadinessGateService
     patch_gate_service: PatchGateService
     input_staging_service: InputStagingService
     agent_runner: AgentPhaseRunner
@@ -86,6 +88,11 @@ def build_orchestrator_services(
         artifact_manager=artifact_manager,
         latest_materialized_repo=materialized_repo_service.latest_materialized_repo,
         markdown_field=orchestrator.markdown_field,
+        emit=orchestrator.emit_progress,
+    )
+    runtime_readiness_gate_service = RuntimeReadinessGateService(
+        config=config,
+        test_gate_service=test_gate_service,
     )
     patch_gate_service = PatchGateService(
         config=config,
@@ -129,6 +136,7 @@ def build_orchestrator_services(
         prompt_builder=prompt_builder,
         materialized_repo_service=materialized_repo_service,
         test_gate_service=test_gate_service,
+        runtime_readiness_gate_service=runtime_readiness_gate_service,
         patch_gate_service=patch_gate_service,
         input_staging_service=input_staging_service,
         agent_runner=agent_runner,

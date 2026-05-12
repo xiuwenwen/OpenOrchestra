@@ -468,6 +468,9 @@ class AgentPhaseRunner:
                     raise TaskFailedError(message)
                 validation_result = o.validator.validate_required_outputs_result(workspace.output_dir, required_outputs)
                 review_data: dict[str, Any] = {}
+                validation_result, repaired_contract_artifacts = self.repair_trivial_contract_issues(
+                    result, context, validation_result
+                )
                 if result.exit_code == 0 and not validation_result.ok and delivery_issue_is_contract_only(validation_result):
                     review_data = self._review_delivery_contract(
                         context=context,
@@ -506,6 +509,7 @@ class AgentPhaseRunner:
                                 "artifacts": len(result.artifacts),
                                 "delivery_status": delivery_status or "-",
                                 "elapsed_seconds": elapsed_seconds,
+                                "contract_auto_repaired": repaired_contract_artifacts,
                                 **review_data,
                             },
                         )
@@ -538,6 +542,7 @@ class AgentPhaseRunner:
                     "logs": str(context.log_dir),
                     "delivery_status": delivery_status or "-",
                     "elapsed_seconds": elapsed_seconds,
+                    "contract_auto_repaired": repaired_contract_artifacts,
                     **review_data,
                 }
                 if diagnostics_path.exists():
@@ -633,6 +638,25 @@ class AgentPhaseRunner:
             details = last_result.validation_errors or ([last_error_message] if last_error_message else [])
             raise TaskFailedError(f"Agent {agent_id} failed after {max_retry + 1} attempt(s): {details}")
         raise TaskFailedError(f"Agent {agent_id} failed before producing a result")
+
+    def repair_trivial_contract_issues(
+        self,
+        result: AgentRunResult,
+        context: AgentRunContext,
+        validation_result: ValidationResult,
+    ) -> tuple[ValidationResult, list[str]]:
+        if result.exit_code != 0 or validation_result.ok:
+            return validation_result, []
+        repaired = self.orchestrator.validator.repair_trivial_contract_issues(
+            context.output_dir,
+            validation_result,
+        )
+        if not repaired:
+            return validation_result, []
+        return (
+            self.orchestrator.validator.validate_required_outputs_result(context.output_dir, context.required_outputs),
+            repaired,
+        )
 
     def record_backend_success(self, backend: str, context: AgentRunContext, attempt: int) -> None:
         o = self.orchestrator

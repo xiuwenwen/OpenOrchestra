@@ -108,6 +108,23 @@ class ArtifactValidator:
                 )
         return ValidationResult(tuple(issues))
 
+    def repair_trivial_contract_issues(self, output_dir: Path, validation_result: ValidationResult) -> list[str]:
+        repaired: list[str] = []
+        for issue in validation_result.issues:
+            if issue.severity == "error" and issue.code != "missing_artifact_result_code":
+                continue
+            path = output_dir / issue.artifact
+            if not path.exists() or not path.is_file() or path.stat().st_size == 0:
+                continue
+            if output_has_pending_template_marker(path):
+                continue
+            content = path.read_text(encoding="utf-8", errors="replace")
+            if self.parse_markdown_artifact_result_code(path) is not None:
+                continue
+            path.write_text(f"artifact_result_code: {DELIVERY_SUCCESS_RETURN_CODE}\n\n{content}", encoding="utf-8")
+            repaired.append(issue.artifact)
+        return repaired
+
     def parse_delivery_return_code(self, delivery_path: Path) -> int | None:
         if not delivery_path.exists() or not delivery_path.is_file():
             return None

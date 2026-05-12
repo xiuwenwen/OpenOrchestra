@@ -9,6 +9,7 @@ from concurrent.futures import wait as real_wait
 
 import pytest
 
+from harness.adapters.command_runner import CapturedCommandResult
 from harness.agents import runner as agent_runner_module
 from harness.agents.result import AgentRunResult, ArtifactRef
 from harness.artifacts.schemas import required_outputs_for
@@ -261,6 +262,37 @@ def test_harness_test_gate_uses_compileall_for_python_repo_without_tests(monkeyp
 
     assert "compileall -q ." in report
     assert "status: pass" in report
+
+
+def test_harness_test_gate_reuses_results_for_same_repo_and_commands(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["testing"] = {"commands": [f"{sys.executable} -c \"print('ok')\""], "timeout_seconds": 5}
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("cache test gate", workflow_type=BUGFIX)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('same')\n", encoding="utf-8")
+    monkeypatch.setattr(orchestrator, "_latest_materialized_repo", lambda task_id: repo)
+
+    class CountingRunner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run_capture(self, *args, **kwargs) -> CapturedCommandResult:
+            self.calls += 1
+            return CapturedCommandResult(returncode=0, stdout="ok\n", stderr="")
+
+    runner = CountingRunner()
+    orchestrator.test_gate_service.command_runner = runner
+
+    assert orchestrator._run_harness_test_gate(task_id, 0)
+    assert orchestrator._run_harness_test_gate(task_id, 1)
+
+    reports = orchestrator.repository.list_artifacts(task_id, "test_gate.md")
+    latest = Path(reports[-1]["path"]).read_text(encoding="utf-8")
+    assert runner.calls == 1
+    assert '"cache_hit": true' in latest
+    assert "status: pass" in latest
 
 def test_test_judgement_cannot_override_failed_required_test_gate(tmp_path: Path) -> None:
     config = _config(tmp_path)
@@ -676,6 +708,83 @@ def test_single_candidate_patch_merge_uses_deterministic_fast_path(tmp_path: Pat
     assert "expected_apply_command: git apply --whitespace=nowarn merged_patch.diff" in metadata
     assert "status: pass" in Path(orchestrator.repository.list_artifacts(task_id, "patch_validation.md")[-1]["path"]).read_text(encoding="utf-8")
 
+def test_empty_candidate_patch_skips_merge_model_and_testing(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("skip empty patch", workflow_type=BUGFIX)
+    execution_phase_id = orchestrator.repository.create_phase(task_id, EXECUTION, "executor", 0, status="COMPLETED")
+    patch = tmp_path / "patch.diff"
+    patch.write_text("\n", encoding="utf-8")
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=execution_phase_id,
+            role="executor",
+            agent_id="executor-1",
+            artifact_type="patch.diff",
+            path=patch,
+            version=1,
+            hash="hash",
+        )
+    )
+
+    assert orchestrator.run_patch_merge(task_id, 0, "skip empty patch") is False
+
+    assert not orchestrator.repository.list_artifacts(task_id, "merged_patch.diff")
+    objective = Path(orchestrator.repository.list_artifacts(task_id, "objective_gate.md")[-1]["path"]).read_text(encoding="utf-8")
+    assert "status: fail" in objective
+    assert "empty_patch" in objective
+
+
+def test_duplicate_candidate_patch_skips_retesting_previous_patch(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("skip duplicate patch", workflow_type=BUGFIX)
+    round0_phase_id = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 0, status="COMPLETED")
+    previous = tmp_path / "previous.diff"
+    patch_text = (
+        "diff --git a/app.py b/app.py\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/app.py\n"
+        "@@ -0,0 +1 @@\n"
+        "+print('ok')\n"
+    )
+    previous.write_text(patch_text, encoding="utf-8")
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=round0_phase_id,
+            role="executor",
+            agent_id="executor-1",
+            artifact_type="merged_patch.diff",
+            path=previous,
+            version=1,
+            hash="hash",
+        )
+    )
+    fixing_phase_id = orchestrator.repository.create_phase(task_id, FIXING, "executor", 1, status="COMPLETED")
+    duplicate = tmp_path / "duplicate.diff"
+    duplicate.write_text(patch_text, encoding="utf-8")
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=fixing_phase_id,
+            role="executor",
+            agent_id="executor-1",
+            artifact_type="fix_patch.diff",
+            path=duplicate,
+            version=1,
+            hash="hash",
+        )
+    )
+
+    assert orchestrator.run_patch_merge(task_id, 1, "skip duplicate patch") is False
+
+    objective = Path(orchestrator.repository.list_artifacts(task_id, "objective_gate.md")[-1]["path"]).read_text(encoding="utf-8")
+    assert "duplicate_previous_merged_patch" in objective
+
 def test_invalid_patch_merge_skips_testing_and_enters_fix_round(monkeypatch, tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("repair invalid patch")
@@ -735,6 +844,7 @@ def test_invalid_patch_merge_skips_testing_and_enters_fix_round(monkeypatch, tmp
         return True
 
     monkeypatch.setattr(orchestrator, "_run_patch_validation", fake_patch_validation)
+    monkeypatch.setattr(orchestrator.patch_gate_service, "try_skip_noop_candidate_patch", lambda *args, **kwargs: False)
     monkeypatch.setattr(orchestrator, "run_harness_test_gate", fake_test_gate)
     monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
     monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: True)

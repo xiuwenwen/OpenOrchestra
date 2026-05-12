@@ -84,7 +84,7 @@ def test_unlimited_bugfix_rounds_continue_until_pass(monkeypatch, tmp_path: Path
     monkeypatch.setattr(orchestrator, "run_harness_test_gate", lambda *args, **kwargs: True)
     monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
     monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: len(fix_rounds) >= 7)
-    monkeypatch.setattr(orchestrator.workflow_engine, "run_planning_block", lambda *args, **kwargs: None)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_bugfix_planning_block", lambda *args, **kwargs: None)
     monkeypatch.setattr(orchestrator.workflow_engine, "run_review_loop", lambda *args, **kwargs: None)
     delivery = tmp_path / "final_delivery.md"
     delivery.write_text("ok", encoding="utf-8")
@@ -123,8 +123,8 @@ def test_bugfix_flow_runs_two_planners_before_fixing(monkeypatch, tmp_path: Path
     assert result == delivery
     first_fixing = calls.index(("executor", FIXING, 0))
     assert calls[0] == ("planner", PLANNING_DRAFT, 0)
-    assert ("planner", PLANNING_PEER_REVIEW, 0) in calls[:first_fixing]
-    assert ("reviewer", PLAN_REVIEW, 2) in calls[:first_fixing]
+    assert ("planner", PLANNING_PEER_REVIEW, 0) not in calls[:first_fixing]
+    assert ("reviewer", PLAN_REVIEW, 0) in calls[:first_fixing]
     assert orchestrator.effective_agent_count(task_id, "planner", PLANNING_DRAFT) == 2
 
 def test_orchestrator_feature_change_flow_completes(tmp_path: Path) -> None:

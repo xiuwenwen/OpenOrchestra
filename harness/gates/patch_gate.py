@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
+from harness.artifacts.hashing import sha256_file
 from harness.artifacts.manager import ArtifactManager
 from harness.core.progress import ProgressEvent
 from harness.core.state_machine import EXECUTION, FIXING, PATCH_MERGE, REVIEW_FIXING
@@ -127,6 +128,159 @@ class PatchGateService:
             self.repository.update_phase_status(phase_id, "FAILED")
             raise
         return True
+
+    def try_skip_noop_candidate_patch(self, task_id: str, round_id: int) -> bool:
+        candidates = self.current_round_candidate_patches(task_id, round_id)
+        if len(candidates) != 1:
+            return False
+        candidate = candidates[0]
+        candidate_path = Path(candidate["path"])
+        if not candidate_path.exists() or not candidate_path.is_file():
+            return False
+        reason = self.noop_candidate_patch_reason(task_id, round_id, candidate_path)
+        if reason is None:
+            return False
+        phase_id = self.repository.create_phase(task_id, PATCH_MERGE, "orchestrator", round_id, status="FAILED")
+        self.artifact_manager.create_text_artifact(
+            task_id,
+            "patch_validation.md",
+            self.noop_patch_validation_report(candidate_path, reason),
+            phase_id=phase_id,
+            role="orchestrator",
+            agent_id="patch-precheck",
+        )
+        self.artifact_manager.create_text_artifact(
+            task_id,
+            "materialized_repo.md",
+            self.noop_materialized_repo_report(task_id, round_id, candidate_path, reason),
+            phase_id=phase_id,
+            role="orchestrator",
+            agent_id="patch-precheck",
+        )
+        objective_ref = self.artifact_manager.create_text_artifact(
+            task_id,
+            "objective_gate.md",
+            self.noop_objective_gate_report(task_id, round_id, candidate_path, reason),
+            phase_id=phase_id,
+            role="orchestrator",
+            agent_id="objective-gate",
+        )
+        self.emit(
+            ProgressEvent(
+                "patch_noop_skipped",
+                task_id=task_id,
+                phase=PATCH_MERGE,
+                role="orchestrator",
+                agent_id="patch-precheck",
+                round_id=round_id,
+                status="FAILED",
+                message=f"PATCH_MERGE skipped testing because candidate patch has no effective change: {reason}",
+                data={"candidate_patch": str(candidate_path), "objective_gate": str(objective_ref.path)},
+            )
+        )
+        return True
+
+    def noop_candidate_patch_reason(self, task_id: str, round_id: int, candidate_path: Path) -> str | None:
+        patch_text = candidate_path.read_text(encoding="utf-8", errors="replace")
+        if not patch_text.strip():
+            return "empty_patch"
+        candidate_hash = sha256_file(candidate_path)
+        previous_hashes = {
+            sha256_file(Path(artifact["path"]))
+            for artifact in self.repository.list_artifacts(task_id, "merged_patch.diff")
+            if Path(artifact["path"]).is_file()
+            and self.artifact_round(artifact) is not None
+            and int(self.artifact_round(artifact) or -1) < round_id
+        }
+        if candidate_hash in previous_hashes:
+            return "duplicate_previous_merged_patch"
+        return None
+
+    def artifact_round(self, artifact: dict[str, Any]) -> int | None:
+        phase_id = artifact.get("phase_id")
+        if not phase_id:
+            return None
+        for phase in self.repository.list_phases(artifact["task_id"]):
+            if phase["phase_id"] != phase_id or phase.get("round_id") is None:
+                continue
+            return int(phase["round_id"])
+        return None
+
+    def noop_patch_validation_report(self, candidate_path: Path, reason: str) -> str:
+        return "\n".join(
+            [
+                "# Patch Validation",
+                "",
+                "status: fail",
+                f"patch: {candidate_path}",
+                f"precheck_status: {reason}",
+                "patch_apply_status: skipped",
+                "materialize_status: skipped",
+                "diff_check_status: skipped",
+                "",
+                "## stderr",
+                "",
+                "```text",
+                f"Patch precheck failed before merge/materialization: {reason}.",
+                "```",
+                "",
+            ]
+        )
+
+    def noop_materialized_repo_report(self, task_id: str, round_id: int, candidate_path: Path, reason: str) -> str:
+        return "\n".join(
+            [
+                "# Materialized Repository",
+                "",
+                "status: skipped",
+                f"task_id: {task_id}",
+                f"round_id: {round_id}",
+                "repo_path: none",
+                f"patch: {candidate_path}",
+                "diff_check_status: skipped",
+                f"skip_reason: {reason}",
+                "",
+            ]
+        )
+
+    def noop_objective_gate_report(self, task_id: str, round_id: int, candidate_path: Path, reason: str) -> str:
+        evidence = {
+            "patch_apply_check": False,
+            "materialize_status": "skipped",
+            "diff_check": False,
+            "legal_unified_diff": False,
+            "scope_ok": False,
+            "size_ok": False,
+            "changed_files": [],
+            "deleted_files": [],
+            "changed_line_count": 0,
+            "precheck_errors": [reason],
+        }
+        return "\n".join(
+            [
+                "# Objective Gate",
+                "",
+                "status: fail",
+                f"task_id: {task_id}",
+                f"round_id: {round_id}",
+                f"patch: {candidate_path}",
+                f"precheck_status: {reason}",
+                "patch_apply_status: skipped",
+                "materialize_status: skipped",
+                "diff_check_status: skipped",
+                "",
+                "## Evidence JSON",
+                "",
+                "```json",
+                json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True),
+                "```",
+                "",
+                "## Gate Errors",
+                "",
+                f"- {reason}",
+                "",
+            ]
+        )
 
     def current_round_candidate_patches(self, task_id: str, round_id: int) -> list[dict[str, Any]]:
         source_phase_ids = {

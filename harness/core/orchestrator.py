@@ -85,6 +85,7 @@ class Orchestrator:
         self.prompt_builder = services.prompt_builder
         self.materialized_repo_service = services.materialized_repo_service
         self.test_gate_service = services.test_gate_service
+        self.runtime_readiness_gate_service = services.runtime_readiness_gate_service
         self.patch_gate_service = services.patch_gate_service
         self.input_staging_service = services.input_staging_service
         self.agent_runner = services.agent_runner
@@ -511,6 +512,13 @@ class Orchestrator:
     def _run_harness_test_gate(self, task_id: str, round_id: int) -> bool:
         return self.run_harness_test_gate(task_id, round_id)
 
+    def run_runtime_readiness_gate(self, task_id: str, round_id: int) -> bool:
+        self.test_gate_service.latest_materialized_repo = self._latest_materialized_repo
+        return self.runtime_readiness_gate_service.run(task_id, round_id)
+
+    def _run_runtime_readiness_gate(self, task_id: str, round_id: int) -> bool:
+        return self.run_runtime_readiness_gate(task_id, round_id)
+
     def _harness_test_command_argv(self, command: str) -> list[str]:
         return self.test_gate_service.harness_test_command_argv(command)
 
@@ -534,7 +542,7 @@ class Orchestrator:
         status: str,
         results: list[dict[str, Any]],
     ) -> str:
-        return self.test_gate_service.test_gate_report(task_id, round_id, repo_dir, status, results)
+        return self.test_gate_service.test_gate_report("Harness Test Gate", task_id, round_id, repo_dir, status, results)
 
     def _test_gate_evidence(self, status: str, results: list[dict[str, Any]]) -> dict[str, Any]:
         return self.test_gate_service.test_gate_evidence(status, results)
@@ -543,17 +551,18 @@ class Orchestrator:
         return self.test_gate_service.status_for_round(task_id, round_id)
 
     def run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:
-        if not self.patch_gate_service.latest_merged_patch_for_round(
-            task_id, round_id
-        ) and not self.patch_gate_service.try_deterministic_single_candidate_merge(task_id, round_id):
-            self.run_role_phase(
-                "executor",
-                PATCH_MERGE,
-                round_id,
-                required_outputs_for("executor", PATCH_MERGE),
-                user_prompt,
-                agent_count_override=1,
-            )
+        if not self.patch_gate_service.latest_merged_patch_for_round(task_id, round_id):
+            if self.patch_gate_service.try_skip_noop_candidate_patch(task_id, round_id):
+                return False
+            if not self.patch_gate_service.try_deterministic_single_candidate_merge(task_id, round_id):
+                self.run_role_phase(
+                    "executor",
+                    PATCH_MERGE,
+                    round_id,
+                    required_outputs_for("executor", PATCH_MERGE),
+                    user_prompt,
+                    agent_count_override=1,
+                )
         return self._run_patch_validation(task_id, round_id)
 
     def _run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:

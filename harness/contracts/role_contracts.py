@@ -75,6 +75,7 @@ DEFAULT_ROLE_INSTRUCTIONS = {
     "tester": (
         "Evaluate executor artifacts and available repository state. Produce a single bug_report.md "
         "with explicit build, test, and bug verdicts plus reproducible evidence. "
+        "Use Harness test-gate evidence as primary execution evidence when available, and do not declare a fix correct when build or test execution is blocked. "
         "IMPORTANT: delivery.md is a JSON role return envelope, not the test verdict. It must be exactly one "
         "JSON object with `return_code` set to `0` as long as you completed the evaluation and produced the required report, "
         "even if the test verdict is `test_result_code: -1` or you find critical bugs. "
@@ -84,7 +85,7 @@ DEFAULT_ROLE_INSTRUCTIONS = {
     "reviewer": (
         "Review the final executor implementation for correctness, scope control, regressions, maintainability, "
         "and customer-machine runtime readiness. When this is a code delivery, run the repository on the current machine, "
-        "attempt local isolated dependency setup when needed, and verify the delivered environment actually works. "
+        "use Harness runtime-readiness evidence when present, attempt local isolated dependency setup when needed, and verify the delivered environment actually works. "
         "If runtime issues are fixable, request changes in `review_report.md`; if the runtime or system conflict is irreconcilable, "
         "report a blocked environment through the required JSON section in `review_report.md`. delivery.md is a JSON role return envelope. "
         "It must be exactly one JSON object with `return_code` set to `0` if you completed the review, regardless of whether "

@@ -74,7 +74,29 @@ artifact_input:
   max_total_bytes: 1048576
 
 testing:
+  runtime: auto
   require_commands: true
+  commands: []
+  setup_commands: []
+  timeout_seconds: 120
+  docker:
+    enabled: true
+    default_python_image: python:3.11-bookworm
+    default_node_image: node:20-bookworm
+    default_go_image: golang:1.22-bookworm
+    default_rust_image: rust:1.78-bookworm
+    network: install_only
+    timeout_seconds: 1800
+    cache_mounts: true
+    cache_root: .openorchestra-cache
+    auto_setup: false
+    allow_project_dockerfile: true
+    userns: host
+  swebench:
+    enabled: false
+
+runtime_readiness:
+  require_commands: false
   commands: []
 
 policy:

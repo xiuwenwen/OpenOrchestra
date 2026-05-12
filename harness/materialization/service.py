@@ -125,7 +125,11 @@ class MaterializedRepoService:
             return
         if repo_dir.exists():
             shutil.rmtree(repo_dir)
-        shutil.copytree(materialized_repo, repo_dir, ignore=self.copy_ignore_for_materialized_workspace)
+        self.workspace_manager.copytree(
+            materialized_repo,
+            repo_dir,
+            ignore=self.copy_ignore_for_materialized_workspace,
+        )
 
     def repo_context_metadata(self, task_id: str, role: str, phase: str) -> dict[str, Any]:
         if self.should_use_materialized_repo(role, phase):
@@ -243,7 +247,7 @@ class MaterializedRepoService:
         return resolved if resolved.exists() and resolved.is_dir() else None
 
     def copy_source_for_patch_validation(self, source_repo: Path, destination: Path) -> None:
-        shutil.copytree(
+        self.workspace_manager.copytree(
             source_repo,
             destination,
             ignore=lambda directory, names: {

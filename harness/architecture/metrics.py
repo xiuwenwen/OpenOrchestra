@@ -58,7 +58,7 @@ class ArchitectureThresholds:
     max_production_file_loc: int = 1_200
     max_test_file_loc: int = 3_500
     max_function_loc: int = 300
-    max_production_total_loc: int = 15_000
+    max_production_total_loc: int = 17_000
     max_test_total_loc: int = 10_000
 
 

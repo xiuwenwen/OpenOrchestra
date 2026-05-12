@@ -326,6 +326,7 @@ def test_final_execution_fix_round_is_tested_before_exhaustion(monkeypatch, tmp_
         return True
 
     monkeypatch.setattr(orchestrator, "_run_patch_validation", fake_patch_validation)
+    monkeypatch.setattr(orchestrator.patch_gate_service, "try_skip_noop_candidate_patch", lambda *args, **kwargs: False)
     monkeypatch.setattr(orchestrator, "run_harness_test_gate", fake_test_gate)
     monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
     monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: True)

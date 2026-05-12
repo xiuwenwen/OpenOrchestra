@@ -37,6 +37,20 @@ def test_artifact_validator_accepts_complete_outputs(tmp_path: Path) -> None:
     assert errors == []
 
 
+def test_artifact_validator_repairs_missing_markdown_artifact_result_code(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    path = tmp_path / "plan.md"
+    path.write_text("# Plan\n\nDo the work.\n", encoding="utf-8")
+    result = validator.validate_required_outputs_result(tmp_path, ["plan.md"])
+
+    repaired = validator.repair_trivial_contract_issues(tmp_path, result)
+    repaired_result = validator.validate_required_outputs_result(tmp_path, ["plan.md"])
+
+    assert repaired == ["plan.md"]
+    assert repaired_result.ok
+    assert path.read_text(encoding="utf-8").startswith("artifact_result_code: 0\n\n# Plan")
+
+
 def test_artifact_validator_accepts_json_delivery_return_code(tmp_path: Path) -> None:
     validator = ArtifactValidator()
     (tmp_path / "plan.md").write_text(md_ok(), encoding="utf-8")
