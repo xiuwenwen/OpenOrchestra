@@ -211,6 +211,7 @@ class DashboardProgressReporter(ConsoleProgressReporter):
 
     def _render(self, event_line: str | None = None) -> None:
         lines = self._dashboard_lines()
+        rendered_lines = len(lines) + (1 if event_line else 0)
         TerminalStatusLine.clear()
         if self._rendered_lines:
             sys.stdout.write(f"\x1b[{self._rendered_lines}F")
@@ -218,12 +219,12 @@ class DashboardProgressReporter(ConsoleProgressReporter):
             sys.stdout.write(f"\x1b[2K{event_line}\n")
         for line in lines:
             sys.stdout.write(f"\x1b[2K{line}\n")
-        surplus_lines = max(0, self._rendered_lines - len(lines) - (1 if event_line else 0))
+        surplus_lines = max(0, self._rendered_lines - rendered_lines)
         for _ in range(surplus_lines):
             sys.stdout.write("\x1b[2K\n")
         if surplus_lines:
             sys.stdout.write(f"\x1b[{surplus_lines}F")
-        self._rendered_lines = len(lines)
+        self._rendered_lines = rendered_lines
         sys.stdout.flush()
 
     def _dashboard_lines(self) -> list[str]:
@@ -274,6 +275,7 @@ class DashboardProgressReporter(ConsoleProgressReporter):
             "agent_retryable_failure": "[retry]",
             "agent_failed": "[fail]",
             "patch_validated": "[gate]",
+            "test_runtime_selected": "[TEST RUNTIME]",
         }
         parts = [prefix or event_prefixes.get(event.event_type, "[progress]")]
         if event.phase:

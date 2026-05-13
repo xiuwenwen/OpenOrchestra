@@ -222,10 +222,9 @@ def test_delivery_handoff_prefers_source_dir_and_requirements(monkeypatch, tmp_p
 
     assert lines[0] == f"project_dir: {source_dir}"
     assert lines[1] == f"run_command: cd {source_dir} && python3 app.py"
-    assert lines[2] == (
-        f"dependency_install: cd {source_dir} && "
-        "python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt"
-    )
+    assert lines[2].startswith(f"dependency_install: cd {source_dir} && PYTHON_BIN=")
+    assert 'python3 || command -v python' in lines[2]
+    assert '"$VENV_PYTHON" -m pip install -r requirements.txt' in lines[2]
 
 
 def test_delivery_handoff_prefers_one_command_installer(tmp_path: Path) -> None:
@@ -970,12 +969,35 @@ def test_dashboard_render_does_not_draw_input_prompt(capsys) -> None:
     assert "harness>" not in output
 
 
+def test_dashboard_render_counts_event_line(capsys) -> None:
+    reporter = main_module.DashboardProgressReporter()
+    reporter.enabled = False
+    dashboard_line_count = len(reporter._dashboard_lines())
+
+    reporter._render("phase started")
+    assert reporter._rendered_lines == dashboard_line_count + 1
+
+    reporter._render()
+    assert reporter._rendered_lines == dashboard_line_count
+    capsys.readouterr()
+
+
 def test_user_env_round_trip(tmp_path: Path) -> None:
     env_path = tmp_path / ".openorchestra.env"
 
     main_module.save_user_env_value("OO_BACKEND", "claude", env_path)
 
     assert main_module.load_user_env(env_path)["OO_BACKEND"] == "claude"
+
+
+def test_generated_docker_runtime_default_is_rewritten_to_config_default(tmp_path: Path) -> None:
+    env_path = tmp_path / ".openorchestra.env"
+    config = _config(tmp_path)
+    config["testing"] = {"runtime": "auto"}
+
+    main_module.ensure_user_env_defaults(config, {"OO_TEST_RUNTIME": "docker"}, env_path)
+
+    assert main_module.load_user_env(env_path)["OO_TEST_RUNTIME"] == "auto"
 
 
 def test_legacy_user_env_keys_are_mapped_to_openorchestra_keys(tmp_path: Path) -> None:
@@ -1133,6 +1155,41 @@ def test_main_starts_ui_by_default_and_can_disable_it(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(main_module.sys, "argv", ["harness", "--config", str(config_path), "--no-ui"])
     assert main_module.main() == 0
     assert starts == []
+
+
+def test_main_keyboard_interrupt_terminates_children_and_stops_ui(monkeypatch, tmp_path: Path, capsys) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("unused: true\n", encoding="utf-8")
+    cleanup_calls: list[str] = []
+
+    def fake_load_config(path):
+        assert str(path) == str(config_path)
+        return _config(tmp_path)
+
+    class FakeServer:
+        def stop(self):
+            cleanup_calls.append("ui_stopped")
+
+    class FakeCLI:
+        def __init__(self, *args, **kwargs):
+            self.ui_server = kwargs.get("ui_server")
+
+        def run(self):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(main_module, "load_user_env", lambda path=main_module.USER_ENV_PATH: {"OO_BACKEND": "codex"})
+    monkeypatch.setattr(main_module, "ensure_user_env_defaults", lambda config, values, path=main_module.USER_ENV_PATH: None)
+    monkeypatch.setattr(main_module, "resolve_real_backend", lambda requested: requested)
+    monkeypatch.setattr(main_module, "InteractiveCLI", FakeCLI)
+    monkeypatch.setattr(main_module, "start_ui_server", lambda *args, **kwargs: FakeServer())
+    monkeypatch.setattr(main_module, "terminate_all_processes", lambda: cleanup_calls.append("children_terminated"))
+    monkeypatch.setattr(main_module.sys, "argv", ["harness", "--config", str(config_path)])
+
+    assert main_module.main() == 130
+
+    assert cleanup_calls == ["children_terminated", "ui_stopped"]
+    assert "active child processes were terminated" in capsys.readouterr().err
 
 
 def test_clean_removes_selected_task_intermediate_files_and_keeps_success_path(tmp_path: Path, capsys) -> None:

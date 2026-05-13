@@ -48,8 +48,18 @@ class InputStagingService:
         current_agent_id: str | None = None,
         repo_dir: Path | None = None,
     ) -> list[Path]:
-        artifacts = self.repository.list_artifacts(task_id)
-        phases_by_id = {phase_row["phase_id"]: phase_row for phase_row in self.repository.list_phases(task_id)}
+        task = self.repository.get_task(task_id)
+        prompt_turn_id = int(task["prompt_turn_id"] or 0) if task else 0
+        phases_by_id = {
+            phase_row["phase_id"]: phase_row
+            for phase_row in self.repository.list_phases(task_id)
+            if int(phase_row["prompt_turn_id"] or 0) == prompt_turn_id
+        }
+        artifacts = [
+            artifact
+            for artifact in self.repository.list_artifacts(task_id)
+            if artifact["phase_id"] is None or artifact["phase_id"] in phases_by_id
+        ]
         staged_dir = input_dir / "artifacts"
         staged_dir.mkdir(parents=True, exist_ok=True)
         staged_paths: list[Path] = []

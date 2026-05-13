@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import configparser
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -136,14 +137,24 @@ def _python_setup_commands(repo_dir: Path, config: dict[str, Any]) -> tuple[str,
         auto_setup = False
     if not auto_setup:
         return ()
-    commands = ["python -m pip install -U pip setuptools wheel"]
+    commands = [_python_pip_install_command("-U", "pip", "setuptools", "wheel")]
     if (repo_dir / "requirements.txt").exists():
-        commands.append("python -m pip install -r requirements.txt")
+        commands.append(_python_pip_install_command("-r", "requirements.txt"))
     if any((repo_dir / name).exists() for name in ("pyproject.toml", "setup.py", "setup.cfg")):
-        commands.append("python -m pip install -e .")
+        commands.append(_python_pip_install_command("-e", "."))
     if _has_pytest_tests(repo_dir):
-        commands.append("python -m pip install pytest")
+        commands.append(_python_pip_install_command("pytest"))
     return tuple(commands)
+
+
+def _python_pip_install_command(*args: str) -> str:
+    pip_args = " ".join(shlex.quote(arg) for arg in ("install", *args))
+    script = (
+        'PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || command -v python)}"; '
+        'if [ -z "$PYTHON_BIN" ]; then echo "python3 or python is required" >&2; exit 127; fi; '
+        f'exec "$PYTHON_BIN" -m pip {pip_args}'
+    )
+    return f"sh -c {shlex.quote(script)}"
 
 
 def _has_pytest_tests(repo_dir: Path) -> bool:

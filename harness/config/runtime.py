@@ -6,11 +6,20 @@ from pathlib import Path
 from typing import Any
 
 from harness.config.loader import write_config_atomic
+from harness.config.user_env import USER_ENV_PATH, load_user_env, write_user_env
 from harness.state.repository import StateRepository
 
 
 CONFIGURABLE_ROLES = ("planner", "executor", "tester", "reviewer", "judge", "communicator")
-CONFIGURABLE_BACKENDS = ("codex", "claude", "gemini", "qwen", "mock")
+CONFIGURABLE_BACKENDS = ("codex", "claude", "gemini", "qwen")
+ROLE_COUNT_ENV_KEYS = {
+    "planner": "OO_PLANNER_COUNT",
+    "executor": "OO_EXECUTOR_COUNT",
+    "tester": "OO_TESTER_COUNT",
+    "reviewer": "OO_REVIEWER_COUNT",
+    "judge": "OO_JUDGE_COUNT",
+    "communicator": "OO_COMMUNICATOR_COUNT",
+}
 MAX_ROLE_COUNT = 10
 
 
@@ -20,10 +29,12 @@ class RuntimeConfigService:
         config: dict[str, Any],
         repository: StateRepository | None = None,
         config_path: str | Path | None = None,
+        user_env_path: str | Path | None = USER_ENV_PATH,
     ):
         self.config = config
         self.repository = repository
         self.config_path = Path(config_path) if config_path else None
+        self.user_env_path = Path(user_env_path) if user_env_path else None
 
     def role_runtime_config(self) -> dict[str, Any]:
         return {
@@ -50,6 +61,7 @@ class RuntimeConfigService:
             if not self.config_path:
                 raise ValueError("persist=true requires a config_path")
             write_config_atomic(self.config, self.config_path)
+            self._persist_env_overlay_values(normalized)
         return self.role_runtime_config()
 
     def config_for_task(self, task_id: str | None) -> dict[str, Any]:
@@ -116,3 +128,16 @@ class RuntimeConfigService:
                 self._deep_update(target[key], value)
             else:
                 target[key] = copy.deepcopy(value)
+
+    def _persist_env_overlay_values(self, normalized: dict[str, Any]) -> None:
+        if not self.user_env_path:
+            return
+        values = load_user_env(self.user_env_path)
+        for role, role_config in normalized["roles"].items():
+            env_key = ROLE_COUNT_ENV_KEYS.get(role)
+            if env_key:
+                values[env_key] = str(role_config["count"])
+        default_backend = normalized["agent_backend"].get("default")
+        if default_backend:
+            values["OO_BACKEND"] = default_backend
+        write_user_env(values, self.user_env_path)

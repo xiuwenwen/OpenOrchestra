@@ -178,6 +178,16 @@ def test_executor_patch_outputs_do_not_require_candidate_patch_metadata(tmp_path
     assert "historical empty project baseline" in prompt
 
 
+def test_tester_prompt_requires_setup_before_reporting_blocked(tmp_path: Path) -> None:
+    context = make_context(tmp_path, role="tester", agent_id="tester-1", role_count=1)
+
+    prompt = PromptBuilder().build(context)
+
+    assert "run safe project-declared setup/install commands" in prompt
+    assert "missing dependencies" in prompt
+    assert "rerun the relevant build/test command" in prompt
+
+
 def test_prompt_builder_uses_balanced_planner_when_count_is_one(tmp_path: Path) -> None:
     prompt = PromptBuilder().build(make_context(tmp_path, role="planner", agent_id="planner-1", role_count=1))
 

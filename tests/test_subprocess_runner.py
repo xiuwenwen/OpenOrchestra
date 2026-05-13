@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 from harness.adapters.subprocess_runner import SubprocessRunner
 
 
@@ -66,3 +68,40 @@ def test_subprocess_runner_can_stream_output_while_writing_logs(tmp_path: Path, 
     assert "[agent] live stderr" in captured.err
     assert stdout_path.read_text(encoding="utf-8").strip() == "live stdout"
     assert stderr_path.read_text(encoding="utf-8").strip() == "live stderr"
+
+
+def test_subprocess_runner_kills_process_tree_on_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    killed: list[int] = []
+
+    class FakeStream:
+        def readline(self):
+            return ""
+
+        def close(self):
+            return None
+
+    class FakeProcess:
+        pid = 12345
+        stdin = None
+        stdout = FakeStream()
+        stderr = FakeStream()
+
+        def wait(self, timeout=None):
+            raise KeyboardInterrupt
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr("harness.adapters.subprocess_runner.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr("harness.adapters.subprocess_runner.kill_process_tree", lambda process: killed.append(process.pid))
+
+    with pytest.raises(KeyboardInterrupt):
+        SubprocessRunner().run(
+            ["sleep", "60"],
+            tmp_path,
+            0,
+            tmp_path / "stdout.log",
+            tmp_path / "stderr.log",
+        )
+
+    assert killed == [12345]

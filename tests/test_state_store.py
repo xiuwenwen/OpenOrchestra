@@ -317,6 +317,22 @@ def test_repository_appends_followup_prompt_turns(tmp_path: Path) -> None:
 
     prompt = repo.get_task(task_id)["user_prompt"]
     assert prompt == "Build a weather app\n\nFollow-up request:\nAdd export"
+    assert repo.get_task(task_id)["prompt_turn_id"] == 1
+
+
+def test_repository_tags_phases_with_current_prompt_turn(tmp_path: Path) -> None:
+    repo = StateRepository(StateDB(tmp_path / "harness.db"))
+    task_id = repo.create_task("Build a weather app")
+    first_phase = repo.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+
+    repo.append_task_prompt_turn(task_id, "Add export")
+    second_phase = repo.create_phase(task_id, "FIXING", "executor", 1)
+
+    phases = repo.list_phases(task_id)
+    assert phases[0]["phase_id"] == first_phase
+    assert phases[0]["prompt_turn_id"] == 0
+    assert phases[1]["phase_id"] == second_phase
+    assert phases[1]["prompt_turn_id"] == 1
 
 
 def test_repository_assigns_artifact_version_inside_insert_lock(tmp_path: Path) -> None:

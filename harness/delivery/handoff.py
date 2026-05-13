@@ -35,10 +35,7 @@ def build_delivery_handoff(result_path: Path, usage_guide: Path | None = None) -
     if dependency_script.exists():
         dependency_install = f"cd {shlex.quote(str(project_dir))} && bash install_dependencies.sh"
     elif dependency_file:
-        dependency_install = (
-            f"cd {shlex.quote(str(project_dir))} && "
-            f"python3 -m venv .venv && .venv/bin/python -m pip install -r {shlex.quote(dependency_file.name)}"
-        )
+        dependency_install = f"cd {shlex.quote(str(project_dir))} && {_venv_dependency_install_command(dependency_file.name)}"
     run_command = _delivery_run_command_for_environment(project_dir, result_path, usage_guide, dependency_script.exists())
     if dependency_script.exists() and run_command:
         run_command = _use_project_virtualenv_python(run_command)
@@ -187,6 +184,16 @@ def _available_python_command() -> str | None:
         if shutil.which(candidate):
             return candidate
     return None
+
+
+def _venv_dependency_install_command(dependency_file_name: str) -> str:
+    return (
+        'PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || command -v python)}" && '
+        '(test -n "$PYTHON_BIN" || { echo "python3 or python is required" >&2; exit 127; }) && '
+        '"$PYTHON_BIN" -m venv .venv && '
+        'VENV_PYTHON="${VENV_PYTHON:-.venv/bin/python}" && '
+        f'"$VENV_PYTHON" -m pip install -r {shlex.quote(dependency_file_name)}'
+    )
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:

@@ -42,6 +42,9 @@ def _config(tmp_path: Path) -> dict:
             "judge": 5,
             "communicator": 5,
         },
+        "testing": {
+            "runtime": "native",
+        },
         "policy": {
             "different_roles_can_run_concurrently": False,
             "same_role_can_run_concurrently": True,
@@ -49,4 +52,3 @@ def _config(tmp_path: Path) -> dict:
             "require_all_tests_pass": True,
         },
     }
-

@@ -187,6 +187,47 @@ def test_checkpoint_resume_prefers_latest_recoverable_phase(tmp_path: Path) -> N
 
     assert [result.phase_id for result in results] == [latest_phase_id]
 
+
+def test_checkpoint_resume_ignores_previous_prompt_turn(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["roles"]["planner"]["count"] = 1
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("Build a weather app")
+    old_phase_id = orchestrator.repository.create_phase(task_id, "PLANNING_DRAFT", "planner", 0)
+    old_run_id = orchestrator.repository.create_agent_run(task_id, old_phase_id, "planner", "planner-1", 0)
+    output_dir = tmp_path / "old-output"
+    output_dir.mkdir()
+    for artifact_type in required_outputs_for("planner", PLANNING_DRAFT):
+        path = output_dir / artifact_type
+        path.write_text(
+            "return_code: 0\n"
+            if artifact_type == "delivery.md"
+            else f"artifact_result_code: 0\n\n# {artifact_type}\n",
+            encoding="utf-8",
+        )
+        orchestrator.repository.create_artifact(ArtifactRef(str(uuid.uuid4()), task_id, old_phase_id, "planner", "planner-1", artifact_type, path, 1, "hash"))
+    orchestrator.repository.update_agent_run_status(old_run_id, "COMPLETED")
+    orchestrator.repository.update_phase_status(old_phase_id, "COMPLETED")
+    orchestrator.repository.append_task_prompt_turn(task_id, "Add export")
+
+    results = orchestrator.run_role_phase("planner", PLANNING_DRAFT, 0, required_outputs_for("planner", PLANNING_DRAFT), "Add export")
+
+    assert [result.phase_id for result in results] != [old_phase_id]
+    assert orchestrator.repository.list_phases(task_id)[-1]["prompt_turn_id"] == 1
+
+
+def test_workflow_round_helpers_ignore_previous_prompt_turn(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("Build a weather app")
+    orchestrator.repository.create_phase(task_id, PLANNING_DRAFT, "planner", 0, status="COMPLETED")
+    orchestrator.repository.create_phase(task_id, FIXING, "executor", 7, status="COMPLETED")
+    orchestrator.repository.append_task_prompt_turn(task_id, "Add export")
+
+    assert orchestrator.workflow_engine.next_phase_round_id(task_id) == 0
+    assert orchestrator.workflow_engine.highest_bugfix_round_id(task_id) is None
+    assert orchestrator.workflow_engine.bugfix_needs_initial_planning(task_id, 0)
+
+
 def test_checkpoint_resume_rejects_invalid_recovered_contract(tmp_path: Path) -> None:
     config = _config(tmp_path)
     config["roles"]["planner"]["count"] = 1

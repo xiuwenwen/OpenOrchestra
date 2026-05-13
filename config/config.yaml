@@ -88,7 +88,7 @@ testing:
     network: install_only
     timeout_seconds: 1800
     cache_mounts: true
-    cache_root: .openorchestra-cache
+    cache_root: ~/.openorchestra/cache/docker
     auto_setup: false
     allow_project_dockerfile: true
     userns: host
@@ -100,7 +100,6 @@ runtime_readiness:
   commands: []
 
 policy:
-  different_roles_can_run_concurrently: false
   same_role_can_run_concurrently: true
   allow_medium_bug_delivery: false
   require_all_tests_pass: true

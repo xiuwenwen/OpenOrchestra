@@ -5,6 +5,7 @@ import builtins
 import sys
 from pathlib import Path
 
+from harness.adapters.process_registry import terminate_all_processes
 from harness.cli.interactive import InteractiveCLI
 from harness.cli.runtime import REAL_BACKENDS, classify_workflow, resolve_real_backend, run_once
 from harness.config.loader import load_config
@@ -177,29 +178,43 @@ def main() -> int:
     prompt_status, prompt = read_one_shot_prompt(args)
     if prompt_status:
         return prompt_status
-    ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port, args.config) if args.ui else None
     cli = InteractiveCLI(
         config,
         backend,
         progress_callback=progress_callback,
         default_workflow=args.workflow,
         ui_store=ui_store,
-        ui_server=ui_server,
+        ui_server=None,
         orchestrator=orchestrator,
         config_path=args.config,
     )
-    if prompt:
-        command_line = cli.command_line_for_text(prompt)
-        if command_line:
-            return cli.run_command_once(command_line)
-        workflow_type, fallback_answer = (args.workflow, None) if args.workflow else classify_workflow(prompt, backend, config)
-        if workflow_type == MISC:
-            print(fallback_answer or MiscChatRunner(backend, config=config).ask(prompt))
-            return 0
-        if not args.workflow:
-            print(f"[classifier] workflow_type={workflow_type}", flush=True)
-        return run_once(orchestrator, prompt, workflow_type)
-    return cli.run()
+    try:
+        if prompt:
+            command_line = cli.command_line_for_text(prompt)
+            if command_line:
+                return cli.run_command_once(command_line)
+            workflow_type, fallback_answer = (args.workflow, None) if args.workflow else classify_workflow(prompt, backend, config)
+            if workflow_type == MISC:
+                print(fallback_answer or MiscChatRunner(backend, config=config).ask(prompt))
+                return 0
+            if not args.workflow:
+                print(f"[classifier] workflow_type={workflow_type}", flush=True)
+            if args.ui:
+                cli.ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port, args.config)
+            return run_once(orchestrator, prompt, workflow_type)
+        if args.ui:
+            cli.ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port, args.config)
+        return cli.run()
+    except KeyboardInterrupt:
+        terminate_all_processes()
+        print("\n[interrupt] stopped; active child processes were terminated.", file=sys.stderr)
+        return 130
+    finally:
+        ui_server = getattr(cli, "ui_server", None)
+        if ui_server:
+            stop = getattr(ui_server, "stop", None)
+            if callable(stop):
+                stop()
 
 
 if __name__ == "__main__":

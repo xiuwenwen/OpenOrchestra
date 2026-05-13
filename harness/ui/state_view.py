@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
+from harness.config.user_env import USER_ENV_PATH
 from harness.config.runtime import RuntimeConfigService
 from harness.core.progress import ProgressEvent
 from harness.state.repository import StateRepository
@@ -78,11 +79,12 @@ class HarnessStateView:
         repository: StateRepository,
         event_store: UiEventStore,
         config_path: str | Path | None = None,
+        user_env_path: str | Path | None = USER_ENV_PATH,
     ):
         self.config = config
         self.repository = repository
         self.event_store = event_store
-        self.config_service = RuntimeConfigService(config, repository, config_path)
+        self.config_service = RuntimeConfigService(config, repository, config_path, user_env_path)
         self.file_reader = HarnessFileReader(config)
 
     def tasks(self, limit: int = 20) -> list[dict[str, Any]]:

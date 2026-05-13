@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 
 from harness.adapters.command_runner import CommandRunner
+from harness.adapters.process_registry import kill_process_tree, register_process, unregister_process
 from harness.ui.terminal import TerminalStatusLine
 
 
@@ -42,8 +43,10 @@ class SubprocessRunner:
                     stderr=subprocess.PIPE,
                     text=True,
                     bufsize=1,
+                    start_new_session=hasattr(os, "setsid"),
                     env={**os.environ, **env} if env else None,
                 )
+                register_process(process)
                 stdout_thread = threading.Thread(
                     target=self._copy_stream,
                     args=(process.stdout, stdout_handle, sys.stdout),
@@ -62,10 +65,15 @@ class SubprocessRunner:
                 try:
                     return_code = process.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    kill_process_tree(process)
                     return_code = 124
                     stderr_handle.write("\nTIMEOUT\n")
                     stderr_handle.flush()
+                except KeyboardInterrupt:
+                    kill_process_tree(process)
+                    raise
+                finally:
+                    unregister_process(process)
                 stdout_thread.join(timeout=2)
                 stderr_thread.join(timeout=2)
                 return return_code

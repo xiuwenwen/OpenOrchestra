@@ -36,7 +36,11 @@ class StateDB:
             conn.execute("ALTER TABLE tasks ADD COLUMN workflow_type TEXT")
         if "configuration" not in task_columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN configuration TEXT")
+        if "prompt_turn_id" not in task_columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN prompt_turn_id INTEGER DEFAULT 0")
         phase_columns = self._table_columns(conn, "phases")
+        if "prompt_turn_id" not in phase_columns:
+            conn.execute("ALTER TABLE phases ADD COLUMN prompt_turn_id INTEGER DEFAULT 0")
         if "loop_type" not in phase_columns:
             conn.execute("ALTER TABLE phases ADD COLUMN loop_type TEXT")
         if "parent_round_id" not in phase_columns:
@@ -73,6 +77,7 @@ class StateDB:
             CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id);
             CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
             CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+            CREATE INDEX IF NOT EXISTS idx_phases_task_prompt_turn ON phases(task_id, prompt_turn_id, phase_type, role, round_id);
             CREATE TABLE IF NOT EXISTS backend_health (
                 backend TEXT PRIMARY KEY,
                 state TEXT NOT NULL,

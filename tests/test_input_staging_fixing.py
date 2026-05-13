@@ -104,6 +104,26 @@ def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_pat
     assert "old-execution.patch" not in manifest
     assert "old-fix.patch" not in manifest
 
+
+def test_input_staging_ignores_previous_prompt_turn_phase_artifacts(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("merge followup patch only")
+    old_fix_phase_id = orchestrator.repository.create_phase(task_id, FIXING, "executor", 0)
+    old_patch = tmp_path / "old-fix.patch"; old_patch.write_text("old", encoding="utf-8")
+    orchestrator.repository.create_artifact(ArtifactRef(str(uuid.uuid4()), task_id, old_fix_phase_id, "executor", "executor-1", "fix_patch.diff", old_patch, 1, "hash"))
+    orchestrator.repository.append_task_prompt_turn(task_id, "second turn")
+    current_fix_phase_id = orchestrator.repository.create_phase(task_id, FIXING, "executor", 0)
+    current_merge_phase_id = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 0)
+    current_patch = tmp_path / "current-fix.patch"; current_patch.write_text("current", encoding="utf-8")
+    orchestrator.repository.create_artifact(ArtifactRef(str(uuid.uuid4()), task_id, current_fix_phase_id, "executor", "executor-1", "fix_patch.diff", current_patch, 2, "hash"))
+
+    staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input-followup", "executor", "PATCH_MERGE", exclude_phase_id=current_merge_phase_id, round_id=0)
+    manifest = staged[0].read_text(encoding="utf-8")
+
+    assert "current-fix.patch" in manifest
+    assert "old-fix.patch" not in manifest
+
+
 def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("fix latest test failure only")

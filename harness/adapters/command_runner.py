@@ -5,6 +5,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from harness.adapters.process_registry import kill_process_tree, register_process, unregister_process
+
 
 @dataclass(frozen=True)
 class CapturedCommandResult:
@@ -25,33 +27,43 @@ class CommandRunner:
     ) -> CapturedCommandResult:
         self.validate_command(command)
         timeout = timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdin=subprocess.PIPE if input_text is not None else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=hasattr(os, "setsid"),
+            env={**os.environ, **env} if env else None,
+        )
+        register_process(process)
         try:
-            completed = subprocess.run(
-                command,
-                cwd=cwd,
-                input=input_text,
-                text=True,
-                capture_output=True,
-                timeout=timeout,
-                check=False,
-                env={**os.environ, **env} if env else None,
-            )
+            stdout, stderr = process.communicate(input=input_text, timeout=timeout)
             return CapturedCommandResult(
-                returncode=completed.returncode,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
+                returncode=process.returncode,
+                stdout=stdout,
+                stderr=stderr,
             )
         except subprocess.TimeoutExpired as exc:
-            stderr = self.decode_timeout_stream(exc.stderr)
+            kill_process_tree(process)
+            stdout, stderr = process.communicate()
+            stdout = self.decode_timeout_stream(stdout or exc.stdout)
+            stderr = self.decode_timeout_stream(stderr or exc.stderr)
             if stderr:
                 stderr += "\n"
             stderr += f"Command timed out after {exc.timeout}s."
             return CapturedCommandResult(
                 returncode=124,
-                stdout=self.decode_timeout_stream(exc.stdout),
+                stdout=stdout,
                 stderr=stderr,
                 timed_out=True,
             )
+        except KeyboardInterrupt:
+            kill_process_tree(process)
+            raise
+        finally:
+            unregister_process(process)
 
     def validate_command(self, command: list[str]) -> None:
         if not isinstance(command, list) or not command:

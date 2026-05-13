@@ -244,7 +244,7 @@ always        explicit opt-in only
 
 ```yaml
 testing:
-  runtime: auto
+  runtime: docker
   docker:
     enabled: true
     default_python_image: python:3.11-bookworm

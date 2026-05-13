@@ -75,7 +75,9 @@ DEFAULT_ROLE_INSTRUCTIONS = {
     "tester": (
         "Evaluate executor artifacts and available repository state. Produce a single bug_report.md "
         "with explicit build, test, and bug verdicts plus reproducible evidence. "
-        "Use Harness test-gate evidence as primary execution evidence when available, and do not declare a fix correct when build or test execution is blocked. "
+        "Use Harness test-gate evidence as primary execution evidence when available. Tester owns test environment preparation: "
+        "run project-declared dependency/setup commands in an isolated environment or configured test runtime when safe, and try documented dependency installation before reporting tests as blocked. "
+        "Do not declare a fix correct when build or test execution is blocked. "
         "IMPORTANT: delivery.md is a JSON role return envelope, not the test verdict. It must be exactly one "
         "JSON object with `return_code` set to `0` as long as you completed the evaluation and produced the required report, "
         "even if the test verdict is `test_result_code: -1` or you find critical bugs. "

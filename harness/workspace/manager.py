@@ -26,14 +26,17 @@ class WorkspaceManager:
     DEFAULT_COPY_IGNORE_NAMES = {
         ".git",
         ".mypy_cache",
+        ".openorchestra-cache",
         ".pytest_cache",
         ".ruff_cache",
         ".venv",
         "__pycache__",
         "artifacts",
         "deliver",
+        "deliveries",
         "logs",
         "state",
+        "workSpace",
         "workspaces",
     }
     RUNTIME_OUTPUT_ROOT_NAMES = {

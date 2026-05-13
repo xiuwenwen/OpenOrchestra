@@ -201,6 +201,8 @@ class PromptBuilder:
                 "",
                 "## Required Test Work",
                 "- Inspect project structure and identify the likely build, install, startup, and test commands from files in the repository.",
+                "- Before declaring execution blocked by missing dependencies or setup problems, run safe project-declared setup/install commands in the configured test runtime or an isolated local environment.",
+                "- If a test command fails because of missing dependencies, attempt the repository's documented dependency installation once, then rerun the relevant build/test command and record both attempts.",
                 "- If the repository exposes runnable build, install, test, startup, CLI, or smoke commands and the environment can execute them safely, you must run them; do not replace runnable verification with static inspection.",
                 "- Run the safest available build/import/static checks and existing automated tests; static inspection is only acceptable after documenting the exact command attempted and the concrete blocker.",
                 "- Run at least one smoke or CLI-level check when the repository exposes an entry point and doing so is safe.",

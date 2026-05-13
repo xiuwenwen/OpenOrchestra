@@ -13,6 +13,7 @@ from orchestrator_mock_support import _config
 
 def test_runtime_readiness_gate_writes_structured_artifact(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
+    config["testing"] = {"runtime": "native"}
     config["runtime_readiness"] = {"commands": [f"{sys.executable} -m compileall -q ."], "require_commands": True}
     orchestrator = Orchestrator(config)
     task_id = orchestrator.create_task("review runtime", workflow_type=BUGFIX)

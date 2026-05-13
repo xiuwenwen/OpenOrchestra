@@ -215,6 +215,7 @@ def test_harness_test_gate_runs_nested_package_tests(monkeypatch, tmp_path: Path
 def test_harness_test_gate_records_timeout_failure(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     config["testing"] = {
+        "runtime": "native",
         "commands": [f"{sys.executable} -c \"import time; time.sleep(2)\""],
         "timeout_seconds": 1,
     }
@@ -234,6 +235,7 @@ def test_harness_test_gate_does_not_execute_shell_metacharacters(monkeypatch, tm
     marker = tmp_path / "shell_injection_marker"
     config = _config(tmp_path)
     config["testing"] = {
+        "runtime": "native",
         "commands": [f"{sys.executable} -c \"print('ok')\"; touch {marker}"],
         "timeout_seconds": 5,
     }
@@ -266,7 +268,7 @@ def test_harness_test_gate_uses_compileall_for_python_repo_without_tests(monkeyp
 
 def test_harness_test_gate_reuses_results_for_same_repo_and_commands(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
-    config["testing"] = {"commands": [f"{sys.executable} -c \"print('ok')\""], "timeout_seconds": 5}
+    config["testing"] = {"runtime": "native", "commands": [f"{sys.executable} -c \"print('ok')\""], "timeout_seconds": 5}
     orchestrator = Orchestrator(config)
     task_id = orchestrator.create_task("cache test gate", workflow_type=BUGFIX)
     repo = tmp_path / "repo"
@@ -296,7 +298,7 @@ def test_harness_test_gate_reuses_results_for_same_repo_and_commands(monkeypatch
 
 def test_test_judgement_cannot_override_failed_required_test_gate(tmp_path: Path) -> None:
     config = _config(tmp_path)
-    config["testing"] = {"require_commands": True, "commands": []}
+    config["testing"] = {"runtime": "native", "require_commands": True, "commands": []}
     orchestrator = Orchestrator(config)
     task_id = orchestrator.create_task("judge test gate", workflow_type=BUGFIX)
     objective_gate = tmp_path / "objective_gate.md"
@@ -707,6 +709,23 @@ def test_single_candidate_patch_merge_uses_deterministic_fast_path(tmp_path: Pat
     assert "changed_files: app.py" in metadata
     assert "expected_apply_command: git apply --whitespace=nowarn merged_patch.diff" in metadata
     assert "status: pass" in Path(orchestrator.repository.list_artifacts(task_id, "patch_validation.md")[-1]["path"]).read_text(encoding="utf-8")
+
+
+def test_patch_gate_ignores_previous_prompt_turn_candidates(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("patch followup", workflow_type=BUGFIX)
+    old_phase_id = orchestrator.repository.create_phase(task_id, EXECUTION, "executor", 0, status="COMPLETED")
+    old_patch = tmp_path / "old.patch"; old_patch.write_text("old\n", encoding="utf-8")
+    orchestrator.repository.create_artifact(ArtifactRef(str(uuid.uuid4()), task_id, old_phase_id, "executor", "executor-1", "patch.diff", old_patch, 1, "hash"))
+    orchestrator.repository.append_task_prompt_turn(task_id, "second turn")
+    current_phase_id = orchestrator.repository.create_phase(task_id, EXECUTION, "executor", 0, status="COMPLETED")
+    current_patch = tmp_path / "current.patch"; current_patch.write_text("current\n", encoding="utf-8")
+    orchestrator.repository.create_artifact(ArtifactRef(str(uuid.uuid4()), task_id, current_phase_id, "executor", "executor-1", "patch.diff", current_patch, 2, "hash"))
+
+    candidates = orchestrator.patch_gate_service.current_round_candidate_patches(task_id, 0)
+
+    assert [Path(candidate["path"]) for candidate in candidates] == [current_patch]
+
 
 def test_empty_candidate_patch_skips_merge_model_and_testing(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))

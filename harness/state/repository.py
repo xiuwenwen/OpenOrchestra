@@ -35,8 +35,19 @@ class StateRepository:
         with self._lock, self.db.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO tasks(task_id, user_prompt, workflow_type, status, current_phase, current_role, configuration, created_at, updated_at)
-                VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+                INSERT INTO tasks(
+                    task_id,
+                    user_prompt,
+                    workflow_type,
+                    status,
+                    current_phase,
+                    current_role,
+                    configuration,
+                    prompt_turn_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, NULL, NULL, NULL, 0, ?, ?)
                 """,
                 (task_id, user_prompt, workflow_type, status, now, now),
             )
@@ -51,7 +62,7 @@ class StateRepository:
         with self.db.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT task_id, user_prompt, workflow_type, status, current_phase, current_role, configuration, created_at, updated_at
+                SELECT task_id, user_prompt, workflow_type, status, current_phase, current_role, configuration, prompt_turn_id, created_at, updated_at
                 FROM tasks
                 ORDER BY created_at DESC
                 LIMIT ?
@@ -82,7 +93,7 @@ class StateRepository:
         now = utc_now_iso()
         with self._lock, self.db.connect() as conn:
             conn.execute(
-                "UPDATE tasks SET user_prompt = ?, updated_at = ? WHERE task_id = ?",
+                "UPDATE tasks SET user_prompt = ?, prompt_turn_id = COALESCE(prompt_turn_id, 0) + 1, updated_at = ? WHERE task_id = ?",
                 (existing_prompt + marker, now, task_id),
             )
 
@@ -159,12 +170,18 @@ class StateRepository:
         round_id: int,
         status: str = "RUNNING",
         *,
+        prompt_turn_id: int | None = None,
         loop_type: str | None = None,
         parent_round_id: int | None = None,
         iteration_id: int | None = None,
     ) -> str:
         PHASE_TRANSITIONS.validate_initial(status)
         phase_id = str(uuid.uuid4())
+        if prompt_turn_id is None:
+            task = self.get_task(task_id)
+            if not task:
+                raise KeyError(f"Task not found: {task_id}")
+            prompt_turn_id = int(task["prompt_turn_id"] or 0)
         with self._lock, self.db.connect() as conn:
             conn.execute(
                 """
@@ -175,13 +192,14 @@ class StateRepository:
                     role,
                     status,
                     round_id,
+                    prompt_turn_id,
                     loop_type,
                     parent_round_id,
                     iteration_id,
                     started_at,
                     completed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
                 (
                     phase_id,
@@ -190,6 +208,7 @@ class StateRepository:
                     role,
                     status,
                     round_id,
+                    prompt_turn_id,
                     loop_type,
                     parent_round_id,
                     iteration_id,

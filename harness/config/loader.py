@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,15 @@ def _parse_scalar(value: str) -> Any:
     value = value.strip()
     if not value:
         return {}
+    if value == "[]":
+        return []
+    if value.startswith("[") and value.endswith("]"):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return parsed
     if (value.startswith('"') and value.endswith('"')) or (
         value.startswith("'") and value.endswith("'")
     ):
@@ -31,27 +41,50 @@ def _minimal_yaml_load(text: str) -> dict[str, Any]:
     """Parse the small YAML subset used by config/config.yaml.
 
     This intentionally avoids a PyYAML dependency. It supports nested mappings
-    with two-space indentation and scalar string/int/bool values.
+    with two-space indentation, scalar string/int/bool values, and scalar lists.
     """
     root: dict[str, Any] = {}
-    stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
-    for raw_line in text.splitlines():
-        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
-            continue
+    entries = [
+        raw_line
+        for raw_line in text.splitlines()
+        if raw_line.strip() and not raw_line.lstrip().startswith("#")
+    ]
+    stack: list[tuple[int, dict[str, Any] | list[Any]]] = [(-1, root)]
+    for index, raw_line in enumerate(entries):
         indent = len(raw_line) - len(raw_line.lstrip(" "))
         line = raw_line.strip()
+        while stack and indent <= stack[-1][0]:
+            stack.pop()
+        parent = stack[-1][1]
+        if line.startswith("- "):
+            if not isinstance(parent, list):
+                raise ValueError(f"Invalid config list item: {raw_line!r}")
+            parent.append(_parse_scalar(line[2:]))
+            continue
         if ":" not in line:
             raise ValueError(f"Invalid config line: {raw_line!r}")
         key, value = line.split(":", 1)
         key = key.strip()
-        while stack and indent <= stack[-1][0]:
-            stack.pop()
-        parent = stack[-1][1]
-        parsed = _parse_scalar(value)
+        if not isinstance(parent, dict):
+            raise ValueError(f"Invalid config mapping entry inside list: {raw_line!r}")
+        if not value.strip():
+            parsed: dict[str, Any] | list[Any]
+            parsed = [] if _next_entry_is_list(entries, index, indent) else {}
+        else:
+            parsed = _parse_scalar(value)
         parent[key] = parsed
-        if isinstance(parsed, dict):
+        if isinstance(parsed, (dict, list)):
             stack.append((indent, parsed))
     return root
+
+
+def _next_entry_is_list(entries: list[str], current_index: int, current_indent: int) -> bool:
+    for raw_line in entries[current_index + 1 :]:
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        if indent <= current_indent:
+            return False
+        return raw_line.strip().startswith("- ")
+    return False
 
 
 def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
@@ -80,6 +113,14 @@ def _dump_mapping(mapping: dict[str, Any], indent: int) -> list[str]:
         if isinstance(value, dict):
             lines.append(f"{prefix}{key}:")
             lines.extend(_dump_mapping(value, indent + 2))
+        elif isinstance(value, list):
+            if not value:
+                lines.append(f"{prefix}{key}: []")
+            else:
+                lines.append(f"{prefix}{key}:")
+                item_prefix = " " * (indent + 2)
+                for item in value:
+                    lines.append(f"{item_prefix}- {_dump_scalar(item)}")
         else:
             lines.append(f"{prefix}{key}: {_dump_scalar(value)}")
     return lines

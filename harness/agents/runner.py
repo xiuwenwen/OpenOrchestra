@@ -15,6 +15,7 @@ from harness.adapters.claude_config import (
     MIN_DYNAMIC_MAX_OUTPUT_TOKENS,
     claude_context_window_tokens,
 )
+from harness.adapters.process_registry import terminate_all_processes
 from harness.agents.context import AgentRunContext
 from harness.agents.delivery_review import DeliveryContractReviewer
 from harness.agents.output_policy import AgentOutputPolicy
@@ -208,12 +209,15 @@ class AgentPhaseRunner:
         required_outputs: list[str],
     ) -> tuple[dict[str, Any] | None, list[AgentRunResult]]:
         existing_phases = self.orchestrator.repository.list_phases(task_id)
+        task = self.orchestrator.repository.get_task(task_id)
+        prompt_turn_id = int(task["prompt_turn_id"] or 0) if task else 0
         checkpoint_candidates = [
             p
             for p in existing_phases
             if p["phase_type"] == phase
             and p["role"] == role
             and p["round_id"] == round_id
+            and int(p["prompt_turn_id"] or 0) == prompt_turn_id
             and p["status"] in {"COMPLETED", "FAILED"}
         ]
         for candidate in reversed(checkpoint_candidates):
@@ -327,6 +331,7 @@ class AgentPhaseRunner:
             done, unfinished = wait(futures, timeout=phase_timeout_seconds)
             if unfinished:
                 cancel_event.set()
+                terminate_all_processes()
                 unfinished_agents = ", ".join(sorted(futures[future] for future in unfinished))
                 for future in unfinished:
                     future.cancel()
@@ -335,6 +340,10 @@ class AgentPhaseRunner:
                     f"{phase_timeout_seconds}s: {unfinished_agents}"
                 )
             return [future.result() for future in done]
+        except BaseException:
+            cancel_event.set()
+            terminate_all_processes()
+            raise
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 

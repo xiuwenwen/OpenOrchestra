@@ -8,6 +8,7 @@ import pytest
 from harness.agents.result import ArtifactRef
 from harness.artifacts.hashing import sha256_file
 from harness.config.loader import load_config
+from harness.config.user_env import load_user_env
 from harness.core.progress import ProgressEvent
 from harness.core.state_machine import FIXING, PATCH_MERGE, PLANNING_DRAFT, TESTING
 from harness.state.db import StateDB
@@ -268,26 +269,32 @@ def test_ui_runtime_config_updates_shared_config(tmp_path: Path) -> None:
     assert updated["agent_backend"]["planner"] == "claude"
     assert updated["roles"]["planner"]["count"] == 3
     assert updated["persist_supported"] is False
+    assert "mock" not in updated["backend_options"]
 
 
 def test_ui_runtime_config_can_persist_to_config_file(tmp_path: Path) -> None:
     config = _config(tmp_path)
     config_path = tmp_path / "config.yaml"
+    user_env_path = tmp_path / ".openorchestra.env"
     repo = StateRepository(StateDB(config["system"]["state_db"]))
-    view = HarnessStateView(config, repo, UiEventStore(), config_path=config_path)
+    view = HarnessStateView(config, repo, UiEventStore(), config_path=config_path, user_env_path=user_env_path)
 
     updated = view.update_runtime_config(
         {
-            "agent_backend": {"planner": "claude"},
+            "agent_backend": {"default": "claude", "planner": "claude"},
             "roles": {"planner": {"count": 4}},
             "persist": True,
         }
     )
 
     persisted = load_config(config_path)
+    env_values = load_user_env(user_env_path)
     assert updated["persist_supported"] is True
+    assert persisted["agent_backend"]["default"] == "claude"
     assert persisted["agent_backend"]["planner"] == "claude"
     assert persisted["roles"]["planner"]["count"] == 4
+    assert env_values["OO_BACKEND"] == "claude"
+    assert env_values["OO_PLANNER_COUNT"] == "4"
 
 
 def test_ui_runtime_config_rejects_unknown_backend(tmp_path: Path) -> None:

@@ -138,7 +138,7 @@ class WorkflowEngine:
         if start_round > 0:
             return False
         planning_phases = {PLANNING_DRAFT, PLANNING_PEER_REVIEW, PLANNING_REVISION, PLAN_REVIEW}
-        return not any(phase["phase_type"] in planning_phases for phase in self.runtime.repository.list_phases(task_id))
+        return not any(phase["phase_type"] in planning_phases for phase in self.current_prompt_turn_phases(task_id))
 
     def bugfix_resume_start_round(self, task_id: str) -> int:
         o = self.runtime
@@ -157,7 +157,7 @@ class WorkflowEngine:
     def highest_bugfix_round_id(self, task_id: str) -> int | None:
         rounds = [
             int(phase["round_id"])
-            for phase in self.runtime.repository.list_phases(task_id)
+            for phase in self.current_prompt_turn_phases(task_id)
             if phase["phase_type"] in {FIXING, PATCH_MERGE, TESTING, TEST_JUDGEMENT}
             and phase["round_id"] is not None
         ]
@@ -398,7 +398,7 @@ class WorkflowEngine:
     def highest_execution_test_round_id(self, task_id: str) -> int | None:
         rounds = [
             int(phase["round_id"])
-            for phase in self.runtime.repository.list_phases(task_id)
+            for phase in self.current_prompt_turn_phases(task_id)
             if phase["phase_type"] in {EXECUTION, FIXING, PATCH_MERGE, TESTING, TEST_JUDGEMENT}
             and phase["round_id"] is not None
         ]
@@ -550,10 +550,19 @@ class WorkflowEngine:
     def next_phase_round_id(self, task_id: str) -> int:
         existing_rounds = [
             int(phase["round_id"])
-            for phase in self.runtime.repository.list_phases(task_id)
+            for phase in self.current_prompt_turn_phases(task_id)
             if phase["round_id"] is not None
         ]
         return max(existing_rounds, default=-1) + 1
+
+    def current_prompt_turn_phases(self, task_id: str) -> list[dict[str, Any]]:
+        task = self.runtime.repository.get_task(task_id)
+        prompt_turn_id = int(task["prompt_turn_id"] or 0) if task else 0
+        return [
+            phase
+            for phase in self.runtime.repository.list_phases(task_id)
+            if int(phase["prompt_turn_id"] or 0) == prompt_turn_id
+        ]
 
     def phase_scope(
         self,

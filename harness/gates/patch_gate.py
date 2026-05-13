@@ -189,6 +189,7 @@ class PatchGateService:
             sha256_file(Path(artifact["path"]))
             for artifact in self.repository.list_artifacts(task_id, "merged_patch.diff")
             if Path(artifact["path"]).is_file()
+            and artifact.get("phase_id") in self.current_prompt_turn_phase_ids(task_id)
             and self.artifact_round(artifact) is not None
             and int(self.artifact_round(artifact) or -1) < round_id
         }
@@ -285,7 +286,7 @@ class PatchGateService:
     def current_round_candidate_patches(self, task_id: str, round_id: int) -> list[dict[str, Any]]:
         source_phase_ids = {
             phase["phase_id"]
-            for phase in self.repository.list_phases(task_id)
+            for phase in self.current_prompt_turn_phases(task_id)
             if phase["phase_type"] in {EXECUTION, FIXING, REVIEW_FIXING} and phase["round_id"] == round_id
         }
         if not source_phase_ids:
@@ -417,7 +418,7 @@ class PatchGateService:
     def latest_merged_patch_for_round(self, task_id: str, round_id: int) -> dict[str, Any] | None:
         patch_merge_phase_ids = {
             phase["phase_id"]
-            for phase in self.repository.list_phases(task_id)
+            for phase in self.current_prompt_turn_phases(task_id)
             if phase["phase_type"] == PATCH_MERGE and phase["round_id"] == round_id
         }
         if not patch_merge_phase_ids:
@@ -428,3 +429,15 @@ class PatchGateService:
             if artifact.get("phase_id") in patch_merge_phase_ids
         ]
         return candidates[-1] if candidates else None
+
+    def current_prompt_turn_phase_ids(self, task_id: str) -> set[str]:
+        return {phase["phase_id"] for phase in self.current_prompt_turn_phases(task_id)}
+
+    def current_prompt_turn_phases(self, task_id: str) -> list[dict[str, Any]]:
+        task = self.repository.get_task(task_id)
+        prompt_turn_id = int(task["prompt_turn_id"] or 0) if task else 0
+        return [
+            phase
+            for phase in self.repository.list_phases(task_id)
+            if int(phase["prompt_turn_id"] or 0) == prompt_turn_id
+        ]

@@ -68,10 +68,12 @@ class TestGateService:
         repo_dir = self.latest_materialized_repo(task_id)
         log_dir = self.artifact_manager.artifact_root / task_id / "context" / log_dir_name / f"round_{round_id}"
         log_dir.mkdir(parents=True, exist_ok=True)
+        runtime, runtime_diagnostics = self.resolve_test_runtime_with_diagnostics(task_id, repo_dir)
+        self.emit_runtime_selection(task_id, round_id, artifact_type, runtime_diagnostics)
         if repo_dir is None:
             evidence = TestRunEvidence(
                 status="fail",
-                runtime=self.resolve_test_runtime(task_id, repo_dir),
+                runtime=runtime,
                 environment_status="fail",
                 build_status="blocked",
                 test_status="blocked",
@@ -79,7 +81,6 @@ class TestGateService:
                 commands=(CommandEvidence(name="repository", command="n/a", exit_code=None, stderr="No materialized repo exists."),),
             )
         elif commands:
-            runtime = self.resolve_test_runtime(task_id, repo_dir)
             profile = detect_project_profile(repo_dir, self.config)
             setup_commands = self.harness_setup_commands(repo_dir, runtime, profile)
             cache_key = self.test_cache_key(repo_dir, commands, runtime=runtime, image=profile.image, setup_commands=setup_commands)
@@ -124,7 +125,7 @@ class TestGateService:
         elif require_commands:
             evidence = TestRunEvidence(
                 status="fail",
-                runtime=self.resolve_test_runtime(task_id, repo_dir),
+                runtime=runtime,
                 project_type=detect_project_profile(repo_dir, self.config).project_type,
                 environment_status="blocked",
                 build_status="blocked",
@@ -136,7 +137,7 @@ class TestGateService:
             profile = detect_project_profile(repo_dir, self.config)
             evidence = TestRunEvidence(
                 status="skipped",
-                runtime=self.resolve_test_runtime(task_id, repo_dir),
+                runtime=runtime,
                 image=profile.image,
                 project_type=profile.project_type,
                 environment_status="skipped",
@@ -200,17 +201,92 @@ class TestGateService:
         )
 
     def resolve_test_runtime(self, task_id: str, repo_dir: Path | None) -> str:
+        runtime, _diagnostics = self.resolve_test_runtime_with_diagnostics(task_id, repo_dir)
+        return runtime
+
+    def resolve_test_runtime_with_diagnostics(self, task_id: str, repo_dir: Path | None) -> tuple[str, dict[str, Any]]:
         testing = self.config.get("testing", {})
-        runtime = str(testing.get("runtime") or "native").strip().lower() if isinstance(testing, dict) else "native"
+        runtime = str(testing.get("runtime") or "auto").strip().lower() if isinstance(testing, dict) else "auto"
         if runtime in {"native", "docker", "swebench"}:
             if runtime == "docker":
                 docker = testing.get("docker", {}) if isinstance(testing, dict) else {}
                 if isinstance(docker, dict) and docker.get("enabled") is False:
-                    return "native"
-            return runtime
+                    return "native", self.runtime_diagnostics(runtime, "native", "docker_disabled")
+            return runtime, self.runtime_diagnostics(runtime, runtime, "explicit_runtime")
         if runtime == "auto":
-            return "native"
+            docker = testing.get("docker", {}) if isinstance(testing, dict) else {}
+            if isinstance(docker, dict) and docker.get("enabled") is False:
+                return "native", self.runtime_diagnostics(runtime, "native", "docker_disabled")
+            docker_ready, docker_data = self.docker_runtime_probe(repo_dir)
+            selected = "docker" if docker_ready else "native"
+            reason = "docker_available" if docker_ready else str(docker_data.get("reason") or "docker_unavailable")
+            diagnostics = self.runtime_diagnostics(runtime, selected, reason)
+            diagnostics.update(docker_data)
+            return selected, diagnostics
         raise TaskFailedError(f"Invalid testing.runtime: {runtime!r}")
+
+    def docker_runtime_available(self, repo_dir: Path | None) -> bool:
+        ready, _diagnostics = self.docker_runtime_probe(repo_dir)
+        return ready
+
+    def docker_runtime_probe(self, repo_dir: Path | None) -> tuple[bool, dict[str, Any]]:
+        docker_binary = "docker"
+        binary_path = shutil.which(docker_binary)
+        if binary_path is None:
+            return False, {
+                "docker_binary": docker_binary,
+                "docker_binary_found": False,
+                "docker_daemon_ready": False,
+                "reason": "docker_binary_missing",
+            }
+        result = self.command_runner.run_capture(
+            [docker_binary, "info", "--format", "{{.ServerVersion}}"],
+            cwd=repo_dir or Path.cwd(),
+            timeout_seconds=5,
+        )
+        ready = result.returncode == 0
+        return ready, {
+            "docker_binary": binary_path,
+            "docker_binary_found": True,
+            "docker_daemon_ready": ready,
+            "docker_probe_exit_code": result.returncode,
+            "reason": "docker_available" if ready else "docker_daemon_unavailable",
+        }
+
+    def runtime_diagnostics(self, requested: str, selected: str, reason: str) -> dict[str, Any]:
+        return {
+            "requested_runtime": requested,
+            "selected_runtime": selected,
+            "runtime_selection_reason": reason,
+        }
+
+    def emit_runtime_selection(self, task_id: str, round_id: int, artifact_type: str, diagnostics: dict[str, Any]) -> None:
+        if self.emit is None:
+            return
+        requested = diagnostics.get("requested_runtime", "unknown")
+        selected = diagnostics.get("selected_runtime", "unknown")
+        reason = diagnostics.get("runtime_selection_reason", "unknown")
+        docker_binary = diagnostics.get("docker_binary", "not_checked")
+        docker_binary_found = diagnostics.get("docker_binary_found", "not_checked")
+        docker_daemon_ready = diagnostics.get("docker_daemon_ready", "not_checked")
+        self.emit(
+            ProgressEvent(
+                "test_runtime_selected",
+                task_id=task_id,
+                phase=artifact_type.removesuffix(".md"),
+                role="orchestrator",
+                agent_id=self.agent_id_for_artifact(artifact_type),
+                round_id=round_id,
+                status=str(selected).upper(),
+                message=(
+                    "[TEST RUNTIME] "
+                    f"requested={requested} selected={selected} "
+                    f"docker_binary={docker_binary} docker_binary_found={docker_binary_found} "
+                    f"docker_daemon_ready={docker_daemon_ready} reason={reason}"
+                ),
+                data=diagnostics,
+            )
+        )
 
     def runner_for_runtime(self, runtime: str):
         if runtime == "native":
@@ -353,7 +429,21 @@ class TestGateService:
         return False
 
     def _ignored_repo_path(self, path: Path) -> bool:
-        ignored_parts = {".git", ".venv", "venv", "env", "__pycache__", "node_modules", ".tox", ".nox"}
+        ignored_parts = {
+            ".git",
+            ".openorchestra-cache",
+            ".venv",
+            ".nox",
+            ".tox",
+            "__pycache__",
+            "deliver",
+            "deliveries",
+            "env",
+            "node_modules",
+            "state",
+            "venv",
+            "workspaces",
+        }
         return any(part in ignored_parts for part in path.parts)
 
     def test_gate_report(

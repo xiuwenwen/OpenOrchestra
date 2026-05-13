@@ -15,13 +15,29 @@ def start_ui_server(
     config_path: str | Path | None = None,
 ) -> HarnessWebServer:
     visualization = config.get("visualization", {})
+    host = str(visualization.get("host", "127.0.0.1"))
+    requested_port = int(port if port is not None else visualization.get("port", 8765))
     server = HarnessWebServer(
         config,
         orchestrator.repository,
         ui_store,
-        host=str(visualization.get("host", "127.0.0.1")),
-        port=int(port if port is not None else visualization.get("port", 8765)),
+        host=host,
+        port=requested_port,
         config_path=config_path,
-    ).start()
+    )
+    try:
+        server.start()
+    except OSError:
+        if port is not None:
+            raise
+        server = HarnessWebServer(
+            config,
+            orchestrator.repository,
+            ui_store,
+            host=host,
+            port=0,
+            config_path=config_path,
+        ).start()
+        print(f"[ui] Port {requested_port} unavailable; using {server.url}")
     print(f"[ui] OpenOrchestra Execution Viewer: {server.url}")
     return server

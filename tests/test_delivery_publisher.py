@@ -302,7 +302,8 @@ def test_delivery_dependency_installer_infers_pytest_dependencies(tmp_path: Path
     assert requirements in written
     assert installer in written
     assert requirements.read_text(encoding="utf-8") == "pytest\npytest-cov\n"
-    assert "pip install -r requirements.txt" in installer.read_text(encoding="utf-8")
+    text = installer.read_text(encoding="utf-8")
+    assert 'command -v python3' in text and '"$VENV_PYTHON" -m pip install -r requirements.txt' in text
     assert installer.stat().st_mode & 0o111
 
 def test_delivery_dependency_installer_prefers_pyproject_dev_install(tmp_path: Path) -> None:
@@ -319,7 +320,24 @@ def test_delivery_dependency_installer_prefers_pyproject_dev_install(tmp_path: P
 
     installer = source_dir / "install_dependencies.sh"
     assert written == [installer]
-    assert 'pip install -e ".[dev]"' in installer.read_text(encoding="utf-8")
+    assert '"$VENV_PYTHON" -m pip install -e ".[dev]"' in installer.read_text(encoding="utf-8")
+
+
+def test_delivery_dependency_installer_uses_plain_editable_install_without_dev_extra(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    project_dir = tmp_path / "deliver" / "project-12345678"
+    source_dir = project_dir / "source"
+    source_dir.mkdir(parents=True)
+    (source_dir / "pyproject.toml").write_text("[project]\nname = \"demo\"\n", encoding="utf-8")
+
+    written = orchestrator._publish_dependency_installer(project_dir)
+
+    installer = source_dir / "install_dependencies.sh"
+    assert written == [installer]
+    text = installer.read_text(encoding="utf-8")
+    assert '"$VENV_PYTHON" -m pip install -e .' in text
+    assert '".[dev]"' not in text
+
 
 def test_delivery_project_name_uses_ascii_safe_slug(tmp_path: Path) -> None:
     config = _config(tmp_path)

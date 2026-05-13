@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
+import tomllib
 from pathlib import Path
 from typing import Any, Callable
 
@@ -242,7 +244,7 @@ class DeliveryPublisher:
         )
         install_command = ""
         if (source_dir / "pyproject.toml").exists():
-            install_command = '.venv/bin/python -m pip install -e ".[dev]"'
+            install_command = self.pyproject_install_command(source_dir / "pyproject.toml")
         if dependency_file is None:
             inferred_dependencies = self.infer_delivery_python_dependencies(source_dir, project_dir)
             if inferred_dependencies:
@@ -250,7 +252,7 @@ class DeliveryPublisher:
                 dependency_file.write_text("\n".join(inferred_dependencies) + "\n", encoding="utf-8")
                 written.append(dependency_file)
         if not install_command and dependency_file is not None:
-            install_command = f".venv/bin/python -m pip install -r {dependency_file.name}"
+            install_command = f'"$VENV_PYTHON" -m pip install -r {shlex.quote(dependency_file.name)}'
         if not install_command:
             return []
         installer = source_dir / "install_dependencies.sh"
@@ -260,11 +262,29 @@ class DeliveryPublisher:
                     "#!/usr/bin/env bash",
                     "set -euo pipefail",
                     'cd "$(dirname "$0")"',
-                    'PYTHON_BIN="${PYTHON_BIN:-python3}"',
+                    'PYTHON_BIN="${PYTHON_BIN:-}"',
+                    'if [ -z "$PYTHON_BIN" ]; then',
+                    "  if command -v python3 >/dev/null 2>&1; then",
+                    "    PYTHON_BIN=python3",
+                    "  elif command -v python >/dev/null 2>&1; then",
+                    "    PYTHON_BIN=python",
+                    "  else",
+                    '    echo "python3 or python is required to create .venv" >&2',
+                    "    exit 127",
+                    "  fi",
+                    "fi",
                     'if [ ! -d ".venv" ]; then',
                     '  "$PYTHON_BIN" -m venv .venv',
                     "fi",
-                    ".venv/bin/python -m pip install --upgrade pip",
+                    'VENV_PYTHON="${VENV_PYTHON:-.venv/bin/python}"',
+                    'if [ ! -x "$VENV_PYTHON" ] && [ -x ".venv/Scripts/python.exe" ]; then',
+                    '  VENV_PYTHON=".venv/Scripts/python.exe"',
+                    "fi",
+                    'if [ ! -x "$VENV_PYTHON" ]; then',
+                    '  echo "virtualenv python not found: $VENV_PYTHON" >&2',
+                    "  exit 127",
+                    "fi",
+                    '"$VENV_PYTHON" -m pip install --upgrade pip',
                     install_command,
                     "",
                 ]
@@ -274,6 +294,17 @@ class DeliveryPublisher:
         installer.chmod(0o755)
         written.append(installer)
         return written
+
+    def pyproject_install_command(self, pyproject_path: Path) -> str:
+        try:
+            payload = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            return '"$VENV_PYTHON" -m pip install -e .'
+        project = payload.get("project") if isinstance(payload, dict) else None
+        optional_dependencies = project.get("optional-dependencies") if isinstance(project, dict) else None
+        if isinstance(optional_dependencies, dict) and "dev" in optional_dependencies:
+            return '"$VENV_PYTHON" -m pip install -e ".[dev]"'
+        return '"$VENV_PYTHON" -m pip install -e .'
 
     def infer_delivery_python_dependencies(self, source_dir: Path, project_dir: Path) -> list[str]:
         if not any(source_dir.rglob("*.py")):

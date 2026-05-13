@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     current_phase TEXT,
     current_role TEXT,
     configuration TEXT,
+    prompt_turn_id INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS phases (
     role TEXT NOT NULL,
     status TEXT NOT NULL,
     round_id INTEGER DEFAULT 0,
+    prompt_turn_id INTEGER DEFAULT 0,
     loop_type TEXT,
     parent_round_id INTEGER,
     iteration_id INTEGER,

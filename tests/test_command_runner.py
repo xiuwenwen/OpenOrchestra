@@ -56,3 +56,25 @@ def test_command_runner_reports_timeout_without_raising(tmp_path: Path) -> None:
 def test_command_runner_rejects_string_commands(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="non-empty argv list"):
         CommandRunner().run_capture("echo unsafe", cwd=tmp_path)  # type: ignore[arg-type]
+
+
+def test_command_runner_kills_process_tree_on_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    killed: list[int] = []
+
+    class FakeProcess:
+        pid = 12345
+        returncode = None
+
+        def communicate(self, input=None, timeout=None):
+            raise KeyboardInterrupt
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr("harness.adapters.command_runner.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr("harness.adapters.command_runner.kill_process_tree", lambda process: killed.append(process.pid))
+
+    with pytest.raises(KeyboardInterrupt):
+        CommandRunner().run_capture(["sleep", "60"], cwd=tmp_path)
+
+    assert killed == [12345]

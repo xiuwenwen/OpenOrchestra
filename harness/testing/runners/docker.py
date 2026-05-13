@@ -177,9 +177,9 @@ class DockerTestRunner:
 
     def _create_container(self, request: TestRunRequest, container_name: str, image: str):
         docker_config = request.config.get("testing", {}).get("docker", {})
-        cache_root = Path(str(docker_config.get("cache_root") or Path(".openorchestra-cache"))).expanduser()
-        if not cache_root.is_absolute() and request.repo_dir:
-            cache_root = request.repo_dir / cache_root
+        cache_root = Path(str(docker_config.get("cache_root") or "~/.openorchestra/cache/docker")).expanduser()
+        if not cache_root.is_absolute():
+            cache_root = Path.home() / ".openorchestra" / "cache" / "docker" / cache_root
         cache_root.mkdir(parents=True, exist_ok=True)
         command = [
             self.docker_binary,

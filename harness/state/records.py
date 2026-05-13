@@ -39,6 +39,7 @@ class TaskRecord(RecordMapping):
     current_phase: str | None
     current_role: str | None
     configuration: str | None
+    prompt_turn_id: int
     created_at: str
     updated_at: str
 
@@ -51,6 +52,7 @@ class PhaseRecord(RecordMapping):
     role: str
     status: str
     round_id: int | None
+    prompt_turn_id: int
     loop_type: str | None
     parent_round_id: int | None
     iteration_id: int | None

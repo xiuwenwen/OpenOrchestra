@@ -41,8 +41,9 @@ def test_docker_auto_setup_is_opt_in(tmp_path: Path) -> None:
     enabled = detect_project_profile(repo, {"testing": {"docker": {"auto_setup": True}}})
 
     assert disabled.setup_commands == ()
-    assert "python -m pip install -r requirements.txt" in enabled.setup_commands
-    assert "python -m pip install pytest" in enabled.setup_commands
+    assert any("command -v python3 || command -v python" in command for command in enabled.setup_commands)
+    assert any("-m pip install -r requirements.txt" in command for command in enabled.setup_commands)
+    assert any("-m pip install pytest" in command for command in enabled.setup_commands)
 
 
 def test_project_dockerfile_is_detected_when_allowed(tmp_path: Path) -> None:
