@@ -274,7 +274,7 @@ def patch_validation_markdown(result: PatchGateResult) -> str:
             "",
             f"status: {result.status}",
             f"patch: {result.patch_path}",
-            f"source_repo: {result.source_repo or 'none'}",
+            f"source_repo: {_source_repo_label(result.source_repo)}",
             f"legal_unified_diff: {str(result.stats.legal_unified_diff).lower()}",
             f"scope_status: {'pass' if result.stats.scope_ok else 'fail'}",
             f"size_status: {'pass' if result.stats.size_ok else 'fail'}",
@@ -312,7 +312,7 @@ def materialized_repo_markdown(result: PatchGateResult, task_id: str, round_id: 
             f"round_id: {round_id}",
             f"repo_path: {result.materialized_repo or 'none'}",
             f"patch: {result.patch_path}",
-            f"source_repo: {result.source_repo or 'none'}",
+            f"source_repo: {_source_repo_label(result.source_repo)}",
             f"diff_check_status: {result.diff_check.status}",
             f"command: {result.materialize.command}",
             f"exit_code: {result.materialize.exit_code if result.materialize.exit_code is not None else 'n/a'}",
@@ -368,7 +368,7 @@ def objective_gate_markdown(result: PatchGateResult, task_id: str, round_id: int
             f"task_id: {task_id}",
             f"round_id: {round_id}",
             f"patch: {result.patch_path}",
-            f"source_repo: {result.source_repo or 'none'}",
+            f"source_repo: {_source_repo_label(result.source_repo)}",
             f"legal_unified_diff: {str(result.stats.legal_unified_diff).lower()}",
             f"scope_status: {'pass' if result.stats.scope_ok else 'fail'}",
             f"size_status: {'pass' if result.stats.size_ok else 'fail'}",
@@ -495,6 +495,10 @@ def _materialization_skip_reason(stats: PatchStats, apply_check: CommandResult) 
     if stats.size_errors:
         return "Patch size/delete gate failed; materialization was not run.\n" + "\n".join(stats.size_errors)
     return f"Patch apply-check status was {apply_check.status}; materialization only runs when status is pass."
+
+
+def _source_repo_label(source_repo: Path | None) -> str:
+    return "orchestrator_private_source_repo" if source_repo else "none"
 
 
 def _prepare_source_tree(source_repo: Path | None, destination: Path, copy_source: CopySourceFn | None) -> None:

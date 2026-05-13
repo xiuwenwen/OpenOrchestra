@@ -6,10 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from harness.adapters.command_runner import CommandRunner
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - platform dependent
     fcntl = None
+
+
+_COMMAND_RUNNER = CommandRunner()
 
 
 @dataclass(frozen=True)
@@ -101,9 +106,37 @@ class WorkspaceManager:
             path.mkdir(parents=True, exist_ok=False)
         if source_repo:
             self.copytree(source_repo, repo_dir, ignore=self._copy_ignore)
+            self.initialize_git_baseline(repo_dir)
         else:
             repo_dir.mkdir(parents=True, exist_ok=False)
         return WorkspacePaths(workspace_dir, input_dir, output_dir, log_dir, repo_dir)
+
+    @classmethod
+    def initialize_git_baseline(cls, repo_dir: str | Path) -> bool:
+        repo = Path(repo_dir)
+        if not repo.is_dir() or (repo / ".git").exists() or shutil.which("git") is None:
+            return False
+        cls._run_git(repo, "init")
+        cls._run_git(repo, "add", "-A", "-f", ".")
+        cls._run_git(
+            repo,
+            "-c",
+            "user.name=OpenOrchestra",
+            "-c",
+            "user.email=openorchestra@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "OpenOrchestra workspace baseline",
+        )
+        return True
+
+    @staticmethod
+    def _run_git(repo_dir: Path, *args: str) -> None:
+        result = _COMMAND_RUNNER.run_capture(["git", *args], cwd=repo_dir)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"git {' '.join(args)} failed in {repo_dir}: {detail}")
 
     def copytree(
         self,

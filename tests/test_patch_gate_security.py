@@ -104,8 +104,10 @@ def test_patch_validation_uses_project_context_source_repo(tmp_path: Path) -> No
     objective_report = Path(orchestrator.repository.list_artifacts(task_id, "objective_gate.md")[-1]["path"]).read_text(encoding="utf-8")
     materialized_app = orchestrator._latest_materialized_repo(task_id) / "app.py"
 
-    assert f"source_repo: {historical_source.resolve()}" in validation_report
-    assert f"source_repo: {historical_source.resolve()}" in materialized_report
+    assert "source_repo: orchestrator_private_source_repo" in validation_report
+    assert "source_repo: orchestrator_private_source_repo" in materialized_report
+    assert str(historical_source.resolve()) not in validation_report
+    assert str(historical_source.resolve()) not in materialized_report
     assert "status: pass" in objective_report
     assert "diff_check_status: pass" in materialized_report
     assert materialized_app.read_text(encoding="utf-8") == "new\n"
@@ -576,6 +578,7 @@ def test_materialized_workspace_repo_excludes_generated_runtime_screenshots(tmp_
     assert (workspace_repo / "app.py").read_text(encoding="utf-8") == "print('ok')\n"
     assert (workspace_repo / "output" / ".gitkeep").exists()
     assert not (workspace_repo / "output" / "screenshots").exists()
+    assert (workspace_repo / ".git").is_dir()
 
 
 def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) -> None:

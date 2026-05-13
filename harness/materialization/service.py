@@ -130,6 +130,7 @@ class MaterializedRepoService:
             repo_dir,
             ignore=self.copy_ignore_for_materialized_workspace,
         )
+        self.workspace_manager.initialize_git_baseline(repo_dir)
 
     def repo_context_metadata(self, task_id: str, role: str, phase: str) -> dict[str, Any]:
         if self.should_use_materialized_repo(role, phase):

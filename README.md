@@ -326,9 +326,13 @@ The gate checks:
 - abnormal size and mass deletion / 异常大小和大量删除
 - sensitive paths such as `.git`, `.env`, keys, and tokens / 敏感路径
 
-For new projects, Harness can materialize a `source/` directory from the final patch. For existing-project workflows, `system.source_repo` provides the baseline.
+For new projects, Harness can materialize a `source/` directory from the final patch. For existing-project workflows, `system.source_repo` provides the read-only baseline input. Harness copies that source into each agent workspace repo and initializes a local `.git` baseline there, so agents can edit files and generate normal `git diff` patches from their isolated workspace.
 
-新项目可以从最终 patch 物化 `source/` 目录。已有项目的 `bugfix` 和 `feature_change` 使用 `system.source_repo` 作为基线。
+新项目可以从最终 patch 物化 `source/` 目录。已有项目的 `bugfix` 和 `feature_change` 使用 `system.source_repo` 作为只读基线输入。Harness 会把 source 复制到每个 agent 的 workspace repo，并在副本里初始化本地 `.git` 基线，所以 agent 应该只改自己的隔离 workspace，并用 `git diff` 产出标准 patch。
+
+For external benchmark or caller-driven runs, the caller-owned checkout should remain a baseline/input workspace. Harness should make changes in isolated workspace repos, produce a patch artifact, and let the caller apply that patch to its own clean checkout or evaluator environment.
+
+由外部 benchmark 或调用方驱动运行时，调用方拥有的 checkout 应保持为基线/输入工作区。Harness 应在隔离 workspace repo 中修改代码，产出 patch artifact，再由调用方把 patch 应用到自己的干净 checkout 或评测环境。
 
 ## Development / 开发
 
