@@ -122,13 +122,25 @@ def test_test_judge_visibility_is_current_test_reports_and_current_gate_only(tmp
                 label=f"{label}-bug_report.md",
             )
         )
+        artifacts.append(
+            _artifact(
+                tmp_path,
+                phases_by_id,
+                role="tester",
+                agent_id="tester-1",
+                artifact_type="tester_result.json",
+                phase_type=TESTING,
+                round_id=round_id,
+                label=f"{label}-tester_result.json",
+            )
+        )
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "judge", TEST_JUDGEMENT, 1)
 
     assert _names(visible) == {
-        "current-gate-test_gate.md",
         "current-objective-objective_gate.md",
         "current-bug_report.md-bug_report.md",
+        "current-tester_result.json-tester_result.json",
     }
 
 
@@ -136,12 +148,13 @@ def test_fixing_visibility_uses_latest_complete_test_round_before_current(tmp_pa
     phases_by_id: dict[str, dict] = {}
     artifacts = [
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=0, label="r0-bug"),
+        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", phase_type=TESTING, round_id=0, label="r0-result"),
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="review_report.md", phase_type=REGRESSION_TESTING, round_id=1, label="r1-non-test-report"),
     ]
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "executor", FIXING, 2)
 
-    assert _names(visible) == {"r0-bug-bug_report.md"}
+    assert _names(visible) == {"r0-bug-bug_report.md", "r0-result-tester_result.json"}
 
 
 def test_planner_peer_review_visibility_is_current_round_other_planners_only(tmp_path: Path) -> None:
@@ -365,6 +378,7 @@ def test_communicator_visibility_uses_only_plan_and_final_executor_artifacts(tmp
         _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="changed_files.md", phase_type=PATCH_MERGE, round_id=3, label="changed"),
         _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="self_check.md", phase_type=PATCH_MERGE, round_id=3, label="self"),
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=3, label="bug"),
+        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", phase_type=TESTING, round_id=3, label="result"),
         _artifact(tmp_path, phases_by_id, role="reviewer", agent_id="reviewer-1", artifact_type="review_report.md", phase_type=REVIEWING, round_id=1, label="review"),
         _artifact(tmp_path, phases_by_id, role="judge", agent_id="judge-1", artifact_type="decision.json", phase_type=TEST_JUDGEMENT, round_id=3, label="judge"),
         _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="orchestrator", artifact_type="test_gate.md", phase_type="TEST_GATE", round_id=3, label="gate"),
@@ -377,4 +391,6 @@ def test_communicator_visibility_uses_only_plan_and_final_executor_artifacts(tmp
         "metadata-merged_patch_metadata.md",
         "changed-changed_files.md",
         "self-self_check.md",
+        "bug-bug_report.md",
+        "result-tester_result.json",
     }

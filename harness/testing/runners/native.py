@@ -4,7 +4,7 @@ from pathlib import Path
 
 from harness.adapters.command_runner import CommandRunner
 from harness.testing.evidence import CommandEvidence, TestRunEvidence, evidence_from_command_results
-from harness.testing.runners.base import TestRunRequest, split_command
+from harness.testing.runners.base import TestCommand, TestRunRequest, normalize_test_command, split_command
 
 
 class NativeTestRunner:
@@ -43,9 +43,11 @@ class NativeTestRunner:
             commands=commands,
         )
 
-    def _run_commands(self, request: TestRunRequest, command_texts: tuple[str, ...], *, phase: str) -> list[CommandEvidence]:
+    def _run_commands(self, request: TestRunRequest, command_texts: tuple[str | TestCommand, ...], *, phase: str) -> list[CommandEvidence]:
         results: list[CommandEvidence] = []
-        for index, command in enumerate(command_texts, start=1):
+        for index, raw_command in enumerate(command_texts, start=1):
+            test_command = normalize_test_command(raw_command, default_scope="host")
+            command = test_command.command
             stdout_path = request.log_dir / f"{phase}_{index}.stdout.log"
             stderr_path = request.log_dir / f"{phase}_{index}.stderr.log"
             completed = self.command_runner.run_capture(
@@ -64,6 +66,9 @@ class NativeTestRunner:
                     stdout=str(stdout_path),
                     stderr=str(stderr_path),
                     phase=phase,
+                    scope="host",
+                    host_command=command,
+                    workdir=str(request.repo_dir or Path(".")),
                 )
             )
             if exit_code != 0:

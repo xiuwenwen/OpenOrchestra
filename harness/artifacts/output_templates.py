@@ -56,6 +56,8 @@ def output_template_content(
         return _delivery_template(required_outputs, role=role, phase=phase, agent_id=agent_id)
     if relative_name == "decision.json":
         return _decision_template(role=role, phase=phase, agent_id=agent_id)
+    if relative_name == "tester_result.json":
+        return _tester_result_template()
     if relative_name.endswith(".md"):
         return _markdown_template(relative_name, role=role, phase=phase, agent_id=agent_id)
     return f"{TEMPLATE_PENDING_LINE}\n\nReplace this Harness output template with `{relative_name}` content.\n"
@@ -106,6 +108,27 @@ def _decision_template(*, role: str, phase: str, agent_id: str) -> str:
                 "role": role,
                 "phase": phase,
                 "agent_id": agent_id,
+                TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def _tester_result_template() -> str:
+    return (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": TEMPLATE_PENDING_VALUE,
+                "next_action": TEMPLATE_PENDING_VALUE,
+                "failure_type": TEMPLATE_PENDING_VALUE,
+                "summary": "Replace this Harness output template with the tester decision.",
+                "setup_commands_run": [],
+                "test_commands_run": [],
+                "remaining_blockers": [],
                 TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
             },
             ensure_ascii=False,

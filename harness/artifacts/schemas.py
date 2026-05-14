@@ -77,10 +77,10 @@ def _phases(*phases: str) -> frozenset[str]:
 
 PLANNING_ARTIFACTS = _types("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md")
 PROJECT_CONTEXT_ARTIFACTS = _types("project_context.md")
-TEST_REPORT_ARTIFACTS = _types("bug_report.md")
+TEST_REPORT_ARTIFACTS = _types("bug_report.md", "tester_result.json")
 JUDGE_DECISION_ARTIFACTS = _types("decision.json", "decision_summary.md")
 PATCH_FIX_GATE_ARTIFACTS = _types("objective_gate.md")
-TEST_JUDGE_GATE_ARTIFACTS = _types("test_gate.md", "objective_gate.md")
+TEST_JUDGE_GATE_ARTIFACTS = _types("objective_gate.md")
 RUNTIME_READINESS_ARTIFACTS = _types("runtime_readiness.md")
 EXECUTOR_REVIEW_ARTIFACTS = _types(
     "changed_files.md",
@@ -263,6 +263,14 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
     ArtifactVisibilityRule("communicator", DELIVERY, "executor", DELIVERY_EXECUTOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
+    ArtifactVisibilityRule(
+        "communicator",
+        DELIVERY,
+        "tester",
+        TEST_REPORT_ARTIFACTS,
+        source_phases=_phases(TESTING, REGRESSION_TESTING),
+        round_policy=ROUND_LATEST_PER_TYPE,
+    ),
 )
 
 DELIVERY_STATUS_OUTPUT = "delivery.md"
@@ -290,8 +298,8 @@ _contract("executor", PATCH_MERGE, ("merged_patch.diff", "merged_patch_metadata.
 _contract("executor", MISC_RESPONSE, ("response.md", "notes.md"))
 _contract("executor", FIXING, ("fix_schedule.md", "fix_patch.diff", "fix_notes.md", "self_check.md"))
 _contract("executor", REVIEW_FIXING, ("fix_schedule.md", "fix_patch.diff", "fix_notes.md", "self_check.md"))
-_contract("tester", TESTING, ("bug_report.md",))
-_contract("tester", REGRESSION_TESTING, ("bug_report.md",))
+_contract("tester", TESTING, ("bug_report.md", "tester_result.json"))
+_contract("tester", REGRESSION_TESTING, ("bug_report.md", "tester_result.json"))
 _contract("reviewer", PLAN_REVIEW, ("review_report.md", "selected_plan.md"))
 _contract("reviewer", REVIEWING, ("review_report.md",))
 _contract("judge", TEST_JUDGEMENT, ("decision.json", "decision_summary.md"))
@@ -363,6 +371,11 @@ def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]
             "- Put test outcome in `bug_report.md` as `test_result_code: 0`, `test_result_code: -1`, or `test_result_code: 2`.",
             "- Put bug outcome in `bug_report.md` as `bug_result_code: 0`, `bug_result_code: 1`, or `bug_result_code: -1`.",
             "- If testing is blocked by a broken implementation, still write a complete `bug_report.md` with `artifact_result_code: 0` and describe the blocker in the verdict fields.",
+            "- Write `tester_result.json` as one strict JSON object; it is the workflow decision contract, not Markdown.",
+            '- `tester_result.json.status` must be exactly one of `"tests_passed"`, `"source_bug"`, or `"environment_blocked"`.',
+            '- `tester_result.json.next_action` must match the status: `"continue"`, `"fix_code"`, or `"block_task"`.',
+            "- Tester owns environment setup and command execution before writing `tester_result.json`; do not rely on a later Harness test gate.",
+            "- Use `environment_blocked` only after safe project-declared or minimal test-tooling setup/repair was attempted and the environment still cannot run.",
             "- Harness validates `delivery.md` and report headers; any non-zero `return_code` or non-zero `artifact_result_code` prevents the run from advancing.",
         ]
     if role == "reviewer":

@@ -139,12 +139,14 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
     artifact_rows = [
         ("merged_patch_metadata.md", round0_merge_phase_id, "executor", "old-merged-metadata.md", "executor-1"),
         ("bug_report.md", round0_test_phase_id, "tester", "old-bug-report.md", "tester-1"),
+        ("tester_result.json", round0_test_phase_id, "tester", "old-tester-result.json", "tester-1"),
         ("decision.json", round0_judge_phase_id, "judge", "old-decision.json", "judge-1"),
         ("decision_summary.md", round0_judge_phase_id, "judge", "old-decision-summary.md", "judge-1"),
         ("merged_patch_metadata.md", round1_merge_phase_id, "executor", "latest-merged-metadata.md", "executor-1"),
         ("merged_patch.diff", round1_merge_phase_id, "executor", "latest-merged.patch", "executor-1"),
         ("merge_report.md", round1_merge_phase_id, "executor", "latest-merge-report.md", "executor-1"),
         ("bug_report.md", round1_test_phase_id, "tester", "latest-bug-report.md", "tester-1"),
+        ("tester_result.json", round1_test_phase_id, "tester", "latest-tester-result.json", "tester-1"),
         ("decision.json", round1_judge_phase_id, "judge", "latest-decision.json", "judge-1"),
         ("decision_summary.md", round1_judge_phase_id, "judge", "latest-decision-summary.md", "judge-1"),
         ("self_check.md", stale_fix_phase_id, "executor", "stale-self-check.md", "executor-1"),
@@ -199,6 +201,7 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
 
     assert "latest-merged-metadata.md" in manifest
     assert "latest-bug-report.md" in manifest
+    assert "latest-tester-result.json" in manifest
     assert "latest-decision.json" in manifest
     assert "latest-decision-summary.md" in manifest
     assert "round-1-objective_gate.md" in manifest
@@ -210,6 +213,7 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
     assert "stale-changed-files.md" not in manifest
     assert "old-merged-metadata.md" not in manifest
     assert "old-bug-report.md" not in manifest
+    assert "old-test-environment.md" not in manifest
     assert "old-decision.json" not in manifest
     assert "old-decision-summary.md" not in manifest
     assert "round-0-test_gate.md" not in manifest
@@ -237,6 +241,7 @@ def test_fixing_falls_back_to_latest_visible_test_evidence_when_previous_test_ou
 
     artifact_rows = [
         ("bug_report.md", round0_test_phase_id, "tester", "round0-bug-report.md", "tester-1"),
+        ("tester_result.json", round0_test_phase_id, "tester", "round0-tester-result.json", "tester-1"),
         ("review_report.md", round1_test_phase_id, "tester", "round1-non-tester-report.md", "tester-1"),
         ("decision.json", round0_judge_phase_id, "judge", "round0-decision.json", "judge-1"),
         ("decision_summary.md", round0_judge_phase_id, "judge", "round0-decision-summary.md", "judge-1"),
@@ -289,6 +294,7 @@ def test_fixing_falls_back_to_latest_visible_test_evidence_when_previous_test_ou
     manifest = staged[0].read_text(encoding="utf-8")
 
     assert "round0-bug-report.md" in manifest
+    assert "round0-tester-result.json" in manifest
     assert "round1-non-tester-report.md" not in manifest
     assert "round0-decision.json" in manifest
     assert "round0-decision-summary.md" in manifest

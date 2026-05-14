@@ -217,6 +217,25 @@ Set a role timeout to `0` to disable timeout enforcement for that role. Use posi
 
 `OO_MAX_TEST_FIX_ROUNDS=10` 是测试/修复循环的默认保护上限。达到上限后，交互模式会询问额外给 10 轮、退出，或一直修复直到通过。只有明确需要无界循环时才设置 `OO_MAX_TEST_FIX_ROUNDS=unlimited`。
 
+## Test Runtime Boundary / 测试运行边界
+
+OpenOrchestra itself runs on the host: orchestration, UI, state, artifacts, backend CLIs, and Docker daemon probing stay on the local machine. Project setup and test commands run in the selected test runtime.
+
+OpenOrchestra 主进程运行在宿主机：编排、UI、状态库、artifacts、backend CLI、Docker daemon 检测都在本机。项目依赖安装和测试命令运行在选定的测试 runtime 中。
+
+When `testing.runtime` selects Docker, the source repo is mounted as `/workspace` and generated test commands use container commands such as:
+
+当 `testing.runtime` 选择 Docker 时，源码仓库会挂载为 `/workspace`，自动生成的测试命令使用容器内命令，例如：
+
+```bash
+python -m pytest -q
+python -m compileall -q .
+```
+
+Host Python paths such as `/Users/.../.venv/bin/python` are invalid inside Docker. If a tester-provided Docker setup/test command leaks a host path, Harness records it as an environment/test-command gate failure and routes it back through tester environment repair instead of sending the task back into another source-code fixing round.
+
+宿主机 Python 路径，例如 `/Users/.../.venv/bin/python`，不能进入 Docker 命令。如果 tester 提供的 Docker setup/test command 泄漏宿主机路径，Harness 会把它记录为环境/测试命令门禁失败，并回到 tester 修复环境，而不是继续让 Agent 修改源码。
+
 ## Workflows / 工作流
 
 OpenOrchestra supports four workflow types.
@@ -235,8 +254,8 @@ PLANNING_PEER_REVIEW / PLANNING_REVISION loop
 PLAN_REVIEW
 EXECUTION
 PATCH_MERGE
-TESTING / TEST_JUDGEMENT / FIXING loop
-REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop
+TESTING -> FIXING loop when tester_result.json reports source_bug
+REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop when tester_result.json reports source_bug
 DELIVERY
 ```
 
@@ -249,11 +268,14 @@ Used to repair an existing project. It skips full planning, loops over fixing, p
 ```text
 FIXING
 PATCH_MERGE
-TESTING
-TEST_JUDGEMENT
-REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop
+TESTING -> FIXING loop when tester_result.json reports source_bug
+REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop when tester_result.json reports source_bug
 DELIVERY
 ```
+
+Tester owns test-environment repair and command execution. It must write `tester_result.json` with `status: tests_passed | source_bug | environment_blocked`; Harness consumes that result directly and does not run a separate post-tester test gate.
+
+tester 负责测试环境修复和命令执行，必须写入 `tester_result.json`，状态只能是 `tests_passed | source_bug | environment_blocked`；Harness 直接消费该结果，不再在 tester 后单独跑 test gate。
 
 ### `feature_change`
 

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import uuid
 from pathlib import Path
 
 from harness.adapters.command_runner import CommandRunner
 from harness.testing.evidence import CommandEvidence, TestRunEvidence, evidence_from_command_results
-from harness.testing.runners.base import TestRunRequest, split_command
+from harness.testing.runners.base import TestCommand, TestRunRequest, normalize_test_command, split_command
 
 
 class DockerTestRunner:
@@ -49,6 +50,9 @@ class DockerTestRunner:
         commands: list[CommandEvidence] = []
         created = False
         try:
+            invalid = self._invalid_container_commands(request)
+            if invalid is not None:
+                return invalid
             if request.profile.dockerfile:
                 temporary_image = f"oo-test-image-{uuid.uuid4().hex[:12]}"
                 build_evidence = self._build_project_image(request, temporary_image)
@@ -84,6 +88,8 @@ class DockerTestRunner:
                             stdout=str(create_stdout),
                             stderr=str(create_stderr),
                             phase="setup",
+                            scope="host",
+                            host_command=f"docker create {request.profile.image}",
                         ),
                     ),
                 )
@@ -115,6 +121,8 @@ class DockerTestRunner:
                             stdout=str(start_stdout),
                             stderr=str(start_stderr),
                             phase="setup",
+                            scope="host",
+                            host_command=f"docker start {container_name}",
                         ),
                     ),
                 )
@@ -173,6 +181,9 @@ class DockerTestRunner:
             stdout=str(stdout_path),
             stderr=str(stderr_path),
             phase="setup",
+            scope="host",
+            host_command=" ".join(command),
+            workdir=str(request.repo_dir),
         )
 
     def _create_container(self, request: TestRunRequest, container_name: str, image: str):
@@ -187,7 +198,7 @@ class DockerTestRunner:
             "--name",
             container_name,
             "--workdir",
-            "/workspace",
+            self.container_workdir(request),
             "-v",
             f"{request.repo_dir.resolve()}:/workspace:rw",
             "-v",
@@ -210,11 +221,14 @@ class DockerTestRunner:
             return "bridge"
         return network
 
-    def _exec_commands(self, request: TestRunRequest, container_name: str, command_texts: tuple[str, ...], *, phase: str) -> list[CommandEvidence]:
+    def _exec_commands(self, request: TestRunRequest, container_name: str, command_texts: tuple[str | TestCommand, ...], *, phase: str) -> list[CommandEvidence]:
         results: list[CommandEvidence] = []
-        for index, command in enumerate(command_texts, start=1):
+        for index, raw_command in enumerate(command_texts, start=1):
+            test_command = normalize_test_command(raw_command, default_scope="container")
+            command = test_command.command
             stdout_path = request.log_dir / f"{phase}_{index}.stdout.log"
             stderr_path = request.log_dir / f"{phase}_{index}.stderr.log"
+            host_command = " ".join([self.docker_binary, "exec", container_name, *split_command(command)])
             completed = self.command_runner.run_capture(
                 [self.docker_binary, "exec", container_name, *split_command(command)],
                 cwd=request.repo_dir,
@@ -231,8 +245,70 @@ class DockerTestRunner:
                     stdout=str(stdout_path),
                     stderr=str(stderr_path),
                     phase=phase,
+                    scope="container",
+                    host_command=host_command,
+                    container_command=command,
+                    workdir=self.container_workdir(request),
                 )
             )
             if exit_code != 0:
                 break
         return results
+
+    def _invalid_container_commands(self, request: TestRunRequest) -> TestRunEvidence | None:
+        for phase, command_texts in (("setup", request.setup_commands), ("test", request.commands)):
+            for index, raw_command in enumerate(command_texts, start=1):
+                command = normalize_test_command(raw_command, default_scope="container")
+                reason = self._container_command_violation(request, command)
+                if not reason:
+                    continue
+                return TestRunEvidence(
+                    status="fail",
+                    runtime=self.runtime,
+                    image=request.profile.image,
+                    project_type=request.profile.project_type,
+                    environment_status="fail",
+                    build_status="blocked",
+                    test_status="blocked",
+                    failure_type="env_setup" if phase == "setup" else "test_command",
+                    commands=(
+                        CommandEvidence(
+                            name=f"{phase}_{index}",
+                            command=command.command,
+                            exit_code=126,
+                            stderr=reason,
+                            phase=phase,
+                            scope=command.scope,
+                            container_command=command.command,
+                            workdir=self.container_workdir(request),
+                        ),
+                    ),
+                    notes=(reason,),
+                )
+        return None
+
+    def _container_command_violation(self, request: TestRunRequest, command: TestCommand) -> str | None:
+        if command.scope != "container":
+            return f"Docker runtime cannot execute host-scoped command: {command.command}"
+        text = command.command
+        host_patterns = [
+            "/Users/",
+            "/private/",
+            "/opt/homebrew/",
+            ".venv/bin/python",
+            sys.executable,
+        ]
+        if request.repo_dir is not None:
+            host_patterns.append(str(request.repo_dir.resolve()))
+        home = str(Path.home())
+        if home and home != "/":
+            host_patterns.append(home)
+        for pattern in dict.fromkeys(host_patterns):
+            if pattern and pattern in text:
+                return f"Docker container command leaks host path {pattern!r}: {text}"
+        return None
+
+    def container_workdir(self, request: TestRunRequest) -> str:
+        if request.runtime_context is not None:
+            return request.runtime_context.container_repo_dir
+        return "/workspace"

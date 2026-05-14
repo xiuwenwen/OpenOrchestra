@@ -72,6 +72,8 @@ def test_ui_snapshot_includes_agent_logs_and_artifacts(tmp_path: Path) -> None:
     )
     log_dir.mkdir(parents=True)
     (log_dir / "prompt.md").write_text("prompt", encoding="utf-8")
+    (log_dir / "live.log").write_text("[harness] running\n", encoding="utf-8")
+    (log_dir / "agent_trace.md").write_text("visible execution metadata only\n", encoding="utf-8")
     (log_dir / "stdout.log").write_text("visible output", encoding="utf-8")
     artifact_path = tmp_path / "plan.md"
     artifact_path.write_text("plan", encoding="utf-8")
@@ -93,8 +95,7 @@ def test_ui_snapshot_includes_agent_logs_and_artifacts(tmp_path: Path) -> None:
     snapshot = HarnessStateView(config, repo, store).snapshot(task_id)
 
     assert snapshot["task"]["task_id"] == task_id
-    assert snapshot["agent_runs"][0]["prompt_path"]["exists"] is True
-    assert snapshot["agent_runs"][0]["stdout_path"]["exists"] is True
+    assert all(snapshot["agent_runs"][0][name]["exists"] for name in ("prompt_path", "live_path", "trace_path", "stdout_path"))
     assert snapshot["agent_runs"][0]["artifact_count"] == 1
     assert snapshot["role_rounds"]["planner"][0]["round_id"] == 0
     assert snapshot["role_rounds"]["planner"][0]["runs"][0]["agent_id"] == "planner-1"

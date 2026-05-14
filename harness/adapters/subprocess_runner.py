@@ -34,7 +34,8 @@ class SubprocessRunner:
         try:
             with stdout_path.open("w", encoding="utf-8") as stdout_handle, stderr_path.open(
                 "w", encoding="utf-8"
-            ) as stderr_handle:
+            ) as stderr_handle, (stdout_path.parent / "live.log").open("a", encoding="utf-8") as live_handle:
+                live_lock = threading.Lock()
                 process = subprocess.Popen(
                     command,
                     cwd=cwd,
@@ -49,12 +50,12 @@ class SubprocessRunner:
                 register_process(process)
                 stdout_thread = threading.Thread(
                     target=self._copy_stream,
-                    args=(process.stdout, stdout_handle, sys.stdout),
+                    args=(process.stdout, stdout_handle, sys.stdout, live_handle, live_lock, "stdout"),
                     daemon=True,
                 )
                 stderr_thread = threading.Thread(
                     target=self._copy_stream,
-                    args=(process.stderr, stderr_handle, sys.stderr),
+                    args=(process.stderr, stderr_handle, sys.stderr, live_handle, live_lock, "stderr"),
                     daemon=True,
                 )
                 stdout_thread.start()
@@ -69,6 +70,9 @@ class SubprocessRunner:
                     return_code = 124
                     stderr_handle.write("\nTIMEOUT\n")
                     stderr_handle.flush()
+                    with live_lock:
+                        live_handle.write("\n[harness] TIMEOUT\n")
+                        live_handle.flush()
                 except KeyboardInterrupt:
                     kill_process_tree(process)
                     raise
@@ -83,7 +87,7 @@ class SubprocessRunner:
             stderr_path.write_text(self.command_runner.decode_timeout_stream(exc.stderr) + "\nTIMEOUT\n", encoding="utf-8")
             return 124
 
-    def _copy_stream(self, stream, handle, live_handle) -> None:
+    def _copy_stream(self, stream, handle, terminal_handle, live_handle, live_lock: threading.Lock, stream_name: str) -> None:
         if stream is None:
             return
         try:
@@ -92,7 +96,10 @@ class SubprocessRunner:
                     break
                 handle.write(chunk)
                 handle.flush()
+                with live_lock:
+                    live_handle.write(f"[{stream_name}] {chunk}")
+                    live_handle.flush()
                 if self.stream_output:
-                    TerminalStatusLine.write_live(f"{self.stream_prefix}{chunk}", live_handle)
+                    TerminalStatusLine.write_live(f"{self.stream_prefix}{chunk}", terminal_handle)
         finally:
             stream.close()

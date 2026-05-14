@@ -37,9 +37,19 @@ from harness.core.state_machine import (
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 from harness.patch.gate import materialized_repo_markdown, run_patch_gate
+from harness.testing.tester_result import TesterResult as HarnessTesterResult
 
 
 from orchestrator_mock_support import _config
+
+
+def _tester_result(tmp_path: Path, status: str) -> HarnessTesterResult:
+    next_action = {
+        "tests_passed": "continue",
+        "source_bug": "fix_code",
+        "environment_blocked": "block_task",
+    }[status]
+    return HarnessTesterResult(status, next_action, status, status, tmp_path / "tester_result.json", {"status": status})
 
 
 def test_orchestrator_mock_flow_completes_and_generates_delivery(tmp_path: Path) -> None:
@@ -129,14 +139,12 @@ def test_unlimited_new_project_test_fix_rounds_continue_until_pass(monkeypatch, 
         validation_rounds.append(round_id)
         return True
 
-    def fake_test_gate(task_id: str, round_id: int) -> bool:
+    def fake_testing(task_id: str, phase: str, round_id: int, user_prompt: str, **kwargs) -> HarnessTesterResult:
         tested_rounds.append(round_id)
-        return True
+        return _tester_result(tmp_path, "tests_passed" if len(tested_rounds) >= 8 else "source_bug")
 
     monkeypatch.setattr(orchestrator, "run_patch_merge", fake_patch_merge)
-    monkeypatch.setattr(orchestrator, "run_harness_test_gate", fake_test_gate)
-    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
-    monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: len(tested_rounds) >= 8)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_testing_until_tester_decision", fake_testing)
 
     orchestrator._run_execution_test_loop(task_id, "build a project")
 
@@ -169,9 +177,11 @@ def test_unlimited_failed_new_project_resume_starts_after_highest_round(monkeypa
 
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
     monkeypatch.setattr(orchestrator, "run_patch_merge", fake_patch_merge)
-    monkeypatch.setattr(orchestrator, "run_harness_test_gate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
-    monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: True)
+    monkeypatch.setattr(
+        orchestrator.workflow_engine,
+        "run_testing_until_tester_decision",
+        lambda task_id, phase, round_id, user_prompt, **kwargs: called.append((phase, round_id)) or _tester_result(tmp_path, "tests_passed"),
+    )
 
     orchestrator._run_execution_test_loop(task_id, "build a project")
 
@@ -204,14 +214,13 @@ def test_test_fix_round_limit_callback_can_extend_execution_loop(monkeypatch, tm
             fix_rounds.append(round_id)
         return []
 
-    def fake_judge_phase(task_id: str, phase: str, round_id: int, user_prompt: str) -> dict[str, str]:
-        return {"decision": "pass" if round_id >= 2 else "fail"}
+    def fake_testing(task_id: str, phase: str, round_id: int, user_prompt: str, **kwargs) -> HarnessTesterResult:
+        tested_rounds.append(round_id)
+        return _tester_result(tmp_path, "tests_passed" if round_id >= 2 else "source_bug")
 
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
     monkeypatch.setattr(orchestrator, "run_patch_merge", lambda *args, **kwargs: True)
-    monkeypatch.setattr(orchestrator, "run_harness_test_gate", lambda task_id, round_id: tested_rounds.append(round_id) or True)
-    monkeypatch.setattr(orchestrator, "run_judge_phase", fake_judge_phase)
-    monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: decision.get("decision") == "pass")
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_testing_until_tester_decision", fake_testing)
 
     orchestrator._run_execution_test_loop(task_id, "build a project")
 
@@ -237,7 +246,7 @@ def test_regression_round_ids_stay_stable_after_fix_limit_extension(monkeypatch,
     task_id = orchestrator.create_task("review fix after extension", workflow_type=BUGFIX)
     role_calls: list[tuple[str, int]] = []
     phase_scopes: list[dict[str, int | str | None] | None] = []
-    gate_rounds: list[int] = []
+    tested_rounds: list[int] = []
     patch_rounds: list[int] = []
 
     def fake_run_role_phase(
@@ -256,18 +265,17 @@ def test_regression_round_ids_stay_stable_after_fix_limit_extension(monkeypatch,
         patch_rounds.append(round_id)
         return True
 
-    def fake_judge_phase(task_id: str, phase: str, round_id: int, user_prompt: str) -> dict[str, str]:
-        return {"decision": "pass" if round_id == 3 else "fail"}
+    def fake_testing(task_id: str, phase: str, round_id: int, user_prompt: str, **kwargs) -> HarnessTesterResult:
+        tested_rounds.append(round_id)
+        return _tester_result(tmp_path, "tests_passed" if round_id == 3 else "source_bug")
 
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
     monkeypatch.setattr(orchestrator, "run_patch_merge", fake_patch_merge)
-    monkeypatch.setattr(orchestrator, "run_harness_test_gate", lambda task_id, round_id: gate_rounds.append(round_id) or True)
-    monkeypatch.setattr(orchestrator, "run_judge_phase", fake_judge_phase)
-    monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: decision.get("decision") == "pass")
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_testing_until_tester_decision", fake_testing)
 
     orchestrator._run_regression_test_fix_loop(task_id, "review fix after extension", review_round_id=1, merge_ok=True)
 
-    assert gate_rounds == [1, 2, 3]
+    assert tested_rounds == [1, 2, 3]
     assert patch_rounds == [2, 3]
     assert [round_id for phase, round_id in role_calls if phase == REVIEW_FIXING] == [2, 3]
     assert [

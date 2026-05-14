@@ -75,9 +75,6 @@ artifact_input:
 
 testing:
   runtime: auto
-  require_commands: true
-  commands: []
-  setup_commands: []
   timeout_seconds: 120
   docker:
     enabled: true
@@ -97,7 +94,6 @@ testing:
 
 runtime_readiness:
   require_commands: false
-  commands: []
 
 policy:
   same_role_can_run_concurrently: true

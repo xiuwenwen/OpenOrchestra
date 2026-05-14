@@ -68,6 +68,7 @@ def test_subprocess_runner_can_stream_output_while_writing_logs(tmp_path: Path, 
     assert "[agent] live stderr" in captured.err
     assert stdout_path.read_text(encoding="utf-8").strip() == "live stdout"
     assert stderr_path.read_text(encoding="utf-8").strip() == "live stderr"
+    assert "[stdout] live stdout" in (tmp_path / "live.log").read_text(encoding="utf-8")
 
 
 def test_subprocess_runner_kills_process_tree_on_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

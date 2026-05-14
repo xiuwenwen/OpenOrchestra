@@ -122,6 +122,7 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
         ("fix_patch.diff", latest_exec_phase_id, "executor", "latest-fix-candidate.patch", "executor-1"),
         ("bug_report.md", old_test_phase_id, "tester", "old-bug-report.md", "tester-1"),
         ("bug_report.md", latest_test_phase_id, "tester", "latest-bug-report.md", "tester-1"),
+        ("tester_result.json", latest_test_phase_id, "tester", "latest-tester-result.json", "tester-1"),
         ("selected_plan.md", selected_plan_phase_id, "reviewer", "latest-selected-plan.md", "reviewer-1"),
         ("review_report.md", old_review_phase_id, "reviewer", "old-review-report.md", "reviewer-1"),
         ("review_report.md", latest_review_phase_id, "reviewer", "latest-review-report.md", "reviewer-1"),
@@ -175,6 +176,8 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
     assert "latest-changed-files.md" in manifest
     assert "latest-self-check.md" in manifest
     assert "latest-selected-plan.md" in manifest
+    assert "latest-bug-report.md" in manifest
+    assert "latest-tester-result.json" in manifest
 
     assert "latest-plan.md" not in manifest
     assert "old-plan.md" not in manifest
@@ -184,7 +187,6 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
     assert "latest-merge-report.md" not in manifest
     assert "latest-candidate.patch" not in manifest
     assert "latest-fix-candidate.patch" not in manifest
-    assert "latest-bug-report.md" not in manifest
     assert "old-bug-report.md" not in manifest
     assert "latest-review-report.md" not in manifest
     assert "old-review-report.md" not in manifest
@@ -210,6 +212,7 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     assert final_delivery.exists()
     assert (final_delivery.parent / "success_path.md").exists()
     assert (final_delivery.parent / "usage_guide.md").exists()
+    assert (final_delivery.parent / "tester_result.json").exists()
     assert (final_delivery.parent / "patches" / "final.patch").exists()
     assert not (final_delivery.parent / "artifacts" / "merged_patch_metadata.md").exists()
     assert not (final_delivery.parent / "artifacts" / "merged_patch.diff").exists()
@@ -238,6 +241,7 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     assert f"success_path: {final_delivery.parent}" in manifest
     assert f"success_path: {final_delivery.parent}" in success_path
     assert "patches/final.patch" in manifest
+    assert "tester_result.json" in manifest
     assert "patch_validation.md" not in manifest
     assert "materialized_repo.md" not in manifest
     assert "source/mock.txt" in manifest

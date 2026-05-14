@@ -50,6 +50,9 @@ class DeliveryPublisher:
         usage_guide = self.latest_usage_guide(task_id)
         if usage_guide and usage_guide.exists():
             shutil.copy2(usage_guide, project_dir / "usage_guide.md")
+        tester_result = self.latest_artifact_path(task_id, "tester_result.json")
+        if tester_result and tester_result.exists():
+            shutil.copy2(tester_result, project_dir / "tester_result.json")
         copied_artifacts = self.publish_supporting_artifacts(task_id, project_dir)
         source_files = self.publish_materialized_source(task_id, project_dir)
         dependency_files = self.publish_dependency_installer(project_dir)
@@ -70,6 +73,8 @@ class DeliveryPublisher:
         ]
         if usage_guide and usage_guide.exists():
             lines.append(f"- usage_guide.md: {project_dir / 'usage_guide.md'}")
+        if tester_result and tester_result.exists():
+            lines.append(f"- tester_result.json: {project_dir / 'tester_result.json'}")
         if (project_dir / "patches" / "final.patch").exists():
             lines.append(f"- patches/final.patch: {project_dir / 'patches' / 'final.patch'}")
         if source_files:
@@ -96,6 +101,8 @@ class DeliveryPublisher:
         manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
         self.record_published_artifact(task_id, "success_path.md", success_path)
         self.record_published_artifact(task_id, "artifacts_manifest.md", manifest)
+        if tester_result and tester_result.exists():
+            self.record_published_artifact(task_id, "tester_result.json", project_dir / "tester_result.json")
         for dependency_file in dependency_files:
             self.record_published_artifact(task_id, dependency_file.name, dependency_file)
         return destination
@@ -159,6 +166,14 @@ class DeliveryPublisher:
             artifact_type,
             build_ref,
         )
+
+    def latest_artifact_path(self, task_id: str, artifact_type: str) -> Path | None:
+        artifacts = self.repository.list_artifacts(task_id, artifact_type)
+        for artifact in reversed(artifacts):
+            path = Path(artifact["path"])
+            if path.exists() and path.is_file():
+                return path
+        return None
 
     def publish_supporting_artifacts(self, task_id: str, project_dir: Path) -> list[tuple[str, Path]]:
         delivery_config = self.config.get("delivery", {})

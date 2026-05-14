@@ -184,7 +184,6 @@ class InputStagingService:
             "### Original User Request",
             str(task.get("user_prompt") or "unavailable"),
         ]
-        lines.extend(self.test_gate_manifest_lines(task_id, round_id))
         if repo_dir and repo_dir.exists():
             lines.extend(["", "### Repository Snapshot"])
             for child in sorted(repo_dir.iterdir(), key=lambda item: item.name)[:30]:
@@ -214,8 +213,9 @@ class InputStagingService:
             f"- test_gate_image: {evidence.get('image') or '-'}",
             f"- test_gate_evidence_path: {evidence.get('evidence_path') or '-'}",
             f"- test_gate_failure_type: {evidence.get('failure_type', 'unknown')}",
-            "- note: Harness already ran the commands listed in this test gate before the tester phase.",
-            "- tester_instruction: Use this evidence first, inspect referenced logs, and only rerun the same command when the evidence is incomplete, stale, or contradicts repository behavior.",
+            "- note: This is prior Harness gate evidence for this round, usually from an earlier tester environment repair attempt.",
+            "- runtime_blocker_rule: If failure_type is infra, env_setup, or test_command, treat the evidence as a runtime/test-command blocker rather than proof that the source patch is wrong unless repository evidence proves otherwise.",
+            "- tester_instruction: Use this legacy evidence only as context; tester_result.json remains the current decision contract.",
         ]
         commands = self.test_gate_commands(content)
         if commands:

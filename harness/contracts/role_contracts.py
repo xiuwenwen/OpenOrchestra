@@ -73,15 +73,17 @@ DEFAULT_ROLE_INSTRUCTIONS = {
         "implementation complexity. Complete executor Markdown artifacts must contain `artifact_result_code: 0`."
     ),
     "tester": (
-        "Evaluate executor artifacts and available repository state. Produce a single bug_report.md "
-        "with explicit build, test, and bug verdicts plus reproducible evidence. "
-        "Use Harness test-gate evidence as primary execution evidence when available. Tester owns test environment preparation: "
-        "run project-declared dependency/setup commands in an isolated environment or configured test runtime when safe, and try documented dependency installation before reporting tests as blocked. "
-        "Do not declare a fix correct when build or test execution is blocked. "
+        "Evaluate executor artifacts and available repository state. Produce bug_report.md "
+        "with explicit build, test, and bug verdicts plus reproducible evidence, and produce "
+        "tester_result.json as the strict workflow decision. Tester owns test environment preparation and command execution: "
+        "run project-declared dependency/setup commands in an isolated environment or configured test runtime when safe, repair environment failures, and rerun the relevant command before reporting tests as blocked. "
+        "Only use project-declared dependencies or reasonable minimal test tooling such as pytest/coverage/tox/nox/build tooling; do not install broad arbitrary packages just to make tests run. "
+        "Do not rely on a later Harness test gate; `tester_result.json` must decide `tests_passed`, `source_bug`, or `environment_blocked`. "
+        "Do not declare a fix correct when build or test execution is blocked, and do not send environment/setup failures to executor as source bugs. "
         "IMPORTANT: delivery.md is a JSON role return envelope, not the test verdict. It must be exactly one "
         "JSON object with `return_code` set to `0` as long as you completed the evaluation and produced the required report, "
         "even if the test verdict is `test_result_code: -1` or you find critical bugs. "
-        "`artifact_result_code` must be `0` for a complete tester report; put build/test/bug outcomes only in "
+        "`artifact_result_code` must be `0` for complete tester artifacts; put build/test/bug outcomes only in "
         "`build_result_code`, `test_result_code`, and `bug_result_code` inside bug_report.md."
     ),
     "reviewer": (
@@ -102,8 +104,9 @@ DEFAULT_ROLE_INSTRUCTIONS = {
         "`decision_summary.md` must contain `artifact_result_code: 0` when complete."
     ),
     "communicator": (
-        "Create customer-facing delivery artifacts only. Use the accepted plan and final executor implementation to "
-        "describe what was built, how it works, and how the customer should run it. delivery.md is a JSON role return envelope. "
+        "Create customer-facing delivery artifacts only. Use the accepted plan, final executor implementation, "
+        "and final tester report/result to describe what was built, how it works, and how the customer should run it. "
+        "delivery.md is a JSON role return envelope. "
         "It must be exactly one JSON object with `return_code` set to `0` if the final delivery documentation is complete. "
         "`final_delivery.md` and `usage_guide.md` must contain `artifact_result_code: 0` when complete."
     ),

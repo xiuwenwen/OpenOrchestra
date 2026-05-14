@@ -37,6 +37,7 @@ from harness.core.state_machine import (
     TEST_JUDGEMENT,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT, normalize_workflow_type
+from harness.testing.tester_result import TesterResultError, load_tester_result
 from harness.judge.decision_parser import parse_decision_file
 
 if TYPE_CHECKING:
@@ -365,7 +366,7 @@ class Orchestrator:
         if phase != TEST_JUDGEMENT:
             return payload
         objective_evidence = self._objective_gate_evidence(task_id, round_id)
-        test_evidence = self._test_gate_evidence_for_round(task_id, round_id)
+        test_evidence = self._tester_result_evidence_for_round(task_id, round_id)
         objective_failure = self._objective_evidence_failure_reason(objective_evidence)
         if objective_failure:
             return {
@@ -373,7 +374,7 @@ class Orchestrator:
                 "decision": "fail",
                 "tests_passed": False,
                 "objective_gate_status": objective_evidence.get("status", "missing"),
-                "evidence": {"objective_gate": objective_evidence, "test_gate": test_evidence},
+                "evidence": {"objective_gate": objective_evidence, "tester_result": test_evidence},
                 "reason": f"{objective_failure} LLM judge cannot override objective patch gate evidence.",
             }
         test_failure = self._test_evidence_failure_reason(test_evidence)
@@ -382,17 +383,17 @@ class Orchestrator:
                 **payload,
                 "decision": "fail",
                 "tests_passed": False,
-                "test_gate_status": test_evidence.get("status", "missing"),
+                "tester_result_status": test_evidence.get("status", "missing"),
                 "objective_gate_status": objective_evidence.get("status", "missing"),
-                "evidence": {"objective_gate": objective_evidence, "test_gate": test_evidence},
-                "reason": f"{test_failure} LLM judge cannot override Harness-run test evidence.",
+                "evidence": {"objective_gate": objective_evidence, "tester_result": test_evidence},
+                "reason": f"{test_failure} LLM judge cannot override tester_result.json.",
             }
         return {
             **payload,
             "evidence": {
                 **(payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}),
                 "objective_gate": objective_evidence,
-                "test_gate": test_evidence,
+                "tester_result": test_evidence,
             },
         }
 
@@ -415,19 +416,13 @@ class Orchestrator:
 
     def _test_evidence_failure_reason(self, evidence: dict[str, Any]) -> str | None:
         status = evidence.get("status")
-        for field_name in ("build_exit_code", "test_exit_code"):
-            exit_code = evidence.get(field_name)
-            if exit_code is not None and exit_code != 0:
-                return f"Harness {field_name} is {exit_code}."
-        if status == "pass":
-            return None
-        if status == "skipped" and not self._require_harness_test_commands():
+        if status == "tests_passed":
             return None
         if status == "missing":
-            return "Harness test gate is missing."
-        if status == "skipped":
-            return "Harness test gate was skipped while test commands are required."
-        return f"Harness test gate status is {status}."
+            return "tester_result.json is missing."
+        if status == "invalid":
+            return f"tester_result.json is invalid: {evidence.get('error', 'unknown error')}."
+        return f"tester_result.json status is {status}."
 
     def _objective_gate_evidence(self, task_id: str, round_id: int) -> dict[str, Any]:
         content = self._latest_round_artifact_content(task_id, "objective_gate.md", round_id)
@@ -456,6 +451,28 @@ class Orchestrator:
         if evidence:
             return {"status": status.lower(), **evidence}
         return {"status": status.lower()}
+
+    def _tester_result_evidence_for_round(self, task_id: str, round_id: int) -> dict[str, Any]:
+        phases_by_id = {phase["phase_id"]: phase for phase in self.repository.list_phases(task_id)}
+        for artifact in reversed(self.repository.list_artifacts(task_id, "tester_result.json")):
+            phase = phases_by_id.get(artifact["phase_id"] or "")
+            if not phase or phase.get("round_id") is None or int(phase["round_id"]) != round_id:
+                continue
+            path = Path(artifact["path"])
+            if not path.exists() or not path.is_file():
+                continue
+            try:
+                result = load_tester_result(path)
+            except TesterResultError as exc:
+                return {"status": "invalid", "error": str(exc), "artifact_path": str(path)}
+            return {
+                "status": result.status,
+                "next_action": result.next_action,
+                "failure_type": result.failure_type,
+                "summary": result.summary,
+                "artifact_path": str(path),
+            }
+        return {"status": "missing"}
 
     def _latest_round_artifact_content(self, task_id: str, artifact_type: str, round_id: int) -> str | None:
         for artifact in reversed(self.repository.list_artifacts(task_id, artifact_type)):
@@ -528,7 +545,7 @@ class Orchestrator:
     def _require_harness_test_commands(self) -> bool:
         return self.test_gate_service.require_harness_test_commands()
 
-    def _harness_test_commands(self, repo_dir: Path | None) -> list[str]:
+    def _harness_test_commands(self, repo_dir: Path | None):
         return self.test_gate_service.harness_test_commands(repo_dir)
 
     def _repo_has_python_files(self, repo_dir: Path) -> bool:
@@ -549,6 +566,12 @@ class Orchestrator:
 
     def _test_gate_status(self, task_id: str, round_id: int) -> str | None:
         return self.test_gate_service.status_for_round(task_id, round_id)
+
+    def test_gate_failure_type_for_round(self, task_id: str, round_id: int) -> str | None:
+        return self.test_gate_service.failure_type_for_round(task_id, round_id)
+
+    def _test_gate_failure_type_for_round(self, task_id: str, round_id: int) -> str | None:
+        return self.test_gate_failure_type_for_round(task_id, round_id)
 
     def run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:
         if not self.patch_gate_service.latest_merged_patch_for_round(task_id, round_id):

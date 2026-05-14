@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import shlex
 import shutil
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any, Callable
 
@@ -16,7 +19,7 @@ from harness.state.repository import StateRepository
 from harness.testing.detection import detect_project_profile
 from harness.testing.evidence import CommandEvidence, TestRunEvidence
 from harness.testing.runners import DockerTestRunner, NativeTestRunner, SweBenchTestRunner, TestRunRequest
-from harness.testing.runners.base import split_command
+from harness.testing.runners.base import RuntimeContext, TestCommand, split_command
 
 
 MarkdownFieldReader = Callable[[str, str], str | None]
@@ -50,7 +53,7 @@ class TestGateService:
             artifact_type="test_gate.md",
             title="Harness Test Gate",
             log_dir_name="test_gate_logs",
-            commands=self.harness_test_commands(self.latest_materialized_repo(task_id)),
+            commands=None,
             require_commands=self.require_harness_test_commands(),
         )
 
@@ -62,7 +65,7 @@ class TestGateService:
         artifact_type: str,
         title: str,
         log_dir_name: str,
-        commands: list[str],
+        commands: list[str | TestCommand] | None,
         require_commands: bool,
     ) -> bool:
         repo_dir = self.latest_materialized_repo(task_id)
@@ -70,6 +73,8 @@ class TestGateService:
         log_dir.mkdir(parents=True, exist_ok=True)
         runtime, runtime_diagnostics = self.resolve_test_runtime_with_diagnostics(task_id, repo_dir)
         self.emit_runtime_selection(task_id, round_id, artifact_type, runtime_diagnostics)
+        if commands is None:
+            commands = self.commands_for_artifact(artifact_type, repo_dir, runtime)
         if repo_dir is None:
             evidence = TestRunEvidence(
                 status="fail",
@@ -108,6 +113,7 @@ class TestGateService:
                     agent_id=self.agent_id_for_artifact(artifact_type),
                 )
                 self.emit_gate_event(task_id, round_id, artifact_type, evidence, report_path=str(ref.path))
+                self.abort_if_harness_runtime_blocked(artifact_type, evidence)
                 return evidence.status == "pass"
             runner = self.runner_for_runtime(runtime)
             evidence = runner.run(
@@ -120,6 +126,12 @@ class TestGateService:
                     profile=profile,
                     config=self.config,
                     purpose=artifact_type.removesuffix(".md"),
+                    runtime_context=RuntimeContext(
+                        runtime=runtime,
+                        host_repo_dir=repo_dir,
+                        container_repo_dir="/workspace",
+                        image=profile.image,
+                    ),
                 )
             ).with_cache(cache_key=cache_key)
         elif require_commands:
@@ -130,7 +142,7 @@ class TestGateService:
                 environment_status="blocked",
                 build_status="blocked",
                 test_status="blocked",
-                failure_type="infra",
+                failure_type="test_command",
                 commands=(CommandEvidence(name="commands", command="n/a", exit_code=None, stderr="No Harness test command configured or detected."),),
             )
         else:
@@ -165,6 +177,7 @@ class TestGateService:
             agent_id=self.agent_id_for_artifact(artifact_type),
         )
         self.emit_gate_event(task_id, round_id, artifact_type, evidence, report_path=str(ref.path))
+        self.abort_if_harness_runtime_blocked(artifact_type, evidence)
         return evidence.status == "pass"
 
     def harness_test_command_argv(self, command: str) -> list[str]:
@@ -311,17 +324,31 @@ class TestGateService:
         testing = self.config.get("testing", {})
         return bool(testing.get("require_commands", False)) if isinstance(testing, dict) else False
 
-    def harness_test_commands(self, repo_dir: Path | None) -> list[str]:
-        testing = self.config.get("testing", {})
-        configured = testing.get("commands") if isinstance(testing, dict) else None
-        if isinstance(configured, list) and configured:
-            return [str(command) for command in configured if str(command).strip()]
+    def commands_for_artifact(
+        self,
+        artifact_type: str,
+        repo_dir: Path | None,
+        runtime: str,
+    ) -> list[TestCommand]:
+        if artifact_type == "runtime_readiness.md":
+            return self.runtime_readiness_commands(repo_dir, runtime=runtime)
+        return self.harness_test_commands(repo_dir, runtime=runtime)
+
+    def command_scope_for_runtime(self, runtime: str) -> str:
+        return "container" if runtime in {"docker", "swebench"} else "host"
+
+    def python_command_for_runtime(self, runtime: str) -> str:
+        return "python" if runtime in {"docker", "swebench"} else sys.executable
+
+    def harness_test_commands(self, repo_dir: Path | None, runtime: str = "native") -> list[TestCommand]:
+        scope = self.command_scope_for_runtime(runtime)
         if repo_dir is None:
             return []
+        python = self.python_command_for_runtime(runtime)
         if self.repo_has_pytest_tests(repo_dir):
-            return [f"{sys.executable} -m pytest -q"]
+            return [TestCommand(f"{python} -m pytest -q", scope=scope)]
         if self.repo_has_python_files(repo_dir):
-            return [f"{sys.executable} -m compileall -q ."]
+            return [TestCommand(f"{python} -m compileall -q .", scope=scope)]
         package_json = repo_dir / "package.json"
         if package_json.exists():
             try:
@@ -330,50 +357,248 @@ class TestGateService:
                 return []
             scripts = payload.get("scripts") if isinstance(payload, dict) else None
             if isinstance(scripts, dict) and scripts.get("test"):
-                return ["npm test"]
+                return [TestCommand("npm test", scope=scope)]
             if isinstance(scripts, dict) and scripts.get("build"):
-                return ["npm run build"]
+                return [TestCommand("npm run build", scope=scope)]
         return []
 
-    def harness_setup_commands(self, repo_dir: Path | None, runtime: str, profile) -> tuple[str, ...]:
-        testing = self.config.get("testing", {})
-        if isinstance(testing, dict):
-            configured = testing.get("setup_commands")
-            if isinstance(configured, list):
-                return tuple(str(command) for command in configured if str(command).strip())
+    def harness_setup_commands(
+        self,
+        repo_dir: Path | None,
+        runtime: str,
+        profile,
+    ) -> tuple[str | TestCommand, ...]:
         if runtime == "docker":
-            return tuple(profile.setup_commands)
+            return tuple(TestCommand(command, scope="container") for command in profile.setup_commands)
         return ()
 
-    def runtime_readiness_commands(self, repo_dir: Path | None) -> list[str]:
+    def runtime_readiness_commands(self, repo_dir: Path | None, runtime: str = "native") -> list[TestCommand]:
         testing = self.config.get("runtime_readiness", {})
         configured = testing.get("commands") if isinstance(testing, dict) else None
+        scope = self.command_scope_for_runtime(runtime)
         if isinstance(configured, list) and configured:
-            return [str(command) for command in configured if str(command).strip()]
-        return self.harness_test_commands(repo_dir)
+            return [TestCommand(str(command), scope=scope) for command in configured if str(command).strip()]
+        return self.harness_test_commands(repo_dir, runtime=runtime)
+
+    def tester_setup_command_policy_error(self, repo_dir: Path, command: str) -> str | None:
+        try:
+            argv = shlex.split(command)
+        except ValueError as exc:
+            return f"cannot parse command: {exc}"
+        if not argv:
+            return "empty command"
+        if self.allowed_project_package_manager_command(repo_dir, argv):
+            return None
+        pip_args = self.pip_install_args(argv)
+        if pip_args is None:
+            return "setup command is not a recognized project dependency install command"
+        return self.pip_install_policy_error(repo_dir, pip_args)
+
+    def allowed_project_package_manager_command(self, repo_dir: Path, argv: list[str]) -> bool:
+        command = argv[:2]
+        if command == ["npm", "ci"] and (repo_dir / "package-lock.json").exists():
+            return True
+        if command == ["npm", "install"] and (repo_dir / "package.json").exists():
+            return True
+        if command == ["yarn", "install"] and (repo_dir / "package.json").exists():
+            return True
+        if command == ["pnpm", "install"] and (repo_dir / "package.json").exists():
+            return True
+        if command == ["poetry", "install"] and (repo_dir / "pyproject.toml").exists():
+            return True
+        if command == ["pdm", "install"] and (repo_dir / "pyproject.toml").exists():
+            return True
+        if command == ["pipenv", "install"] and (repo_dir / "Pipfile").exists():
+            return True
+        if command == ["go", "mod"] and len(argv) >= 3 and argv[2] == "download" and (repo_dir / "go.mod").exists():
+            return True
+        if command == ["cargo", "fetch"] and (repo_dir / "Cargo.toml").exists():
+            return True
+        return False
+
+    def pip_install_args(self, argv: list[str]) -> list[str] | None:
+        if len(argv) >= 4 and argv[1:4] == ["-m", "pip", "install"] and self.python_binary_name(argv[0]):
+            return argv[4:]
+        if len(argv) >= 2 and argv[1] == "install" and Path(argv[0]).name in {"pip", "pip3"}:
+            return argv[2:]
+        return None
+
+    def python_binary_name(self, value: str) -> bool:
+        name = Path(value).name
+        return name == "python" or name == "python3" or bool(re.fullmatch(r"python3\.\d+", name))
+
+    def pip_install_policy_error(self, repo_dir: Path, args: list[str]) -> str | None:
+        if not args:
+            return "pip install has no targets"
+        declared = self.declared_python_dependencies(repo_dir)
+        minimal = self.minimal_python_dependency_names()
+        index = 0
+        targets = 0
+        while index < len(args):
+            arg = args[index]
+            if arg in {"-r", "--requirement", "-c", "--constraint", "-e", "--editable"}:
+                if index + 1 >= len(args):
+                    return f"{arg} requires a value"
+                value = args[index + 1]
+                if arg in {"-r", "--requirement", "-c", "--constraint"}:
+                    error = self.requirement_file_policy_error(repo_dir, value)
+                else:
+                    error = self.editable_target_policy_error(repo_dir, value)
+                if error:
+                    return error
+                targets += 1
+                index += 2
+                continue
+            if arg in {"-U", "--upgrade", "--no-cache-dir", "--no-deps", "--no-build-isolation", "--prefer-binary"}:
+                index += 1
+                continue
+            if arg.startswith("-"):
+                return f"unsupported pip flag {arg!r}"
+            if self.looks_like_local_install_target(arg):
+                error = self.editable_target_policy_error(repo_dir, arg)
+                if error:
+                    return error
+                targets += 1
+                index += 1
+                continue
+            package = self.normalized_package_name(arg)
+            if package not in declared and package not in minimal:
+                return f"package {package!r} is not project-declared or minimal test tooling"
+            targets += 1
+            index += 1
+        return None if targets else "pip install has no install targets"
+
+    def looks_like_local_install_target(self, value: str) -> bool:
+        base, _extras = self.local_install_base_and_extras(value)
+        return base in {".", "./"} or base.startswith("./") or base.startswith("../") or "/" in base
+
+    def requirement_file_policy_error(self, repo_dir: Path, value: str) -> str | None:
+        path = (repo_dir / value).resolve()
+        try:
+            path.relative_to(repo_dir.resolve())
+        except ValueError:
+            return f"requirement/constraint file is outside repo: {value}"
+        if not path.exists() or not path.is_file():
+            return f"requirement/constraint file does not exist: {value}"
+        return None
+
+    def editable_target_policy_error(self, repo_dir: Path, value: str) -> str | None:
+        base, extras = self.local_install_base_and_extras(value)
+        path = (repo_dir / base).resolve()
+        try:
+            path.relative_to(repo_dir.resolve())
+        except ValueError:
+            return f"editable target is outside repo: {value}"
+        if not path.exists():
+            return f"editable target does not exist: {value}"
+        missing_extras = [extra for extra in extras if extra not in self.declared_pyproject_extras(repo_dir)]
+        if missing_extras:
+            return f"editable extra(s) not declared in pyproject.toml: {', '.join(missing_extras)}"
+        return None
+
+    def local_install_base_and_extras(self, value: str) -> tuple[str, list[str]]:
+        match = re.fullmatch(r"(.+?)\[(.+)\]", value)
+        if not match:
+            return value, []
+        extras = [extra.strip().lower() for extra in match.group(2).split(",") if extra.strip()]
+        return match.group(1), extras
+
+    def declared_pyproject_extras(self, repo_dir: Path) -> set[str]:
+        pyproject = repo_dir / "pyproject.toml"
+        if not pyproject.exists():
+            return set()
+        try:
+            payload = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            return set()
+        project = payload.get("project")
+        optional = project.get("optional-dependencies") if isinstance(project, dict) else None
+        if not isinstance(optional, dict):
+            return set()
+        return {str(name).strip().lower() for name in optional if str(name).strip()}
+
+    def declared_python_dependencies(self, repo_dir: Path) -> set[str]:
+        names = set()
+        names.update(self.dependencies_from_requirements(repo_dir))
+        names.update(self.dependencies_from_pyproject(repo_dir))
+        return names
+
+    def dependencies_from_requirements(self, repo_dir: Path) -> set[str]:
+        names: set[str] = set()
+        for path in repo_dir.glob("requirements*.txt"):
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or stripped.startswith("-"):
+                    continue
+                names.add(self.normalized_package_name(stripped))
+        return names
+
+    def dependencies_from_pyproject(self, repo_dir: Path) -> set[str]:
+        pyproject = repo_dir / "pyproject.toml"
+        if not pyproject.exists():
+            return set()
+        try:
+            payload = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            return set()
+        project = payload.get("project")
+        if not isinstance(project, dict):
+            return set()
+        values: list[Any] = []
+        dependencies = project.get("dependencies")
+        if isinstance(dependencies, list):
+            values.extend(dependencies)
+        optional = project.get("optional-dependencies")
+        if isinstance(optional, dict):
+            for extra_values in optional.values():
+                if isinstance(extra_values, list):
+                    values.extend(extra_values)
+        return {self.normalized_package_name(str(value)) for value in values if str(value).strip()}
+
+    def minimal_python_dependency_names(self) -> set[str]:
+        return {
+            "build",
+            "coverage",
+            "nox",
+            "pip",
+            "pytest",
+            "pytest-cov",
+            "setuptools",
+            "tox",
+            "wheel",
+        }
+
+    def normalized_package_name(self, value: str) -> str:
+        match = re.match(r"\s*([A-Za-z0-9_.-]+)", value)
+        name = match.group(1) if match else value.strip()
+        return re.sub(r"[-_.]+", "-", name).lower()
 
     def test_cache_key(
         self,
         repo_dir: Path,
-        commands: list[str],
+        commands: list[str | TestCommand],
         *,
         runtime: str = "native",
         image: str = "",
-        setup_commands: tuple[str, ...] = (),
+        setup_commands: tuple[str | TestCommand, ...] = (),
     ) -> str:
         payload = {
-            "commands": commands,
+            "commands": [command.command if isinstance(command, TestCommand) else str(command) for command in commands],
             "image": image,
             "repo": self.repo_content_digest(repo_dir),
             "runtime": runtime,
-            "setup_commands": list(setup_commands),
+            "setup_commands": [command.command if isinstance(command, TestCommand) else str(command) for command in setup_commands],
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
     def repo_content_digest(self, repo_dir: Path) -> str:
         digest = hashlib.sha256()
         for path in sorted(repo_dir.rglob("*")):
-            if not path.is_file() or self._ignored_repo_path(path):
+            if not path.is_file() or self._ignored_repo_path(repo_dir, path):
                 continue
             relative = path.relative_to(repo_dir).as_posix()
             digest.update(relative.encode("utf-8"))
@@ -413,9 +638,17 @@ class TestGateService:
             return {}
         return payload if isinstance(payload, dict) else {}
 
+    def abort_if_harness_runtime_blocked(self, artifact_type: str, evidence: TestRunEvidence) -> None:
+        if artifact_type != "test_gate.md":
+            return
+        if evidence.failure_type != "infra":
+            return
+        detail = evidence.notes[0] if evidence.notes else f"{evidence.failure_type} failure"
+        raise TaskFailedError(f"Harness test runtime blocked: {detail}")
+
     def repo_has_pytest_tests(self, repo_dir: Path) -> bool:
         for path in repo_dir.rglob("*.py"):
-            if self._ignored_repo_path(path):
+            if self._ignored_repo_path(repo_dir, path):
                 continue
             if path.name.startswith("test_") or path.name.endswith("_test.py") or "tests" in path.parts:
                 return True
@@ -423,12 +656,12 @@ class TestGateService:
 
     def repo_has_python_files(self, repo_dir: Path) -> bool:
         for path in repo_dir.rglob("*.py"):
-            if self._ignored_repo_path(path):
+            if self._ignored_repo_path(repo_dir, path):
                 continue
             return True
         return False
 
-    def _ignored_repo_path(self, path: Path) -> bool:
+    def _ignored_repo_path(self, repo_dir: Path, path: Path) -> bool:
         ignored_parts = {
             ".git",
             ".openorchestra-cache",
@@ -444,7 +677,11 @@ class TestGateService:
             "venv",
             "workspaces",
         }
-        return any(part in ignored_parts for part in path.parts)
+        try:
+            parts = path.relative_to(repo_dir).parts
+        except ValueError:
+            parts = path.parts
+        return any(part in ignored_parts for part in parts)
 
     def test_gate_report(
         self,
@@ -492,6 +729,10 @@ class TestGateService:
             lines.extend(
                 [
                     f"- command: {result['command']}",
+                    f"  scope: {result.get('scope') or 'host'}",
+                    f"  host_command: {result.get('host_command') or '-'}",
+                    f"  container_command: {result.get('container_command') or '-'}",
+                    f"  workdir: {result.get('workdir') or '-'}",
                     f"  exit_code: {result['exit_code'] if result['exit_code'] is not None else 'n/a'}",
                     f"  stdout: {result['stdout'] or '-'}",
                     f"  stderr: {result['stderr'] or '-'}",
@@ -535,6 +776,10 @@ class TestGateService:
                     "stdout": result.get("stdout"),
                     "stderr": result.get("stderr"),
                     "phase": result.get("phase") or "test",
+                    "scope": result.get("scope") or "host",
+                    "host_command": result.get("host_command") or "",
+                    "container_command": result.get("container_command") or "",
+                    "workdir": result.get("workdir") or "",
                 }
                 for result in results
             ],
@@ -551,4 +796,17 @@ class TestGateService:
                 continue
             status = self.markdown_field(content, "status")
             return status.lower() if status else None
+        return None
+
+    def failure_type_for_round(self, task_id: str, round_id: int) -> str | None:
+        for artifact in reversed(self.repository.list_artifacts(task_id, "test_gate.md")):
+            path = Path(artifact["path"])
+            if not path.exists() or not path.is_file():
+                continue
+            content = path.read_text(encoding="utf-8", errors="replace")
+            if self.markdown_field(content, "round_id") != str(round_id):
+                continue
+            evidence = self.extract_evidence_json(content)
+            failure_type = evidence.get("failure_type") or self.markdown_field(content, "failure_type")
+            return str(failure_type).strip().lower() if failure_type else None
         return None

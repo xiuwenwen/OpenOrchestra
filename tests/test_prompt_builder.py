@@ -74,8 +74,12 @@ def test_prompt_builder_marks_merged_patch_as_authoritative(tmp_path: Path) -> N
     assert "Test this exact repository directory" in prompt
     assert "## Required Test Work" in prompt
     assert "Record exact commands run, exit codes" in prompt
+    assert "There is no post-tester Harness test gate" in prompt
+    assert "project-declared dependency commands" in prompt
+    assert "Do not install arbitrary third-party packages" in prompt
     assert "## Tester Output" in prompt
     assert "Treat the repository directory as the implementation under test" in prompt
+    assert "`tester_result.json` must be exactly one JSON object" in prompt
     assert "Do not treat executor planning notes, self-checks, or change summaries as test evidence" in prompt
 
 
@@ -93,6 +97,7 @@ def test_prompt_builder_hides_generic_error_code_tables_from_tester(tmp_path: Pa
     assert "Return code meanings:" not in prompt
     assert "Markdown artifact result code meanings:" not in prompt
     assert "`bug_report.md` must contain `artifact_result_code: 0` somewhere in the file" in prompt
+    assert "tester_result.json.status" in prompt
     assert "single tester report" in prompt
     assert "line 1 must be `artifact_result_code: 0`" not in prompt
     assert "put headings such as `# Report` only after that line" not in prompt
@@ -399,7 +404,7 @@ def test_prompt_builder_injects_communicator_publish_metadata(tmp_path: Path) ->
 
     assert "## Harness Metadata" in prompt
     assert f"- expected_success_path: {tmp_path / 'deliver' / 'weather-task'}" in prompt
-    assert "Use `selected_plan.md` plus the final executor artifacts as your primary sources of truth" in prompt
+    assert "Use `selected_plan.md`, final executor artifacts, final `bug_report.md`, and final `tester_result.json` as your primary sources of truth" in prompt
     assert "The expected success path is precomputed before publishing" in prompt
     assert "`## Actual Usage` section written for the end user" in prompt
     assert "enter project directory, install dependencies when needed, run the program or tests" in prompt

@@ -37,9 +37,19 @@ from harness.core.state_machine import (
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 from harness.patch.gate import materialized_repo_markdown, run_patch_gate
+from harness.testing.tester_result import TesterResult as HarnessTesterResult
 
 
 from orchestrator_mock_support import _config
+
+
+def _tester_result(tmp_path: Path, status: str) -> HarnessTesterResult:
+    next_action = {
+        "tests_passed": "continue",
+        "source_bug": "fix_code",
+        "environment_blocked": "block_task",
+    }[status]
+    return HarnessTesterResult(status, next_action, status, status, tmp_path / "tester_result.json", {"status": status})
 
 
 def test_failed_exhausted_bugfix_continue_appends_new_round_window(monkeypatch, tmp_path: Path) -> None:
@@ -81,9 +91,11 @@ def test_unlimited_bugfix_rounds_continue_until_pass(monkeypatch, tmp_path: Path
 
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
     monkeypatch.setattr(orchestrator, "run_patch_merge", lambda *args, **kwargs: True)
-    monkeypatch.setattr(orchestrator, "run_harness_test_gate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
-    monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: len(fix_rounds) >= 7)
+    monkeypatch.setattr(
+        orchestrator.workflow_engine,
+        "run_testing_until_tester_decision",
+        lambda *args, **kwargs: _tester_result(tmp_path, "tests_passed" if len(fix_rounds) >= 7 else "source_bug"),
+    )
     monkeypatch.setattr(orchestrator.workflow_engine, "run_bugfix_planning_block", lambda *args, **kwargs: None)
     monkeypatch.setattr(orchestrator.workflow_engine, "run_review_loop", lambda *args, **kwargs: None)
     delivery = tmp_path / "final_delivery.md"
@@ -110,9 +122,11 @@ def test_bugfix_flow_runs_two_planners_before_fixing(monkeypatch, tmp_path: Path
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
     monkeypatch.setattr(orchestrator.workflow_engine, "plan_review_approved", lambda results: True)
     monkeypatch.setattr(orchestrator, "run_patch_merge", lambda *args, **kwargs: True)
-    monkeypatch.setattr(orchestrator, "run_harness_test_gate", lambda *args, **kwargs: True)
-    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass"})
-    monkeypatch.setattr(orchestrator.judge, "is_test_pass", lambda decision: True)
+    monkeypatch.setattr(
+        orchestrator.workflow_engine,
+        "run_testing_until_tester_decision",
+        lambda *args, **kwargs: _tester_result(tmp_path, "tests_passed"),
+    )
     monkeypatch.setattr(orchestrator.workflow_engine, "run_review_loop", lambda *args, **kwargs: None)
     delivery = tmp_path / "final_delivery.md"
     delivery.write_text("ok", encoding="utf-8")
@@ -126,6 +140,35 @@ def test_bugfix_flow_runs_two_planners_before_fixing(monkeypatch, tmp_path: Path
     assert ("planner", PLANNING_PEER_REVIEW, 0) not in calls[:first_fixing]
     assert ("reviewer", PLAN_REVIEW, 0) in calls[:first_fixing]
     assert orchestrator.effective_agent_count(task_id, "planner", PLANNING_DRAFT) == 2
+
+def test_bugfix_flow_uses_tester_result_without_harness_test_gate(monkeypatch, tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("fix a runtime issue", workflow_type=BUGFIX)
+    calls: list[tuple[str, str, int]] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append((role, phase, round_id))
+        return []
+
+    def fake_testing(task_id: str, phase: str, round_id: int, user_prompt: str, **kwargs) -> HarnessTesterResult:
+        calls.append(("tester", phase, round_id))
+        return _tester_result(tmp_path, "tests_passed")
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+    monkeypatch.setattr(orchestrator, "run_patch_merge", lambda *args, **kwargs: True)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_testing_until_tester_decision", fake_testing)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_bugfix_planning_block", lambda *args, **kwargs: None)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_review_loop", lambda *args, **kwargs: None)
+    delivery = tmp_path / "final_delivery.md"
+    delivery.write_text("ok", encoding="utf-8")
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_delivery", lambda *args, **kwargs: delivery)
+
+    orchestrator._run_bugfix_flow(task_id, "fix a runtime issue")
+
+    assert calls[:2] == [
+        ("executor", FIXING, 0),
+        ("tester", TESTING, 0),
+    ]
 
 def test_orchestrator_feature_change_flow_completes(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))

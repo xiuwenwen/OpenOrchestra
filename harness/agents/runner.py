@@ -372,22 +372,7 @@ class AgentPhaseRunner:
                 raise TaskFailedError(f"Agent {agent_id} cancelled because the phase timed out")
             health = o.backend_health.check(backend)
             if not health.allowed:
-                message = health.reason or f"Backend {backend} circuit is open"
-                o.emit_progress(
-                    ProgressEvent(
-                        "backend_circuit_open",
-                        task_id=task_id,
-                        phase=phase,
-                        role=role,
-                        agent_id=agent_id,
-                        round_id=round_id,
-                        attempt=attempt,
-                        status="OPEN",
-                        message=message,
-                        data=self.backend_health_event_data(health),
-                    )
-                )
-                raise TaskFailedError(message)
+                self.raise_backend_circuit_open(health, task_id, phase, role, agent_id, round_id, attempt, backend)
             attempt_started_at = time.monotonic()
             run_id = o.repository.create_agent_run(task_id, phase_id, role, agent_id, attempt)
             workspace = o.workspace_manager.create_workspace(
@@ -449,6 +434,7 @@ class AgentPhaseRunner:
             )
             context.log_dir.mkdir(parents=True, exist_ok=True)
             (context.log_dir / "prompt.md").write_text(o.prompt_builder.build(context), encoding="utf-8")
+            self.record_agent_attempt_trace(context, "started", backend, attempt, f"{agent_id} attempt {attempt + 1} invoking {adapter.__class__.__name__}")
             o.emit_progress(
                 ProgressEvent(
                     "agent_started",
@@ -503,6 +489,7 @@ class AgentPhaseRunner:
                     o.repository.update_agent_run_status(run_id, "COMPLETED")
                     self.record_backend_success(backend, context, attempt)
                     elapsed_seconds = round(time.monotonic() - attempt_started_at, 3)
+                    self.record_agent_attempt_trace(context, "completed", backend, attempt, f"{agent_id} completed in {elapsed_seconds}s", {"artifacts": len(result.artifacts), "validation_ok": ok})
                     o.emit_progress(
                         ProgressEvent(
                             "agent_completed",
@@ -546,6 +533,7 @@ class AgentPhaseRunner:
                 last_error_message = message
                 o.repository.update_agent_run_status(run_id, status, message)
                 elapsed_seconds = round(time.monotonic() - attempt_started_at, 3)
+                self.record_agent_attempt_trace(context, status.lower(), backend, attempt, f"{agent_id} {status.lower()} after {elapsed_seconds}s: {message}", {"elapsed_seconds": elapsed_seconds, "validation_ok": ok})
                 diagnostics_path = context.log_dir / "request_diagnostics.md"
                 event_data = {
                     "logs": str(context.log_dir),
@@ -605,6 +593,7 @@ class AgentPhaseRunner:
                     status_message = last_error_message
                 o.repository.update_agent_run_status(run_id, failure_status, status_message)
                 elapsed_seconds = round(time.monotonic() - attempt_started_at, 3)
+                self.record_agent_attempt_trace(context, failure_status.lower(), backend, attempt, f"{agent_id} {failure_status.lower()} after {elapsed_seconds}s: {status_message}", {"elapsed_seconds": elapsed_seconds})
                 diagnostics_path = context.log_dir / "request_diagnostics.md"
                 event_data = {"logs": str(context.log_dir), "elapsed_seconds": elapsed_seconds}
                 if diagnostics_path.exists():
@@ -647,6 +636,34 @@ class AgentPhaseRunner:
             details = last_result.validation_errors or ([last_error_message] if last_error_message else [])
             raise TaskFailedError(f"Agent {agent_id} failed after {max_retry + 1} attempt(s): {details}")
         raise TaskFailedError(f"Agent {agent_id} failed before producing a result")
+
+    def raise_backend_circuit_open(
+        self,
+        health,
+        task_id: str,
+        phase: str,
+        role: str,
+        agent_id: str,
+        round_id: int,
+        attempt: int,
+        backend: str,
+    ) -> None:
+        message = health.reason or f"Backend {backend} circuit is open"
+        self.orchestrator.emit_progress(
+            ProgressEvent(
+                "backend_circuit_open",
+                task_id=task_id,
+                phase=phase,
+                role=role,
+                agent_id=agent_id,
+                round_id=round_id,
+                attempt=attempt,
+                status="OPEN",
+                message=message,
+                data=self.backend_health_event_data(health),
+            )
+        )
+        raise TaskFailedError(message)
 
     def repair_trivial_contract_issues(
         self,
@@ -862,6 +879,15 @@ class AgentPhaseRunner:
         def beat() -> None:
             while not stop_event.wait(interval):
                 elapsed_seconds = int(time.monotonic() - started_at)
+                self.append_agent_trace(
+                    context,
+                    "heartbeat",
+                    backend=o.backend_for(context.task_id, context.role),
+                    attempt=attempt,
+                    message=f"{context.agent_id} still running after {elapsed_seconds}s",
+                    extra={"elapsed_seconds": elapsed_seconds},
+                )
+                self.append_live_log(context.log_dir, f"{context.agent_id} still running after {elapsed_seconds}s")
                 o.emit_progress(
                     ProgressEvent(
                         "agent_heartbeat",
@@ -889,3 +915,60 @@ class AgentPhaseRunner:
         finally:
             stop_event.set()
             heartbeat_thread.join(timeout=1)
+
+    def append_live_log(self, log_dir: Path, message: str) -> None:
+        with (log_dir / "live.log").open("a", encoding="utf-8") as handle:
+            handle.write(f"[harness] {self.trace_timestamp()} {message}\n")
+
+    def record_agent_attempt_trace(
+        self,
+        context: AgentRunContext,
+        event: str,
+        backend: str,
+        attempt: int,
+        message: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        self.append_agent_trace(context, event, backend=backend, attempt=attempt, message=message, extra=extra)
+        self.append_live_log(context.log_dir, message)
+
+    def append_agent_trace(
+        self,
+        context: AgentRunContext,
+        event: str,
+        *,
+        backend: str,
+        attempt: int,
+        message: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        path = context.log_dir / "agent_trace.md"
+        if not path.exists():
+            path.write_text(
+                "# Agent Execution Trace\n\n"
+                "This file records visible execution metadata only. It does not contain hidden model chain-of-thought.\n\n",
+                encoding="utf-8",
+            )
+        lines = [
+            f"## {self.trace_timestamp()} {event}",
+            "",
+            f"- task_id: `{context.task_id}`",
+            f"- phase: `{context.phase}`",
+            f"- role: `{context.role}`",
+            f"- agent_id: `{context.agent_id}`",
+            f"- attempt: `{attempt + 1}`",
+            f"- backend: `{backend}`",
+            f"- workspace: `{context.workspace_dir}`",
+            f"- repo: `{context.repo_dir}`",
+            f"- logs: `{context.log_dir}`",
+            f"- output: `{context.output_dir}`",
+            f"- message: {message}",
+        ]
+        for key, value in sorted((extra or {}).items()):
+            lines.append(f"- {key}: `{value}`")
+        lines.append("")
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+
+    def trace_timestamp(self) -> str:
+        return time.strftime("%Y-%m-%d %H:%M:%S")

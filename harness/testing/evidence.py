@@ -12,6 +12,10 @@ class CommandEvidence:
     stdout: str = ""
     stderr: str = ""
     phase: str = "test"
+    scope: str = "host"
+    host_command: str = ""
+    container_command: str = ""
+    workdir: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -21,6 +25,10 @@ class CommandEvidence:
             "stdout": self.stdout,
             "stderr": self.stderr,
             "phase": self.phase,
+            "scope": self.scope,
+            "host_command": self.host_command,
+            "container_command": self.container_command,
+            "workdir": self.workdir,
         }
 
 
@@ -113,6 +121,10 @@ class TestRunEvidence:
                 stdout=str(command.get("stdout") or ""),
                 stderr=str(command.get("stderr") or ""),
                 phase=str(command.get("phase") or "test"),
+                scope=str(command.get("scope") or "host"),
+                host_command=str(command.get("host_command") or ""),
+                container_command=str(command.get("container_command") or ""),
+                workdir=str(command.get("workdir") or ""),
             )
             for command in payload.get("commands", [])
             if isinstance(command, dict)
@@ -171,6 +183,19 @@ def evidence_from_command_results(
         )
     test_commands = [command for command in commands if command.phase == "test"]
     failed_test = next((command for command in test_commands if command.exit_code != 0), None)
+    if failed_test and runtime == "docker" and failed_test.exit_code == 126:
+        return TestRunEvidence(
+            status="fail",
+            runtime=runtime,
+            image=image,
+            project_type=project_type,
+            environment_status="fail",
+            build_status="pass",
+            test_status="blocked",
+            failure_type="env_setup",
+            commands=tuple(commands),
+            notes=tuple(notes or ()),
+        )
     return TestRunEvidence(
         status="fail" if failed_test else "pass",
         runtime=runtime,

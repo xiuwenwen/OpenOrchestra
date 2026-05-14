@@ -128,9 +128,6 @@ def _version_satisfies_spec(version: str, spec: str) -> bool:
 def _python_setup_commands(repo_dir: Path, config: dict[str, Any]) -> tuple[str, ...]:
     testing = config.get("testing", {})
     if isinstance(testing, dict):
-        configured = testing.get("setup_commands")
-        if isinstance(configured, list):
-            return tuple(str(command) for command in configured if str(command).strip())
         docker = testing.get("docker", {})
         auto_setup = bool(docker.get("auto_setup", False)) if isinstance(docker, dict) else False
     else:

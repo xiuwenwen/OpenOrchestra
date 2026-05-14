@@ -16,6 +16,7 @@ from harness.contracts.role_contracts import (
 def test_required_outputs_always_include_delivery_envelope() -> None:
     assert required_outputs_for("tester", "TESTING") == [
         "bug_report.md",
+        "tester_result.json",
         "delivery.md",
     ]
 
@@ -53,8 +54,8 @@ def test_role_phase_contract_binds_outputs_and_visibility() -> None:
 
     assert contract.required_outputs_with_delivery() == ["decision.json", "decision_summary.md", "delivery.md"]
     assert {(rule.source_role, tuple(sorted(rule.artifact_types))) for rule in contract.visibility_rules} == {
-        ("orchestrator", ("objective_gate.md", "test_gate.md")),
-        ("tester", ("bug_report.md",)),
+        ("orchestrator", ("objective_gate.md",)),
+        ("tester", ("bug_report.md", "tester_result.json")),
     }
 
 
@@ -62,7 +63,7 @@ def test_role_contract_registry_binds_instruction_outputs_and_contract_lines() -
     contract = role_contract_for("feature_change", "tester", "TESTING")
 
     assert contract.role_instruction == role_instruction_for("tester", "feature_change")
-    assert contract.required_outputs == ("bug_report.md", "delivery.md")
+    assert contract.required_outputs == ("bug_report.md", "tester_result.json", "delivery.md")
     assert contract.input_budget == artifact_input_budget_for("tester", "TESTING")
     assert any("Do not copy `build_result_code`" in line for line in contract.output_contract_lines)
 

@@ -30,12 +30,12 @@ function statusLabel(st){
 function statusHelp(st){
   const s=String(st||"PENDING");
   const zh={
-    OUTPUT_INVALID:"Agent 没有产出符合角色合同的必需文件或 return_code，不代表测试结论失败。测试结论请看 bug_report.md 中的 build_result_code、test_result_code、bug_result_code，或查看 test_gate。",
-    FAILED:"执行失败表示 Agent 进程、阶段编排或门禁失败；业务测试失败请看 test_result_code/test_gate，patch gate 失败请看 patch_validated/objective_gate。"
+    OUTPUT_INVALID:"Agent 没有产出符合角色合同的必需文件或 return_code，不代表测试结论失败。测试结论请看 bug_report.md 和 tester_result.json。",
+    FAILED:"执行失败表示 Agent 进程、阶段编排或门禁失败；业务测试失败请看 tester_result.json，patch gate 失败请看 patch_validated/objective_gate。"
   };
   const en={
-    OUTPUT_INVALID:"The agent did not produce the required role-contract files or return_code. This is not the test verdict; check build_result_code, test_result_code, and bug_result_code in bug_report.md, or check test_gate.",
-    FAILED:"Failed means an agent process, orchestration phase, or gate failed. Business test failures are in test_result_code/test_gate; patch gate failures are in patch_validated/objective_gate."
+    OUTPUT_INVALID:"The agent did not produce the required role-contract files or return_code. This is not the test verdict; check bug_report.md and tester_result.json.",
+    FAILED:"Failed means an agent process, orchestration phase, or gate failed. Business test failures are in tester_result.json; patch gate failures are in patch_validated/objective_gate."
   };
   return (uiLanguage==="en"?en[s]:zh[s])||s;
 }
@@ -67,7 +67,7 @@ function connectSSE(taskId){
   eventSource.addEventListener("progress",ev=>{
     const p=JSON.parse(ev.data);lastEventId=Math.max(lastEventId,Number(p.id||0));
     if(p.task_id!==currentTask)return;
-    if(latestData){const evts=latestData.events||[];if(!evts.some(e=>Number(e.id||0)===Number(p.id||0))){latestData.events=[...evts,p].slice(-300);renderLog(latestData.events)}}
+    if(latestData){const evts=latestData.events||[];if(!evts.some(e=>Number(e.id||0)===Number(p.id||0))){latestData.events=[...evts,p].slice(-300);renderLog(latestData)}}
     scheduleRefresh(100);
   });
   eventSource.onerror=()=>scheduleRefresh(1000);
@@ -126,7 +126,7 @@ function renderSnapshot(data){
   renderPipeline(data.workflow_timeline||data.phases||[],task.current_phase,data.workflow_loop_edges||[],data.workflow_runs||[]);
   renderRoleBar(data.roles||{},runs);
   renderDetail(data);
-  renderLog(data.events||[]);
+  renderLog(data);
 }
 
 function backendHealthSummary(health){
@@ -284,14 +284,14 @@ function renderAgentCards(runs){
   if(!runs.length)return`<div class="empty-msg">${esc(t("noRole"))}</div>`;
   return runs.map(r=>{
     const arts=(r.artifacts||[]).filter(a=>a.exists);
-  const deliveryTypes=["delivery.md","final_delivery.md","usage_guide.md","response.md","plan.md","decision_summary.md","review_report.md","bug_report.md","self_check.md","merge_report.md"];
+  const deliveryTypes=["delivery.md","final_delivery.md","usage_guide.md","response.md","plan.md","decision_summary.md","review_report.md","bug_report.md","tester_result.json","self_check.md","merge_report.md"];
     const priArts=arts.filter(a=>deliveryTypes.includes(a.artifact_type));
     const otherArts=arts.filter(a=>!deliveryTypes.includes(a.artifact_type));
     return`<div class="ag-card">
       <div class="ag-head"><span class="ag-name">${esc(roleLabel(r.role))} / ${esc(r.agent_id)}</span>${pill(r.status)}</div>
       <div class="ag-meta">${esc(labelPhase(r.phase_type||"-"))} · R${esc(r.phase_round_id??"-")} · try ${Number(r.retry_count)+1}</div>
       <div class="ag-files">
-        ${fBtn(r.prompt_path,"prompt",false)}${fBtn(r.stdout_path,"stdout",true)}${fBtn(r.stderr_path,"stderr",false)}${fBtn(r.diagnostics_path,"diag",false)}
+        ${fBtn(r.live_path,"live",true)}${fBtn(r.trace_path,"trace",false)}${fBtn(r.prompt_path,"prompt",false)}${fBtn(r.command_path,"cmd",false)}${fBtn(r.stdout_path,"stdout",false)}${fBtn(r.stderr_path,"stderr",false)}${fBtn(r.diagnostics_path,"diag",false)}
         ${priArts.map(a=>aBtn(a,true)).join("")}${otherArts.map(a=>aBtn(a,false)).join("")}
       </div></div>`;
   }).join("");
@@ -314,7 +314,7 @@ async function openFile(ep,label){
   document.getElementById("detail").classList.add("open");
 }
 function clearViewer(){currentFile=null;stopFileRefresh();document.getElementById("viewerPath").textContent=t("selectFile");document.getElementById("fileText").textContent="";document.getElementById("translationNote").textContent=""}
-function isLiveLogLabel(label){return["stdout","stderr","diag"].includes(String(label||"").toLowerCase())}
+function isLiveLogLabel(label){return["live","stdout","stderr","diag"].includes(String(label||"").toLowerCase())}
 function stopFileRefresh(){if(fileRefreshTimer){clearTimeout(fileRefreshTimer);fileRefreshTimer=null}}
 function scheduleFileRefresh(){
   stopFileRefresh();
@@ -355,14 +355,37 @@ function renderFileText(){
 
 // Activity Log
 function toggleLog(){logOpen=!logOpen;document.getElementById("logBody").classList.toggle("open",logOpen)}
-function renderLog(events){
-  const flow=(events||[]).filter(e=>/^(task_|phase_|agent_|backend_|patch_|test_|delivery_|judge_)/.test(String(e.event_type||""))).slice(-60);
-  document.getElementById("logBadge").textContent=String(flow.length);
-  if(flow.length){const last=flow[flow.length-1];document.getElementById("logPreview").textContent=`${flowLabel(last.event_type)} · ${labelPhase(last.phase||"")} · ${last.role?roleLabel(last.role):""}`}
-  document.getElementById("logBody").innerHTML=flow.slice().reverse().map(e=>{
-    const st=String(e.status||"");
-    return`<div class="log-item"><span class="log-time">${esc(dateFmt.format(new Date(Number(e.ts||0)*1000)))}</span><span class="log-type ${esc(st)}">${esc(flowLabel(e.event_type))}</span><span class="log-msg">${esc(failureKind(e))} ${esc(labelPhase(e.phase||""))} ${e.role?esc(roleLabel(e.role)):""} ${esc(e.agent_id||"")} ${esc(e.message||"")}</span></div>`;
-  }).join("");
+function renderLog(snapshot){
+  const phases=(snapshot&&snapshot.workflow_timeline)||[],runs=(snapshot&&snapshot.agent_runs)||[];
+  const rows=phases.map(p=>flowRow(p,runs)).filter(Boolean);
+  document.getElementById("logBadge").textContent=String(rows.length);
+  if(rows.length){const last=rows[rows.length-1];document.getElementById("logPreview").textContent=`${last.phase} · ${last.role} · ${last.duration}`}
+  document.getElementById("logBody").innerHTML=rows.slice().reverse().map(r=>`
+    <div class="log-item">
+      <span class="log-time">R${esc(r.round)}</span>
+      <span class="log-type ${esc(r.status)}">${esc(r.role)}</span>
+      <span class="log-msg">${esc(r.phase)} · ${esc(statusLabel(r.status))} · ${esc(r.duration)}${r.agents?` · ${esc(r.agents)}`:""}</span>
+    </div>`).join("");
+}
+function flowRow(phase,runs){
+  const phaseRuns=runs.filter(r=>r.phase_id===phase.phase_id);
+  return {
+    round:phase.round_id??0,
+    role:roleLabel(phase.role||"-"),
+    phase:labelPhase(phase.phase_type||"-"),
+    status:String(phase.status||"RUNNING"),
+    duration:durationLabel(phase.started_at,phase.completed_at),
+    agents:phaseRuns.map(r=>`${r.agent_id}:${durationLabel(r.started_at,r.completed_at)}`).join(", ")
+  };
+}
+function durationLabel(start,end){
+  if(!start)return "-";
+  const s=Date.parse(start),e=end?Date.parse(end):Date.now();
+  if(!Number.isFinite(s)||!Number.isFinite(e)||e<s)return "-";
+  const sec=Math.floor((e-s)/1000),h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),ss=sec%60;
+  if(h)return`${h}h ${String(m).padStart(2,"0")}m`;
+  if(m)return`${m}m ${String(ss).padStart(2,"0")}s`;
+  return`${ss}s`;
 }
 function failureKind(e){
   const et=String(e.event_type||""),st=String(e.status||"");

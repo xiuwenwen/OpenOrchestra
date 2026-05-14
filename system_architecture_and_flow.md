@@ -155,8 +155,9 @@ stateDiagram-v2
         EXECUTION --> PATCH_MERGE: Executor Agents output patch.diff
         PATCH_MERGE --> TESTING: merged_patch.diff materialized
         
-        TESTING --> TEST_JUDGEMENT: Tester outputs reports
-        TEST_JUDGEMENT --> FIXING: Failed (Bugs found)
+        TESTING --> FIXING: tester_result.json status=source_bug
+        TESTING --> REVIEWING: tester_result.json status=tests_passed
+        TESTING --> FAILED: tester_result.json status=environment_blocked
         FIXING --> PATCH_MERGE: Fix loop
     }
     
@@ -167,7 +168,9 @@ stateDiagram-v2
         REVIEWING --> REVIEW_FIXING: Reviewer requests code or runtime fixes
         REVIEW_FIXING --> PATCH_MERGE_2: Update implementation
         PATCH_MERGE_2 --> REGRESSION_TESTING
-        REGRESSION_TESTING --> TEST_JUDGEMENT_2
+        REGRESSION_TESTING --> HARNESS_REGRESSION_GATE
+        HARNESS_REGRESSION_GATE --> REGRESSION_TESTING: Environment or test command repair needed
+        HARNESS_REGRESSION_GATE --> TEST_JUDGEMENT_2
         TEST_JUDGEMENT_2 --> REVIEW_FIXING: Regression Failed
         TEST_JUDGEMENT_2 --> REVIEWING: Regression Passed
     }

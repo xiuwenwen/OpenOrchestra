@@ -14,6 +14,6 @@ def test_visibility_matrix_renders_contract_table() -> None:
 def test_generated_visibility_matrix_documents_empty_tester_inputs() -> None:
     text = render_visibility_matrix()
 
-    assert "| tester | TESTING | `bug_report.md`, `delivery.md`" in text
-    assert "| tester | REGRESSION_TESTING | `bug_report.md`, `delivery.md`" in text
+    assert "| tester | TESTING | `bug_report.md`, `tester_result.json`, `delivery.md`" in text
+    assert "| tester | REGRESSION_TESTING | `bug_report.md`, `tester_result.json`, `delivery.md`" in text
     assert "large_artifact_mode=path_only | (none) | (none)" in text

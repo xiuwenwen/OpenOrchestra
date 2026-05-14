@@ -27,6 +27,15 @@ from harness.core.state_machine import (
     TESTING,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC
+from harness.testing.tester_result import (
+    ENVIRONMENT_BLOCKED,
+    SOURCE_BUG,
+    TESTER_RESULT_ARTIFACT,
+    TESTS_PASSED,
+    TesterResult,
+    TesterResultError,
+    load_tester_result,
+)
 
 
 class PhaseRunner(Protocol):
@@ -45,9 +54,6 @@ class PhaseRunner(Protocol):
 
 class GateRunner(Protocol):
     def run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:
-        ...
-
-    def run_harness_test_gate(self, task_id: str, round_id: int) -> bool:
         ...
 
     def run_judge_phase(
@@ -115,11 +121,11 @@ class WorkflowEngine:
                 o.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
                 merge_ok = o.run_patch_merge(task_id, round_id, user_prompt)
                 if merge_ok:
-                    o.run_harness_test_gate(task_id, round_id)
-                    o.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
-                    test_decision = o.run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
-                    if o.judge.is_test_pass(test_decision):
+                    tester_decision = self.run_testing_until_tester_decision(task_id, TESTING, round_id, user_prompt)
+                    if tester_decision.tests_passed:
                         break
+                    if tester_decision.environment_blocked:
+                        self.raise_tester_environment_blocked(tester_decision)
                 round_id += 1
                 attempts += 1
                 continue
@@ -129,8 +135,7 @@ class WorkflowEngine:
                     raise TaskFailedError("Bugfix testing did not pass within max_test_fix_rounds")
                 max_rounds = updated_max_rounds
                 continue
-            if o.judge.is_test_pass(test_decision):
-                break
+            break
         self.run_review_loop(task_id, user_prompt)
         return self.run_delivery(task_id, user_prompt)
 
@@ -315,11 +320,11 @@ class WorkflowEngine:
         while True:
             while end_round is None or round_id <= end_round:
                 if merge_ok:
-                    o.run_harness_test_gate(task_id, round_id)
-                    o.run_role_phase("tester", TESTING, round_id, required_outputs_for("tester", TESTING), user_prompt)
-                    test_decision = o.run_judge_phase(task_id, TEST_JUDGEMENT, round_id, user_prompt)
-                    if o.judge.is_test_pass(test_decision):
+                    tester_decision = self.run_testing_until_tester_decision(task_id, TESTING, round_id, user_prompt)
+                    if tester_decision.tests_passed:
                         return
+                    if tester_decision.environment_blocked:
+                        self.raise_tester_environment_blocked(tester_decision)
                 if end_round is not None and round_id >= end_round:
                     break
                 next_round = round_id + 1
@@ -511,18 +516,17 @@ class WorkflowEngine:
                     iteration_id=test_round_id,
                 )
                 if merge_ok:
-                    o.run_harness_test_gate(task_id, phase_round_id)
-                    o.run_role_phase(
-                        "tester",
+                    tester_decision = self.run_testing_until_tester_decision(
+                        task_id,
                         REGRESSION_TESTING,
                         phase_round_id,
-                        required_outputs_for("tester", REGRESSION_TESTING),
                         user_prompt,
                         phase_scope=phase_scope,
                     )
-                    test_decision = o.run_judge_phase(task_id, TEST_JUDGEMENT, phase_round_id, user_prompt)
-                    if o.judge.is_test_pass(test_decision):
+                    if tester_decision.tests_passed:
                         return
+                    if tester_decision.environment_blocked:
+                        self.raise_tester_environment_blocked(tester_decision)
 
                 next_phase_round = max(phase_round_id + 1, self.next_phase_round_id(task_id))
                 o.run_role_phase(
@@ -543,6 +547,126 @@ class WorkflowEngine:
             if updated_max_rounds == max_rounds:
                 raise TaskFailedError("Regression testing did not pass within max_test_fix_rounds")
             max_rounds = updated_max_rounds
+
+    def run_testing_until_tester_decision(
+        self,
+        task_id: str,
+        phase: str,
+        round_id: int,
+        user_prompt: str,
+        *,
+        phase_scope: dict[str, int | str | None] | None = None,
+    ) -> TesterResult:
+        o = self.runtime
+        max_repairs = self.max_tester_environment_repair_rounds()
+        last_error = "missing tester_result.json"
+        for repair_attempt in range(max_repairs + 1):
+            scoped_phase = self.tester_result_retry_scope(phase_scope, repair_attempt)
+            results = o.run_role_phase(
+                "tester",
+                phase,
+                round_id,
+                required_outputs_for("tester", phase),
+                user_prompt,
+                phase_scope=scoped_phase,
+            )
+            try:
+                decision = self.tester_decision_from_results(results)
+            except TesterResultError as exc:
+                last_error = str(exc)
+                self.emit_tester_result_invalid(task_id, phase, round_id, repair_attempt, last_error)
+                continue
+            self.emit_tester_decision(task_id, phase, round_id, decision)
+            return decision
+        raise TaskFailedError(
+            "Tester did not produce a valid tester_result.json "
+            f"after {max_repairs + 1} attempt(s); last_error={last_error}"
+        )
+
+    def tester_decision_from_results(self, results: list[AgentRunResult]) -> TesterResult:
+        decisions: list[TesterResult] = []
+        parse_errors: list[str] = []
+        for result in results:
+            artifact = next(
+                (artifact for artifact in result.artifacts if artifact.artifact_type == TESTER_RESULT_ARTIFACT),
+                None,
+            )
+            if artifact is None:
+                parse_errors.append(f"{result.agent_id} did not produce {TESTER_RESULT_ARTIFACT}")
+                continue
+            try:
+                decisions.append(load_tester_result(artifact.path))
+            except TesterResultError as exc:
+                parse_errors.append(str(exc))
+        if not decisions:
+            raise TesterResultError("; ".join(parse_errors) or f"missing {TESTER_RESULT_ARTIFACT}")
+        for status in (SOURCE_BUG, ENVIRONMENT_BLOCKED, TESTS_PASSED):
+            matching = [decision for decision in decisions if decision.status == status]
+            if matching:
+                return matching[-1]
+        raise TesterResultError(f"no recognized {TESTER_RESULT_ARTIFACT} decision")
+
+    def emit_tester_result_invalid(
+        self,
+        task_id: str,
+        phase: str,
+        round_id: int,
+        repair_attempt: int,
+        error: str,
+    ) -> None:
+        self.runtime.emit_progress(
+            ProgressEvent(
+                "tester_result_invalid",
+                task_id=task_id,
+                phase=phase,
+                role="tester",
+                round_id=round_id,
+                attempt=repair_attempt,
+                status="FAILED",
+                message=f"tester_result.json invalid: {error}",
+            )
+        )
+
+    def emit_tester_decision(self, task_id: str, phase: str, round_id: int, decision: TesterResult) -> None:
+        self.runtime.emit_progress(
+            ProgressEvent(
+                "tester_decision",
+                task_id=task_id,
+                phase=phase,
+                role="tester",
+                round_id=round_id,
+                status=decision.status,
+                message=decision.summary or f"Tester decision: {decision.status}",
+                data={
+                    "next_action": decision.next_action,
+                    "failure_type": decision.failure_type,
+                    "artifact": str(decision.artifact_path),
+                },
+            )
+        )
+
+    def raise_tester_environment_blocked(self, decision: TesterResult) -> None:
+        reason = decision.summary or decision.failure_type or "tester reported environment_blocked"
+        raise TaskFailedError(f"Tester blocked the task due to test environment: {reason}; artifact={decision.artifact_path}")
+
+    def tester_result_retry_scope(
+        self,
+        phase_scope: dict[str, int | str | None] | None,
+        repair_attempt: int,
+    ) -> dict[str, int | str | None] | None:
+        if repair_attempt <= 0:
+            return phase_scope
+        scoped = dict(phase_scope or {})
+        scoped["loop_type"] = "tester_result_retry"
+        scoped["iteration_id"] = repair_attempt
+        return scoped
+
+    def max_tester_environment_repair_rounds(self) -> int:
+        value = self.runtime.config.get("limits", {}).get("max_tester_environment_repair_rounds", 2)
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 2
 
     def regression_phase_round_id(self, review_round_id: int, test_round_id: int, max_rounds: int | None) -> int:
         return review_round_id + test_round_id

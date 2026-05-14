@@ -125,7 +125,7 @@ def test_tester_receives_no_executor_markdown_artifacts(tmp_path: Path) -> None:
     assert "patch.diff" not in manifest
     assert "fix_patch.diff" not in manifest
 
-def test_tester_manifest_includes_current_round_test_gate_evidence(tmp_path: Path) -> None:
+def test_tester_manifest_does_not_include_legacy_test_gate_evidence(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("test with harness gate evidence")
     gate = tmp_path / "test_gate.md"
@@ -157,9 +157,9 @@ def test_tester_manifest_includes_current_round_test_gate_evidence(tmp_path: Pat
     staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input", "tester", "TESTING", round_id=2, repo_dir=repo_dir)
     manifest = staged[0].read_text(encoding="utf-8")
 
-    assert "## Harness Test Gate Evidence" in manifest
-    assert "- test_gate_status: pass" in manifest
-    assert f"  - {sys.executable} -m pytest -q" in manifest
+    assert "## Harness Test Gate Evidence" not in manifest
+    assert "- test_gate_status: pass" not in manifest
+    assert f"  - {sys.executable} -m pytest -q" not in manifest
 
 
 def test_input_staging_reuses_truncated_artifact_cache(tmp_path: Path) -> None:

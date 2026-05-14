@@ -38,28 +38,60 @@ from harness.core.state_machine import (
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 from harness.patch.gate import materialized_repo_markdown, run_patch_gate
+from harness.testing.tester_result import TesterResult as HarnessTesterResult
 
 
 from orchestrator_mock_support import _config
 
 
-def test_regression_testing_runs_harness_test_gate_before_judgement(monkeypatch, tmp_path: Path) -> None:
+def _tester_result(tmp_path: Path, status: str) -> HarnessTesterResult:
+    next_action = {
+        "tests_passed": "continue",
+        "source_bug": "fix_code",
+        "environment_blocked": "block_task",
+    }[status]
+    return HarnessTesterResult(status, next_action, status, status, tmp_path / "tester_result.json", {"status": status})
+
+
+def _write_tester_result(path: Path, status: str) -> None:
+    next_action = {
+        "tests_passed": "continue",
+        "source_bug": "fix_code",
+        "environment_blocked": "block_task",
+    }[status]
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": status,
+                "next_action": next_action,
+                "failure_type": status,
+                "summary": status,
+                "setup_commands_run": [],
+                "test_commands_run": [],
+                "remaining_blockers": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_regression_testing_uses_tester_result_without_test_gate(monkeypatch, tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("review fix", workflow_type=BUGFIX)
-    gate_rounds: list[int] = []
+    tested_rounds: list[int] = []
 
     monkeypatch.setattr(orchestrator, "run_role_phase", lambda *args, **kwargs: [])
 
-    def fake_test_gate(task_id: str, round_id: int) -> bool:
-        gate_rounds.append(round_id)
-        return True
+    def fake_testing(task_id: str, phase: str, round_id: int, user_prompt: str, **kwargs) -> HarnessTesterResult:
+        tested_rounds.append(round_id)
+        return _tester_result(tmp_path, "tests_passed")
 
-    monkeypatch.setattr(orchestrator, "run_harness_test_gate", fake_test_gate)
-    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: {"decision": "pass", "tests_passed": True})
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_testing_until_tester_decision", fake_testing)
 
     orchestrator._run_regression_test_fix_loop(task_id, "review fix", review_round_id=1, merge_ok=True)
 
-    assert gate_rounds == [1]
+    assert tested_rounds == [1]
 
 def test_patch_validation_uses_project_context_source_repo(tmp_path: Path) -> None:
     configured_repo = tmp_path / "configured"
@@ -218,16 +250,23 @@ def test_harness_test_gate_records_timeout_failure(monkeypatch, tmp_path: Path) 
     config = _config(tmp_path)
     config["testing"] = {
         "runtime": "native",
-        "commands": [f"{sys.executable} -c \"import time; time.sleep(2)\""],
         "timeout_seconds": 1,
     }
     orchestrator = Orchestrator(config)
     task_id = orchestrator.create_task("timeout test", workflow_type=BUGFIX)
     repo = tmp_path / "repo"
     repo.mkdir()
-    monkeypatch.setattr(orchestrator, "_latest_materialized_repo", lambda task_id: repo)
+    orchestrator.test_gate_service.latest_materialized_repo = lambda task_id: repo
 
-    assert not orchestrator._run_harness_test_gate(task_id, 0)
+    assert not orchestrator.test_gate_service.run_gate(
+        task_id,
+        0,
+        artifact_type="test_gate.md",
+        title="Harness Test Gate",
+        log_dir_name="test_gate_logs",
+        commands=[f"{sys.executable} -c \"import time; time.sleep(2)\""],
+        require_commands=True,
+    )
     report = Path(orchestrator.repository.list_artifacts(task_id, "test_gate.md")[-1]["path"]).read_text(encoding="utf-8")
 
     assert "status: fail" in report
@@ -238,16 +277,23 @@ def test_harness_test_gate_does_not_execute_shell_metacharacters(monkeypatch, tm
     config = _config(tmp_path)
     config["testing"] = {
         "runtime": "native",
-        "commands": [f"{sys.executable} -c \"print('ok')\"; touch {marker}"],
         "timeout_seconds": 5,
     }
     orchestrator = Orchestrator(config)
     task_id = orchestrator.create_task("reject shell metacharacters", workflow_type=BUGFIX)
     repo = tmp_path / "repo"
     repo.mkdir()
-    monkeypatch.setattr(orchestrator, "_latest_materialized_repo", lambda task_id: repo)
+    orchestrator.test_gate_service.latest_materialized_repo = lambda task_id: repo
 
-    assert orchestrator._run_harness_test_gate(task_id, 0)
+    assert orchestrator.test_gate_service.run_gate(
+        task_id,
+        0,
+        artifact_type="test_gate.md",
+        title="Harness Test Gate",
+        log_dir_name="test_gate_logs",
+        commands=[f"{sys.executable} -c \"print('ok')\"; touch {marker}"],
+        require_commands=True,
+    )
 
     assert not marker.exists()
     report = Path(orchestrator.repository.list_artifacts(task_id, "test_gate.md")[-1]["path"]).read_text(encoding="utf-8")
@@ -267,10 +313,53 @@ def test_harness_test_gate_uses_compileall_for_python_repo_without_tests(monkeyp
     assert "compileall -q ." in report
     assert "status: pass" in report
 
+def test_harness_test_gate_ignores_tester_result_for_command_selection(monkeypatch, tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("ignore tester command", workflow_type=BUGFIX)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    monkeypatch.setattr(orchestrator, "_latest_materialized_repo", lambda task_id: repo)
+    test_phase_id = orchestrator.repository.create_phase(task_id, TESTING, "tester", 0, status="COMPLETED")
+    command = f"{sys.executable} -c \"print('from tester env')\""
+    result_path = tmp_path / "tester_result.json"
+    _write_tester_result(result_path, "tests_passed")
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=test_phase_id,
+            role="tester",
+            agent_id="tester-1",
+            artifact_type="tester_result.json",
+            path=result_path,
+            version=1,
+            hash="hash",
+        )
+    )
+
+    assert orchestrator._run_harness_test_gate(task_id, 0)
+    report = Path(orchestrator.repository.list_artifacts(task_id, "test_gate.md")[-1]["path"]).read_text(encoding="utf-8")
+
+    assert "compileall -q ." in report
+    assert command not in report
+
+def test_tester_setup_policy_rejects_unsafe_package(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    error = orchestrator.test_gate_service.tester_setup_command_policy_error(
+        repo,
+        f"{sys.executable} -m pip install pandas",
+    )
+
+    assert "not project-declared or minimal test tooling" in (error or "")
+
 
 def test_harness_test_gate_reuses_results_for_same_repo_and_commands(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
-    config["testing"] = {"runtime": "native", "commands": [f"{sys.executable} -c \"print('ok')\""], "timeout_seconds": 5}
+    config["testing"] = {"runtime": "native", "timeout_seconds": 5}
     orchestrator = Orchestrator(config)
     task_id = orchestrator.create_task("cache test gate", workflow_type=BUGFIX)
     repo = tmp_path / "repo"
@@ -298,11 +387,10 @@ def test_harness_test_gate_reuses_results_for_same_repo_and_commands(monkeypatch
     assert '"cache_hit": true' in latest
     assert "status: pass" in latest
 
-def test_test_judgement_cannot_override_failed_required_test_gate(tmp_path: Path) -> None:
+def test_test_judgement_cannot_override_missing_tester_result(tmp_path: Path) -> None:
     config = _config(tmp_path)
-    config["testing"] = {"runtime": "native", "require_commands": True, "commands": []}
     orchestrator = Orchestrator(config)
-    task_id = orchestrator.create_task("judge test gate", workflow_type=BUGFIX)
+    task_id = orchestrator.create_task("judge tester result", workflow_type=BUGFIX)
     objective_gate = tmp_path / "objective_gate.md"
     objective_gate.write_text(
         "# Objective Gate\n\n"
@@ -316,22 +404,19 @@ def test_test_judgement_cannot_override_failed_required_test_gate(tmp_path: Path
         "diff_check_status: pass\n",
         encoding="utf-8",
     )
-    test_gate = tmp_path / "test_gate.md"
-    test_gate.write_text("# Harness Test Gate\n\nstatus: skipped\nround_id: 0\n", encoding="utf-8")
-    for artifact_type, path in (("objective_gate.md", objective_gate), ("test_gate.md", test_gate)):
-        orchestrator.repository.create_artifact(
-            ArtifactRef(
-                artifact_id=artifact_type,
-                task_id=task_id,
-                phase_id=None,
-                role="orchestrator",
-                agent_id="gate",
-                artifact_type=artifact_type,
-                path=path,
-                version=1,
-                hash="hash",
-            )
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id="objective_gate.md",
+            task_id=task_id,
+            phase_id=None,
+            role="orchestrator",
+            agent_id="gate",
+            artifact_type="objective_gate.md",
+            path=objective_gate,
+            version=1,
+            hash="hash",
         )
+    )
 
     decision = orchestrator._apply_objective_gates_to_judge_decision(
         task_id,
@@ -341,11 +426,11 @@ def test_test_judgement_cannot_override_failed_required_test_gate(tmp_path: Path
     )
 
     assert decision["decision"] == "fail"
-    assert decision["test_gate_status"] == "skipped"
+    assert decision["tester_result_status"] == "missing"
 
-def test_test_judgement_cannot_override_failed_test_exit_code(tmp_path: Path) -> None:
+def test_test_judgement_cannot_override_source_bug_tester_result(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
-    task_id = orchestrator.create_task("judge structured test evidence", workflow_type=BUGFIX)
+    task_id = orchestrator.create_task("judge structured tester evidence", workflow_type=BUGFIX)
     objective_gate = tmp_path / "objective_gate.md"
     objective_gate.write_text(
         "# Objective Gate\n\n"
@@ -359,25 +444,20 @@ def test_test_judgement_cannot_override_failed_test_exit_code(tmp_path: Path) ->
         "diff_check_status: pass\n",
         encoding="utf-8",
     )
-    test_gate = tmp_path / "test_gate.md"
-    test_gate.write_text(
-        "# Harness Test Gate\n\n"
-        "status: pass\n"
-        "round_id: 0\n\n"
-        "## Evidence JSON\n\n"
-        "```json\n"
-        '{"status":"pass","build_exit_code":0,"test_exit_code":1,"commands":[]}\n'
-        "```\n",
-        encoding="utf-8",
-    )
-    for artifact_type, path in (("objective_gate.md", objective_gate), ("test_gate.md", test_gate)):
+    test_phase_id = orchestrator.repository.create_phase(task_id, TESTING, "tester", 0, status="COMPLETED")
+    tester_result = tmp_path / "tester_result.json"
+    _write_tester_result(tester_result, "source_bug")
+    for artifact_type, path, phase_id, role in (
+        ("objective_gate.md", objective_gate, None, "orchestrator"),
+        ("tester_result.json", tester_result, test_phase_id, "tester"),
+    ):
         orchestrator.repository.create_artifact(
             ArtifactRef(
                 artifact_id=f"structured-{artifact_type}",
                 task_id=task_id,
-                phase_id=None,
-                role="orchestrator",
-                agent_id="gate",
+                phase_id=phase_id,
+                role=role,
+                agent_id="gate" if role == "orchestrator" else "tester-1",
                 artifact_type=artifact_type,
                 path=path,
                 version=1,
@@ -393,7 +473,7 @@ def test_test_judgement_cannot_override_failed_test_exit_code(tmp_path: Path) ->
     )
 
     assert decision["decision"] == "fail"
-    assert "test_exit_code" in decision["reason"]
+    assert "source_bug" in decision["reason"]
 
 def test_patch_validation_selects_merged_patch_from_requested_round(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
@@ -593,6 +673,7 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
     artifact_rows = [
         ("merged_patch_metadata.md", old_merge_phase_id, "executor", "old-merged-metadata.md", "executor-1"),
         ("bug_report.md", old_test_phase_id, "tester", "old-bug-report.md", "tester-1"),
+        ("tester_result.json", old_test_phase_id, "tester", "old-tester-result.json", "tester-1"),
         ("merged_patch_metadata.md", current_merge_phase_id, "executor", "current-merged-metadata.md", "executor-1"),
         ("merged_patch.diff", current_merge_phase_id, "executor", "current-merged.patch", "executor-1"),
         ("merged_patch_original.diff", current_merge_phase_id, "executor", "current-original.patch", "executor-1"),
@@ -602,6 +683,7 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
         ("fix_schedule.md", current_merge_phase_id, "executor", "current-fix-schedule.md", "executor-1"),
         ("fix_notes.md", current_merge_phase_id, "executor", "current-fix-notes.md", "executor-1"),
         ("bug_report.md", current_test_phase_id, "tester", "current-bug-report.md", "tester-1"),
+        ("tester_result.json", current_test_phase_id, "tester", "current-tester-result.json", "tester-1"),
         ("delivery.md", current_test_phase_id, "tester", "tester-delivery.md", "tester-1"),
     ]
     for artifact_type, phase_id, role, filename, agent_id in artifact_rows:
@@ -651,7 +733,8 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
     manifest = staged[0].read_text(encoding="utf-8")
 
     assert "current-bug-report.md" in manifest
-    assert "judge-round-1-test_gate.md" in manifest
+    assert "current-tester-result.json" in manifest
+    assert "judge-round-1-test_gate.md" not in manifest
     assert "judge-round-1-objective_gate.md" in manifest
 
     assert "current-merged-metadata.md" not in manifest
@@ -665,6 +748,8 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
     assert "tester-delivery.md" not in manifest
     assert "old-merged-metadata.md" not in manifest
     assert "old-bug-report.md" not in manifest
+    assert "old-tester-result.json" not in manifest
+    assert "old-test-environment.md" not in manifest
     assert "judge-round-0-test_gate.md" not in manifest
     assert "judge-round-0-objective_gate.md" not in manifest
     assert "judge-round-1-patch_validation.md" not in manifest

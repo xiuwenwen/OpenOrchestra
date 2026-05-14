@@ -74,6 +74,27 @@ class MockAgentAdapter(AgentAdapter):
                 "bug_result_code: 0\n\n"
                 "Mock build and tests passed. No blocking bugs found.\n"
             )
+        if context.role == "tester" and name == "tester_result.json":
+            return json.dumps(
+                {
+                    "schema_version": 1,
+                    "status": "tests_passed",
+                    "next_action": "continue",
+                    "failure_type": "none",
+                    "summary": "Mock tester completed environment setup and verification.",
+                    "setup_commands_run": [],
+                    "test_commands_run": [
+                        {
+                            "command": "python -m compileall -q .",
+                            "exit_code": 0,
+                            "phase": "test",
+                        }
+                    ],
+                    "remaining_blockers": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
         if context.role == "executor" and name == "response.md":
             return "artifact_result_code: 0\n\n# Response\n\nMock informational response for the user's request.\n"
         if context.role == "executor" and name == "notes.md":

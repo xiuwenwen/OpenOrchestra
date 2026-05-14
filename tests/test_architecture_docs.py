@@ -8,7 +8,7 @@ def test_readme_workflow_matches_current_review_flow() -> None:
 
     assert "review judgement" not in readme.lower()
     assert "REVIEWING / REVIEW_JUDGEMENT / REVIEW_FIXING loop" not in readme
-    assert "REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop" in readme
+    assert "REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop when tester_result.json reports source_bug" in readme
 
 
 def test_architecture_flow_does_not_document_removed_final_judgement_path() -> None:
