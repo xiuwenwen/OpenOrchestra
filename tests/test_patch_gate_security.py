@@ -50,7 +50,16 @@ def _tester_result(tmp_path: Path, status: str) -> HarnessTesterResult:
         "source_bug": "fix_code",
         "environment_blocked": "block_task",
     }[status]
-    return HarnessTesterResult(status, next_action, status, status, tmp_path / "tester_result.json", {"status": status})
+    env_issue = status == "environment_blocked"
+    return HarnessTesterResult(
+        status,
+        next_action,
+        status,
+        status,
+        tmp_path / "tester_result.json",
+        {"status": status, "environment_dependency_issue": env_issue},
+        env_issue,
+    )
 
 
 def _write_tester_result(path: Path, status: str) -> None:
@@ -66,9 +75,19 @@ def _write_tester_result(path: Path, status: str) -> None:
                 "status": status,
                 "next_action": next_action,
                 "failure_type": status,
+                "environment_dependency_issue": status == "environment_blocked",
                 "summary": status,
                 "setup_commands_run": [],
                 "test_commands_run": [],
+                "oracle_results": [
+                    {
+                        "oracle_id": "A1",
+                        "status": "blocked" if status == "environment_blocked" else ("passed" if status == "tests_passed" else "failed"),
+                        "evidence": status,
+                        "commands_run": ["pytest"],
+                        "output_excerpt": "",
+                    }
+                ],
                 "remaining_blockers": [],
             }
         ),
@@ -671,13 +690,12 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
     current_judge_phase_id = orchestrator.repository.create_phase(task_id, TEST_JUDGEMENT, "judge", 1)
 
     artifact_rows = [
-        ("merged_patch_metadata.md", old_merge_phase_id, "executor", "old-merged-metadata.md", "executor-1"),
+        ("merged_patch_metadata.json", old_merge_phase_id, "executor", "old-merged-metadata.json", "executor-1"),
         ("bug_report.md", old_test_phase_id, "tester", "old-bug-report.md", "tester-1"),
         ("tester_result.json", old_test_phase_id, "tester", "old-tester-result.json", "tester-1"),
-        ("merged_patch_metadata.md", current_merge_phase_id, "executor", "current-merged-metadata.md", "executor-1"),
+        ("merged_patch_metadata.json", current_merge_phase_id, "executor", "current-merged-metadata.json", "executor-1"),
         ("merged_patch.diff", current_merge_phase_id, "executor", "current-merged.patch", "executor-1"),
         ("merged_patch_original.diff", current_merge_phase_id, "executor", "current-original.patch", "executor-1"),
-        ("merge_report.md", current_merge_phase_id, "executor", "current-merge-report.md", "executor-1"),
         ("delivery.md", current_merge_phase_id, "executor", "executor-delivery.md", "executor-1"),
         ("self_check.md", current_merge_phase_id, "executor", "current-self-check.md", "executor-1"),
         ("fix_schedule.md", current_merge_phase_id, "executor", "current-fix-schedule.md", "executor-1"),
@@ -737,16 +755,15 @@ def test_test_judgement_sees_only_current_round_test_evidence(tmp_path: Path) ->
     assert "judge-round-1-test_gate.md" not in manifest
     assert "judge-round-1-objective_gate.md" in manifest
 
-    assert "current-merged-metadata.md" not in manifest
+    assert "current-merged-metadata.json" not in manifest
     assert "current-merged.patch" not in manifest
     assert "current-original.patch" not in manifest
-    assert "current-merge-report.md" not in manifest
     assert "executor-delivery.md" not in manifest
     assert "current-self-check.md" not in manifest
     assert "current-fix-schedule.md" not in manifest
     assert "current-fix-notes.md" not in manifest
     assert "tester-delivery.md" not in manifest
-    assert "old-merged-metadata.md" not in manifest
+    assert "old-merged-metadata.json" not in manifest
     assert "old-bug-report.md" not in manifest
     assert "old-tester-result.json" not in manifest
     assert "old-test-environment.md" not in manifest
@@ -791,11 +808,12 @@ def test_single_candidate_patch_merge_uses_deterministic_fast_path(tmp_path: Pat
     assert len(phases) == 1
     runs = [run for run in orchestrator.repository.list_agent_runs(task_id) if run["phase_id"] == phases[0]["phase_id"]]
     assert [run["agent_id"] for run in runs] == ["deterministic-patch-merge"]
-    metadata = Path(orchestrator.repository.list_artifacts(task_id, "merged_patch_metadata.md")[-1]["path"]).read_text(encoding="utf-8")
-    report = Path(orchestrator.repository.list_artifacts(task_id, "merge_report.md")[-1]["path"]).read_text(encoding="utf-8")
-    assert "merge_strategy: deterministic_single_candidate" in report
-    assert "changed_files: app.py" in metadata
-    assert "expected_apply_command: git apply --whitespace=nowarn merged_patch.diff" in metadata
+    metadata = json.loads(
+        Path(orchestrator.repository.list_artifacts(task_id, "merged_patch_metadata.json")[-1]["path"]).read_text(encoding="utf-8")
+    )
+    assert metadata["merge_report"]["merge_strategy"] == "deterministic_single_candidate"
+    assert metadata["changed_files"] == ["app.py"]
+    assert metadata["expected_apply_command"] == "git apply --whitespace=nowarn merged_patch.diff"
     assert "status: pass" in Path(orchestrator.repository.list_artifacts(task_id, "patch_validation.md")[-1]["path"]).read_text(encoding="utf-8")
 
 
@@ -841,6 +859,50 @@ def test_empty_candidate_patch_skips_merge_model_and_testing(tmp_path: Path) -> 
     objective = Path(orchestrator.repository.list_artifacts(task_id, "objective_gate.md")[-1]["path"]).read_text(encoding="utf-8")
     assert "status: fail" in objective
     assert "empty_patch" in objective
+
+
+def test_empty_candidate_patch_is_accepted_after_passing_tester_result(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("accept no-op patch", workflow_type=BUGFIX)
+    test_phase_id = orchestrator.repository.create_phase(task_id, TESTING, "tester", 0, status="COMPLETED")
+    tester_result = tmp_path / "tester_result.json"
+    _write_tester_result(tester_result, "tests_passed")
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=test_phase_id,
+            role="tester",
+            agent_id="tester-1",
+            artifact_type="tester_result.json",
+            path=tester_result,
+            version=1,
+            hash="hash",
+        )
+    )
+    fixing_phase_id = orchestrator.repository.create_phase(task_id, REVIEW_FIXING, "executor", 1, status="COMPLETED")
+    patch = tmp_path / "fix_patch.diff"
+    patch.write_text("\n", encoding="utf-8")
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=fixing_phase_id,
+            role="executor",
+            agent_id="executor-1",
+            artifact_type="fix_patch.diff",
+            path=patch,
+            version=1,
+            hash="hash",
+        )
+    )
+
+    assert orchestrator.run_patch_merge(task_id, 1, "accept no-op patch") is True
+
+    objective = Path(orchestrator.repository.list_artifacts(task_id, "objective_gate.md")[-1]["path"]).read_text(encoding="utf-8")
+    assert "status: pass" in objective
+    assert "accepted_empty_patch" in objective
+    assert not orchestrator.repository.list_artifacts(task_id, "merged_patch.diff")
 
 
 def test_duplicate_candidate_patch_skips_retesting_previous_patch(tmp_path: Path) -> None:

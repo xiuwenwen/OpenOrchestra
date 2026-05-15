@@ -48,6 +48,9 @@ from harness.ui.launcher import start_ui_server
 from harness.ui.server import HarnessWebServer, UiEventStore
 
 
+GOAL_MAX_TEST_FIX_ROUNDS = 10
+
+
 class HarnessCompleter(Completer):
     def __init__(self, cli: "InteractiveCLI"):
         self.cli = cli
@@ -334,7 +337,7 @@ class InteractiveCLI:
                     "  /resume <n|task_id>      Use a historical task as context for following prompts",
                     "  /clean                   Remove selected task workspaces/artifacts; keep final success_path",
                     "  /diagnose                Export prompt/log/artifact/event diagnostics for the active task",
-                    "  /goal                    Set test/fix loops to fix until done without asking",
+                    "  /goal                    Set test/fix max rounds to 10",
                     "  /current                 Show selected historical context",
                     "  /clear                   Clear selected context; the next project request starts a new task",
                     "  /ui                      Start/show the local Web execution viewer",
@@ -356,9 +359,9 @@ class InteractiveCLI:
         print(f"switched backend to: {backend} (saved to {USER_ENV_PATH})")
 
     def _set_fix_until_goal(self) -> None:
-        self.config.setdefault("limits", {})["max_test_fix_rounds"] = "unlimited"
-        save_user_env_value("OO_MAX_TEST_FIX_ROUNDS", "unlimited")
-        print(f"test/fix goal mode: fix until fixed (saved to {USER_ENV_PATH})")
+        self.config.setdefault("limits", {})["max_test_fix_rounds"] = GOAL_MAX_TEST_FIX_ROUNDS
+        save_user_env_value("OO_MAX_TEST_FIX_ROUNDS", str(GOAL_MAX_TEST_FIX_ROUNDS))
+        print(f"test/fix goal max rounds: {GOAL_MAX_TEST_FIX_ROUNDS} (saved to {USER_ENV_PATH})")
 
     def _apply_backend(self, backend: str) -> None:
         self.config["agent_backend"]["default"] = backend
@@ -437,7 +440,7 @@ class InteractiveCLI:
             print(f"active task no longer exists: {self.active_task_id}")
             self.active_task_id = None
             return
-        final_delivery = self._latest_artifact_path(self.active_task_id, "final_delivery.md")
+        final_delivery = self._latest_artifact_path(self.active_task_id, "final_delivery.json")
         print(f"task_id: {task['task_id']}")
         print(f"status: {task['status']}")
         print(f"phase: {task['current_phase']}")
@@ -449,7 +452,7 @@ class InteractiveCLI:
         else:
             success_path = self._success_path(self.active_task_id)
             if success_path:
-                final_delivery = success_path / "final_delivery.md"
+                final_delivery = success_path / "final_delivery.json"
                 if final_delivery.exists():
                     print(f"final_delivery: {final_delivery}")
                 print(f"success_path: {success_path}")
@@ -586,13 +589,12 @@ class InteractiveCLI:
         if latest_repo:
             lines.append(f"- latest_agent_repo_workspace: {latest_repo}")
         for artifact_type in (
-            "final_delivery.md",
+            "final_delivery.json",
             "usage_guide.md",
             "success_path.md",
             "artifacts_manifest.md",
             "merged_patch.diff",
-            "merged_patch_metadata.md",
-            "merge_report.md",
+            "merged_patch_metadata.json",
             "patch.diff",
             "fix_patch.diff",
             "response.md",
@@ -607,7 +609,7 @@ class InteractiveCLI:
                 "Do not replace known concrete paths with placeholders such as /path/to/merged_patch.diff.",
             ]
         )
-        for artifact_type in ("final_delivery.md", "usage_guide.md", "response.md"):
+        for artifact_type in ("final_delivery.json", "usage_guide.md", "response.md"):
             path = self._latest_artifact_path(task_id, artifact_type)
             if path:
                 lines.extend(["", f"Historical {artifact_type} path: {path}", self._read_excerpt(path)])
@@ -640,17 +642,16 @@ class InteractiveCLI:
             lines.append(f"Historical latest_agent_repo_workspace: {latest_repo}")
         for artifact_type in (
             "merged_patch.diff",
-            "merged_patch_metadata.md",
-            "merge_report.md",
+            "merged_patch_metadata.json",
             "patch.diff",
             "fix_patch.diff",
         ):
             path = self._latest_artifact_path(task_id, artifact_type)
             if path:
                 lines.append(f"Historical {artifact_type} path: {path}")
-        final_delivery = self._latest_artifact_path(task_id, "final_delivery.md")
+        final_delivery = self._latest_artifact_path(task_id, "final_delivery.json")
         if final_delivery:
-            lines.extend(["", f"Historical final_delivery.md path: {final_delivery}"])
+            lines.extend(["", f"Historical final_delivery.json path: {final_delivery}"])
             lines.extend(["Historical final delivery excerpt:", self._read_excerpt(final_delivery)])
         decisions = self.orchestrator.repository.list_judge_decisions(task_id)[-3:]
         if decisions:
@@ -722,7 +723,7 @@ class InteractiveCLI:
         success_path = self.orchestrator.delivery_success_path(task_id)
         if success_path:
             return success_path
-        final_delivery = self._latest_artifact_path(task_id, "final_delivery.md")
+        final_delivery = self._latest_artifact_path(task_id, "final_delivery.json")
         return final_delivery.parent if final_delivery else None
 
     def _clean_task(self) -> None:
@@ -769,9 +770,9 @@ class InteractiveCLI:
 
     def _task_result_summary(self, task_id: str) -> str:
         success_path = self._success_path(task_id)
-        if success_path and (success_path / "final_delivery.md").exists():
+        if success_path and (success_path / "final_delivery.json").exists():
             return "delivery"
-        if self._latest_artifact_path(task_id, "final_delivery.md"):
+        if self._latest_artifact_path(task_id, "final_delivery.json"):
             return "delivery"
         if self._latest_artifact_path(task_id, "response.md"):
             return "response"

@@ -58,6 +58,18 @@ def output_template_content(
         return _decision_template(role=role, phase=phase, agent_id=agent_id)
     if relative_name == "tester_result.json":
         return _tester_result_template()
+    if relative_name == "review_result.json":
+        return _review_result_template()
+    if relative_name == "peer_review_result.json":
+        return _peer_review_result_template()
+    if relative_name == "todo_breakdown.json":
+        return _todo_breakdown_template()
+    if relative_name == "selected_plan.json":
+        return _selected_plan_template()
+    if relative_name == "merged_patch_metadata.json":
+        return _merged_patch_metadata_template()
+    if relative_name == "final_delivery.json":
+        return _final_delivery_template()
     if relative_name.endswith(".md"):
         return _markdown_template(relative_name, role=role, phase=phase, agent_id=agent_id)
     return f"{TEMPLATE_PENDING_LINE}\n\nReplace this Harness output template with `{relative_name}` content.\n"
@@ -102,9 +114,12 @@ def _decision_template(*, role: str, phase: str, agent_id: str) -> str:
     return (
         json.dumps(
             {
+                "schema_version": 1,
+                "decision_code": TEMPLATE_PENDING_VALUE,
                 "decision": TEMPLATE_PENDING_VALUE,
-                "evidence": {},
-                "reason": "Replace this Harness output template with the actual judge decision.",
+                "summary": "Replace this Harness output template with the judge decision summary.",
+                "reason": "Replace this Harness output template with the actual judge decision reason.",
+                "evidence": [],
                 "role": role,
                 "phase": phase,
                 "agent_id": agent_id,
@@ -125,10 +140,176 @@ def _tester_result_template() -> str:
                 "status": TEMPLATE_PENDING_VALUE,
                 "next_action": TEMPLATE_PENDING_VALUE,
                 "failure_type": TEMPLATE_PENDING_VALUE,
+                "environment_dependency_issue": TEMPLATE_PENDING_VALUE,
                 "summary": "Replace this Harness output template with the tester decision.",
                 "setup_commands_run": [],
                 "test_commands_run": [],
+                "oracle_results": [
+                    {
+                        "oracle_id": TEMPLATE_PENDING_VALUE,
+                        "status": TEMPLATE_PENDING_VALUE,
+                        "evidence": "Replace with concrete command/static evidence for this oracle.",
+                        "commands_run": [],
+                        "output_excerpt": "",
+                    }
+                ],
                 "remaining_blockers": [],
+                TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def _review_result_template() -> str:
+    return (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "review_decision_code": TEMPLATE_PENDING_VALUE,
+                "review_status": TEMPLATE_PENDING_VALUE,
+                "summary": "Replace this Harness output template with the reviewer decision summary.",
+                "findings": [],
+                "required_changes": [],
+                "acceptance_oracle_changes": [],
+                "environment_check": {
+                    "attempted": TEMPLATE_PENDING_VALUE,
+                    "status": TEMPLATE_PENDING_VALUE,
+                    "commands_run": [],
+                    "fixable": TEMPLATE_PENDING_VALUE,
+                    "blocking_reason": "",
+                },
+                TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def _peer_review_result_template() -> str:
+    return (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "peer_review_code": TEMPLATE_PENDING_VALUE,
+                "peer_review_status": TEMPLATE_PENDING_VALUE,
+                "summary": "Replace this Harness output template with the peer-review summary.",
+                "findings": [],
+                "required_changes": [],
+                TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def _todo_breakdown_template() -> str:
+    return (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "todos": [
+                    {
+                        "id": TEMPLATE_PENDING_VALUE,
+                        "title": TEMPLATE_PENDING_VALUE,
+                        "owner_role": "executor",
+                        "status": "pending",
+                        "acceptance_criteria": [],
+                    }
+                ],
+                "risks": [],
+                TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def _selected_plan_template() -> str:
+    return (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "selected_plan_id": TEMPLATE_PENDING_VALUE,
+                "summary": "Replace this Harness output template with the selected plan summary.",
+                "source_artifacts": [],
+                "execution_order": [],
+                "acceptance_criteria": [],
+                "acceptance_oracles": [
+                    {
+                        "id": TEMPLATE_PENDING_VALUE,
+                        "description": "Replace with the user-visible behavior to verify.",
+                        "kind": "runtime",
+                        "required": True,
+                        "commands": [],
+                        "expected_exception": "",
+                        "must_contain": [],
+                        "must_not_contain": [],
+                        "semantic_assertions": [],
+                        "failure_signal": "Replace with the observable failure that means this oracle failed.",
+                        "evidence_hint": "Replace with the exact evidence tester should capture.",
+                    }
+                ],
+                TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def _merged_patch_metadata_template() -> str:
+    return (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "patch_artifact": "merged_patch.diff",
+                "round_id": TEMPLATE_PENDING_VALUE,
+                "base_round": TEMPLATE_PENDING_VALUE,
+                "base_task_id": TEMPLATE_PENDING_VALUE,
+                "base_source_type": TEMPLATE_PENDING_VALUE,
+                "base_source_path": TEMPLATE_PENDING_VALUE,
+                "apply_target": TEMPLATE_PENDING_VALUE,
+                "patch_scope": "merged_authoritative",
+                "changed_files": [],
+                "expected_apply_command": "git apply --whitespace=nowarn merged_patch.diff",
+                "compatibility_notes": "",
+                "merge_report": {
+                    "merge_strategy": TEMPLATE_PENDING_VALUE,
+                    "selected_candidate_artifacts": [],
+                    "rejected_candidate_artifacts": [],
+                    "conflict_handling": TEMPLATE_PENDING_VALUE,
+                    "ready_for_testing": TEMPLATE_PENDING_VALUE,
+                },
+                TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def _final_delivery_template() -> str:
+    return (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "final_delivery_code": TEMPLATE_PENDING_VALUE,
+                "status": TEMPLATE_PENDING_VALUE,
+                "summary": "Replace this Harness output template with the final delivery summary.",
+                "delivered_artifacts": [],
+                "verification": [],
+                "known_risks": [],
                 TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
             },
             ensure_ascii=False,

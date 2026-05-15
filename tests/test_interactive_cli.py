@@ -46,7 +46,7 @@ def _config(tmp_path: Path) -> dict:
         },
         "limits": {
             "max_planning_rounds": 3,
-            "max_test_fix_rounds": 5,
+            "max_test_fix_rounds": 10,
             "max_review_rounds": 3,
             "max_agent_retry": 2,
         },
@@ -213,7 +213,7 @@ def test_delivery_handoff_prefers_source_dir_and_requirements(monkeypatch, tmp_p
     source_dir.mkdir(parents=True)
     (source_dir / "requirements.txt").write_text("pytest\n", encoding="utf-8")
     (source_dir / "app.py").write_text("print('ok')\n", encoding="utf-8")
-    final_delivery = delivery_dir / "final_delivery.md"
+    final_delivery = delivery_dir / "final_delivery.json"
     final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
     usage_guide = delivery_dir / "usage_guide.md"
     usage_guide.write_text("```bash\npython app.py\n```\n", encoding="utf-8")
@@ -234,7 +234,7 @@ def test_delivery_handoff_prefers_one_command_installer(tmp_path: Path) -> None:
     (source_dir / "requirements.txt").write_text("pytest\n", encoding="utf-8")
     (source_dir / "install_dependencies.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     (source_dir / "tests").mkdir()
-    final_delivery = delivery_dir / "final_delivery.md"
+    final_delivery = delivery_dir / "final_delivery.json"
     final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
     usage_guide = delivery_dir / "usage_guide.md"
     usage_guide.write_text("```bash\npython3 -m pytest tests/\n```\n", encoding="utf-8")
@@ -250,7 +250,7 @@ def test_delivery_handoff_skips_non_executable_doc_command_and_infers_python_ent
     source_dir = delivery_dir / "source"
     source_dir.mkdir(parents=True)
     (source_dir / "main.py").write_text("print('ok')\n", encoding="utf-8")
-    final_delivery = delivery_dir / "final_delivery.md"
+    final_delivery = delivery_dir / "final_delivery.json"
     final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
     usage_guide = delivery_dir / "usage_guide.md"
     usage_guide.write_text("```bash\npython missing.py\n```\n", encoding="utf-8")
@@ -265,7 +265,7 @@ def test_delivery_handoff_infers_npm_script_when_available(monkeypatch, tmp_path
     source_dir = delivery_dir / "source"
     source_dir.mkdir(parents=True)
     (source_dir / "package.json").write_text('{"scripts":{"start":"vite --host 127.0.0.1"}}', encoding="utf-8")
-    final_delivery = delivery_dir / "final_delivery.md"
+    final_delivery = delivery_dir / "final_delivery.json"
     final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
     monkeypatch.setattr(handoff_module.shutil, "which", lambda command: f"/usr/bin/{command}" if command == "npm" else None)
 
@@ -280,7 +280,7 @@ def test_delivery_handoff_uses_venv_python_for_script_commands_with_installer(tm
     source_dir.mkdir(parents=True)
     (source_dir / "install_dependencies.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     (source_dir / "app.py").write_text("print('ok')\n", encoding="utf-8")
-    final_delivery = delivery_dir / "final_delivery.md"
+    final_delivery = delivery_dir / "final_delivery.json"
     final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
     usage_guide = delivery_dir / "usage_guide.md"
     usage_guide.write_text("```bash\npython3 app.py\n```\n", encoding="utf-8")
@@ -304,7 +304,7 @@ def test_format_total_elapsed_uses_task_timestamps() -> None:
 def test_dashboard_tty_task_completed_does_not_duplicate_handoff(monkeypatch, tmp_path: Path) -> None:
     delivery_dir = tmp_path / "deliver" / "project-12345678"
     delivery_dir.mkdir(parents=True)
-    final_delivery = delivery_dir / "final_delivery.md"
+    final_delivery = delivery_dir / "final_delivery.json"
     final_delivery.write_text("# Final Delivery\n", encoding="utf-8")
     output = _TtyBuffer()
     monkeypatch.setattr(sys, "stdout", output)
@@ -623,16 +623,17 @@ def test_backend_completion_includes_gemini_and_qwen(tmp_path: Path) -> None:
     assert [item.text for item in cli.completion_items("/go")] == ["/goal"]
 
 
-def test_goal_command_sets_unlimited_fix_rounds(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_goal_command_sets_ten_fix_rounds(monkeypatch, tmp_path: Path, capsys) -> None:
     saved: dict[str, str] = {}
     monkeypatch.setattr(interactive_module, "save_user_env_value", lambda key, value: saved.update({key: value}))
     cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
+    cli.config["limits"]["max_test_fix_rounds"] = "unlimited"
 
     cli._handle_command("/goal")
 
-    assert cli.config["limits"]["max_test_fix_rounds"] == "unlimited"
-    assert saved == {"OO_MAX_TEST_FIX_ROUNDS": "unlimited"}
-    assert "fix until fixed" in capsys.readouterr().out
+    assert cli.config["limits"]["max_test_fix_rounds"] == 10
+    assert saved == {"OO_MAX_TEST_FIX_ROUNDS": "10"}
+    assert "goal max rounds: 10" in capsys.readouterr().out
 
 
 def test_command_line_for_text_accepts_one_shot_slash_command(tmp_path: Path) -> None:
@@ -757,6 +758,7 @@ def test_main_prompt_file_supplies_one_shot_prompt(monkeypatch, tmp_path: Path) 
     def fake_run_once(orchestrator, prompt: str, workflow_type: str) -> int:
         captured["prompt"] = prompt
         captured["workflow_type"] = workflow_type
+        captured["fix_round_limit_callback"] = orchestrator.fix_round_limit_callback
         return 0
 
     monkeypatch.setattr(main_module, "load_config", fake_load_config)
@@ -781,7 +783,7 @@ def test_main_prompt_file_supplies_one_shot_prompt(monkeypatch, tmp_path: Path) 
 
     assert main_module.main() == 0
 
-    assert captured == {"prompt": "fix from file", "workflow_type": "bugfix"}
+    assert captured == {"prompt": "fix from file", "workflow_type": "bugfix", "fix_round_limit_callback": None}
 
 
 def test_main_rejects_prompt_file_with_extra_prompt_args(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -1199,7 +1201,7 @@ def test_clean_removes_selected_task_intermediate_files_and_keeps_success_path(t
 
     success_path = cli.orchestrator._delivery_project_dir(task_id, "Build a weather app")
     success_path.mkdir(parents=True)
-    (success_path / "final_delivery.md").write_text("done", encoding="utf-8")
+    (success_path / "final_delivery.json").write_text("done", encoding="utf-8")
     (success_path / "success_path.md").write_text(f"success_path: {success_path}\n", encoding="utf-8")
     workspace_task_dir = Path(cli.config["system"]["workspace_root"]) / task_id
     artifact_task_dir = Path(cli.config["system"]["artifact_root"]) / task_id
@@ -1215,7 +1217,7 @@ def test_clean_removes_selected_task_intermediate_files_and_keeps_success_path(t
     assert "success_path:" in output
     assert not workspace_task_dir.exists()
     assert not artifact_task_dir.exists()
-    assert (success_path / "final_delivery.md").exists()
+    assert (success_path / "final_delivery.json").exists()
 
 
 def test_clean_refuses_without_final_success_path(tmp_path: Path, capsys) -> None:

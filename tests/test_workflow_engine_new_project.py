@@ -49,7 +49,16 @@ def _tester_result(tmp_path: Path, status: str) -> HarnessTesterResult:
         "source_bug": "fix_code",
         "environment_blocked": "block_task",
     }[status]
-    return HarnessTesterResult(status, next_action, status, status, tmp_path / "tester_result.json", {"status": status})
+    env_issue = status == "environment_blocked"
+    return HarnessTesterResult(
+        status,
+        next_action,
+        status,
+        status,
+        tmp_path / "tester_result.json",
+        {"status": status, "environment_dependency_issue": env_issue},
+        env_issue,
+    )
 
 
 def test_orchestrator_mock_flow_completes_and_generates_delivery(tmp_path: Path) -> None:
@@ -65,11 +74,11 @@ def test_orchestrator_mock_flow_completes_and_generates_delivery(tmp_path: Path)
     assert task_started.status == RUNNING
     assert task["status"] == "COMPLETED"
     assert final_delivery.exists()
-    assert final_delivery.name == "final_delivery.md"
+    assert final_delivery.name == "final_delivery.json"
     assert "completed" in final_delivery.read_text(encoding="utf-8")
     phases = [phase["phase_type"] for phase in orchestrator.repository.list_phases(task_id)]
     assert FINAL_JUDGEMENT not in phases
-    assert orchestrator.repository.list_artifacts(task_id, "final_delivery.md")
+    assert orchestrator.repository.list_artifacts(task_id, "final_delivery.json")
     usage_guides = orchestrator.repository.list_artifacts(task_id, "usage_guide.md")
     assert usage_guides
     usage_guide = Path(usage_guides[-1]["path"])
@@ -150,6 +159,41 @@ def test_unlimited_new_project_test_fix_rounds_continue_until_pass(monkeypatch, 
 
     assert validation_rounds == list(range(8))
     assert tested_rounds == list(range(8))
+
+
+def test_execution_test_loop_rechecks_plan_before_sixth_fix_attempt(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_test_fix_rounds"] = 10
+    config["limits"]["fix_tester_plan_recheck_after"] = 5
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("build repeatedly failing project", workflow_type=NEW_PROJECT)
+    calls: list[tuple[str, str, int]] = []
+    fix_rounds: list[int] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append((role, phase, round_id))
+        if phase == FIXING:
+            fix_rounds.append(round_id)
+        if phase in {PLANNING_REVISION, PLAN_REVIEW}:
+            assert kwargs["phase_scope"]["loop_type"] == "fix_tester_plan_recheck"
+        return []
+
+    def fake_testing(task_id: str, phase: str, round_id: int, user_prompt: str, **kwargs) -> HarnessTesterResult:
+        return _tester_result(tmp_path, "tests_passed" if len(fix_rounds) >= 6 else "source_bug")
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+    monkeypatch.setattr(orchestrator, "run_patch_merge", lambda *args, **kwargs: True)
+    monkeypatch.setattr(orchestrator.workflow_engine, "plan_review_approved", lambda results: True)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_testing_until_tester_decision", fake_testing)
+
+    orchestrator._run_execution_test_loop(task_id, "build repeatedly failing project")
+
+    recheck_index = next(index for index, call in enumerate(calls) if call[:2] == ("planner", PLANNING_REVISION))
+    sixth_fix_index = calls.index(("executor", FIXING, 6))
+    assert recheck_index < sixth_fix_index
+    assert any(call[:2] == ("reviewer", PLAN_REVIEW) for call in calls[recheck_index:sixth_fix_index])
+    assert fix_rounds == list(range(1, 7))
+
 
 def test_unlimited_failed_new_project_resume_starts_after_highest_round(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
@@ -286,6 +330,41 @@ def test_regression_round_ids_stay_stable_after_fix_limit_extension(monkeypatch,
         {"loop_type": "regression_test_fix", "parent_round_id": 1, "iteration_id": 1},
         {"loop_type": "regression_test_fix", "parent_round_id": 1, "iteration_id": 2},
     ]
+
+
+def test_regression_test_fix_loop_rechecks_plan_before_sixth_review_fix(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_test_fix_rounds"] = 10
+    config["limits"]["fix_tester_plan_recheck_after"] = 5
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("review fix repeats", workflow_type=BUGFIX)
+    calls: list[tuple[str, str, int]] = []
+    review_fix_rounds: list[int] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append((role, phase, round_id))
+        if phase == REVIEW_FIXING:
+            review_fix_rounds.append(round_id)
+        if phase in {PLANNING_REVISION, PLAN_REVIEW}:
+            assert kwargs["phase_scope"]["loop_type"] == "fix_tester_plan_recheck"
+        return []
+
+    def fake_testing(task_id: str, phase: str, round_id: int, user_prompt: str, **kwargs) -> HarnessTesterResult:
+        return _tester_result(tmp_path, "tests_passed" if len(review_fix_rounds) >= 5 else "source_bug")
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+    monkeypatch.setattr(orchestrator, "run_patch_merge", lambda *args, **kwargs: True)
+    monkeypatch.setattr(orchestrator.workflow_engine, "plan_review_approved", lambda results: True)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_testing_until_tester_decision", fake_testing)
+
+    orchestrator._run_regression_test_fix_loop(task_id, "review fix repeats", review_round_id=1, merge_ok=True)
+
+    recheck_index = next(index for index, call in enumerate(calls) if call[:2] == ("planner", PLANNING_REVISION))
+    sixth_review_fix_index = calls.index(("executor", REVIEW_FIXING, 6))
+    assert recheck_index < sixth_review_fix_index
+    assert any(call[:2] == ("reviewer", PLAN_REVIEW) for call in calls[recheck_index:sixth_review_fix_index])
+    assert review_fix_rounds == [2, 3, 4, 5, 6]
+
 
 def test_same_role_agents_start_concurrently_when_configured(tmp_path: Path) -> None:
     config = _config(tmp_path)

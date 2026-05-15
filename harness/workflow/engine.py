@@ -1,11 +1,22 @@
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
 from typing import Any, Protocol
 
 from harness.agents.result import AgentRunResult
+from harness.artifacts.acceptance import (
+    SELECTED_PLAN_ARTIFACT,
+    acceptance_oracles_from_payload,
+    load_selected_plan,
+    validate_acceptance_oracles,
+    validate_tester_oracle_results,
+)
+from harness.artifacts.peer_review import (
+    PEER_REVIEW_RESULT_ARTIFACT,
+    load_peer_review_result,
+    peer_review_code_from_payload,
+)
+from harness.artifacts.review_decision import REVIEW_RESULT_ARTIFACT, load_review_result, review_decision_code_from_payload
 from harness.contracts.role_contracts import required_outputs_for
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressEvent
@@ -116,8 +127,15 @@ class WorkflowEngine:
             self.run_bugfix_planning_block(task_id, user_prompt)
         round_id = start_round
         attempts = 0
+        fix_attempts_since_plan_recheck = 0
         while True:
             while max_rounds is None or attempts < max_rounds:
+                fix_attempts_since_plan_recheck = self.maybe_run_fix_tester_plan_recheck(
+                    task_id,
+                    user_prompt,
+                    parent_round_id=round_id - 1,
+                    failed_fix_attempts=fix_attempts_since_plan_recheck,
+                )
                 o.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
                 merge_ok = o.run_patch_merge(task_id, round_id, user_prompt)
                 if merge_ok:
@@ -128,6 +146,7 @@ class WorkflowEngine:
                         self.raise_tester_environment_blocked(tester_decision)
                 round_id += 1
                 attempts += 1
+                fix_attempts_since_plan_recheck += 1
                 continue
             else:
                 updated_max_rounds = self.resolve_test_fix_round_limit(task_id, max_rounds)
@@ -281,26 +300,25 @@ class WorkflowEngine:
         saw_status = False
         for result in results:
             for artifact in result.artifacts:
-                if artifact.artifact_type != "peer_review.md" or not artifact.path.exists():
+                if artifact.artifact_type != PEER_REVIEW_RESULT_ARTIFACT or not artifact.path.exists():
                     continue
-                text = artifact.path.read_text(encoding="utf-8", errors="replace").lower()
-                if re.search(r"(?m)^\s*peer_review_code\s*:\s*(-?1|2|3|-2|-3)\s*$", text):
+                payload = load_peer_review_result(artifact.path)
+                code = peer_review_code_from_payload(payload)
+                status = str(payload.get("peer_review_status") or payload.get("status") or "").strip().lower()
+                if code != 0:
                     return False
-                if re.search(r"(?m)^\s*peer_review_code\s*:\s*0\s*$", text):
-                    saw_status = True
-                if "peer_review_status: changes_requested" in text or "status: changes_requested" in text:
+                if status in {"changes_requested", "blocked"}:
                     return False
-                if "peer_review_status: satisfied" in text or "status: satisfied" in text:
+                if status == "satisfied":
                     saw_status = True
         return saw_status
 
     def plan_review_approved(self, results: list[AgentRunResult]) -> bool:
         for result in results:
             for artifact in result.artifacts:
-                if artifact.artifact_type != "review_report.md" or not artifact.path.exists():
+                if artifact.artifact_type != REVIEW_RESULT_ARTIFACT or not artifact.path.exists():
                     continue
-                text = artifact.path.read_text(encoding="utf-8", errors="replace").lower()
-                if re.search(r"(?m)^\s*review_decision_code\s*:\s*0\s*$", text):
+                if review_decision_code_from_payload(load_review_result(artifact.path)) == 0:
                     return True
         return False
 
@@ -312,10 +330,12 @@ class WorkflowEngine:
             o.run_role_phase("executor", EXECUTION, 0, required_outputs_for("executor", EXECUTION), user_prompt)
             merge_ok = o.run_patch_merge(task_id, 0, user_prompt)
             round_id = 0
+            fix_attempts_since_plan_recheck = 0
         else:
             round_id = start_round
             o.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
             merge_ok = o.run_patch_merge(task_id, round_id, user_prompt)
+            fix_attempts_since_plan_recheck = 0
         end_round = self.execution_test_end_round(start_round, max_rounds)
         while True:
             while end_round is None or round_id <= end_round:
@@ -325,9 +345,19 @@ class WorkflowEngine:
                         return
                     if tester_decision.environment_blocked:
                         self.raise_tester_environment_blocked(tester_decision)
+                    if round_id > 0:
+                        fix_attempts_since_plan_recheck += 1
+                elif round_id > 0:
+                    fix_attempts_since_plan_recheck += 1
                 if end_round is not None and round_id >= end_round:
                     break
                 next_round = round_id + 1
+                fix_attempts_since_plan_recheck = self.maybe_run_fix_tester_plan_recheck(
+                    task_id,
+                    user_prompt,
+                    parent_round_id=round_id,
+                    failed_fix_attempts=fix_attempts_since_plan_recheck,
+                )
                 o.run_role_phase("executor", FIXING, next_round, required_outputs_for("executor", FIXING), user_prompt)
                 merge_ok = o.run_patch_merge(task_id, next_round, user_prompt)
                 round_id = next_round
@@ -337,6 +367,12 @@ class WorkflowEngine:
             max_rounds = updated_max_rounds
             end_round = self.execution_test_end_round(start_round, max_rounds)
             next_round = round_id + 1
+            fix_attempts_since_plan_recheck = self.maybe_run_fix_tester_plan_recheck(
+                task_id,
+                user_prompt,
+                parent_round_id=round_id,
+                failed_fix_attempts=fix_attempts_since_plan_recheck,
+            )
             o.run_role_phase("executor", FIXING, next_round, required_outputs_for("executor", FIXING), user_prompt)
             merge_ok = o.run_patch_merge(task_id, next_round, user_prompt)
             round_id = next_round
@@ -446,12 +482,11 @@ class WorkflowEngine:
     def review_approved(self, results: list[AgentRunResult]) -> bool:
         for result in results:
             for artifact in result.artifacts:
-                if artifact.artifact_type != "review_report.md" or not artifact.path.exists():
+                if artifact.artifact_type != REVIEW_RESULT_ARTIFACT or not artifact.path.exists():
                     continue
-                text = artifact.path.read_text(encoding="utf-8", errors="replace")
-                if not re.search(r"(?m)^\s*review_decision_code\s*:\s*0\s*$", text):
+                payload = load_review_result(artifact.path)
+                if review_decision_code_from_payload(payload) != 0:
                     continue
-                payload = self._extract_review_verdict_json(text)
                 if self._review_verdict_json_approved(payload):
                     return True
         return False
@@ -474,9 +509,9 @@ class WorkflowEngine:
     def review_environment_block_reason(self, results: list[AgentRunResult]) -> str | None:
         for result in results:
             for artifact in result.artifacts:
-                if artifact.artifact_type != "review_report.md" or not artifact.path.exists():
+                if artifact.artifact_type != REVIEW_RESULT_ARTIFACT or not artifact.path.exists():
                     continue
-                payload = self._extract_review_verdict_json(artifact.path.read_text(encoding="utf-8", errors="replace"))
+                payload = load_review_result(artifact.path)
                 environment_check = payload.get("environment_check")
                 if not isinstance(environment_check, dict):
                     continue
@@ -488,25 +523,11 @@ class WorkflowEngine:
                 return text or "reviewer reported a blocked runtime environment with no reason"
         return None
 
-    def _extract_review_verdict_json(self, content: str) -> dict[str, Any]:
-        marker = "## Review Verdict JSON"
-        marker_index = content.find(marker)
-        if marker_index < 0:
-            return {}
-        block = content[marker_index + len(marker) :]
-        match = re.search(r"```json\s*(.*?)```", block, re.DOTALL)
-        if not match:
-            return {}
-        try:
-            payload = json.loads(match.group(1))
-        except json.JSONDecodeError:
-            return {}
-        return payload if isinstance(payload, dict) else {}
-
     def run_regression_test_fix_loop(self, task_id: str, user_prompt: str, review_round_id: int, merge_ok: bool) -> None:
         o = self.runtime
         max_rounds = self.max_test_fix_rounds()
         test_round_id = 0
+        fix_attempts_since_plan_recheck = 0
         while True:
             while max_rounds is None or test_round_id < max_rounds:
                 phase_round_id = self.regression_phase_round_id(review_round_id, test_round_id, max_rounds)
@@ -527,8 +548,18 @@ class WorkflowEngine:
                         return
                     if tester_decision.environment_blocked:
                         self.raise_tester_environment_blocked(tester_decision)
+                    fix_attempts_since_plan_recheck += 1
+                else:
+                    fix_attempts_since_plan_recheck += 1
 
                 next_phase_round = max(phase_round_id + 1, self.next_phase_round_id(task_id))
+                fix_attempts_since_plan_recheck = self.maybe_run_fix_tester_plan_recheck(
+                    task_id,
+                    user_prompt,
+                    parent_round_id=phase_round_id,
+                    failed_fix_attempts=fix_attempts_since_plan_recheck,
+                )
+                next_phase_round = max(next_phase_round, self.next_phase_round_id(task_id))
                 o.run_role_phase(
                     "executor",
                     REVIEW_FIXING,
@@ -560,8 +591,9 @@ class WorkflowEngine:
         o = self.runtime
         max_repairs = self.max_tester_environment_repair_rounds()
         last_error = "missing tester_result.json"
+        next_loop_type = "tester_result_retry"
         for repair_attempt in range(max_repairs + 1):
-            scoped_phase = self.tester_result_retry_scope(phase_scope, repair_attempt)
+            scoped_phase = self.tester_result_retry_scope(phase_scope, repair_attempt, loop_type=next_loop_type)
             results = o.run_role_phase(
                 "tester",
                 phase,
@@ -571,21 +603,28 @@ class WorkflowEngine:
                 phase_scope=scoped_phase,
             )
             try:
-                decision = self.tester_decision_from_results(results)
+                decision = self.tester_decision_from_results(task_id, results)
             except TesterResultError as exc:
                 last_error = str(exc)
+                next_loop_type = "tester_result_retry"
                 self.emit_tester_result_invalid(task_id, phase, round_id, repair_attempt, last_error)
                 continue
             self.emit_tester_decision(task_id, phase, round_id, decision)
+            if decision.has_environment_dependency_issue:
+                last_error = decision.summary or decision.failure_type or "tester reported environment dependency issue"
+                next_loop_type = "tester_environment_repair"
+                self.emit_tester_environment_repair_requested(task_id, phase, round_id, repair_attempt, decision)
+                continue
             return decision
         raise TaskFailedError(
-            "Tester did not produce a valid tester_result.json "
+            "Tester did not clear environment dependencies or produce a valid tester_result.json "
             f"after {max_repairs + 1} attempt(s); last_error={last_error}"
         )
 
-    def tester_decision_from_results(self, results: list[AgentRunResult]) -> TesterResult:
+    def tester_decision_from_results(self, task_id: str, results: list[AgentRunResult]) -> TesterResult:
         decisions: list[TesterResult] = []
         parse_errors: list[str] = []
+        selected_oracles = self._latest_acceptance_oracles(task_id)
         for result in results:
             artifact = next(
                 (artifact for artifact in result.artifacts if artifact.artifact_type == TESTER_RESULT_ARTIFACT),
@@ -595,16 +634,41 @@ class WorkflowEngine:
                 parse_errors.append(f"{result.agent_id} did not produce {TESTER_RESULT_ARTIFACT}")
                 continue
             try:
-                decisions.append(load_tester_result(artifact.path))
+                decision = load_tester_result(artifact.path)
+                oracle_errors = validate_tester_oracle_results(decision.payload, selected_oracles)
+                if oracle_errors:
+                    raise TesterResultError("; ".join(oracle_errors))
+                decisions.append(decision)
             except TesterResultError as exc:
                 parse_errors.append(str(exc))
         if not decisions:
             raise TesterResultError("; ".join(parse_errors) or f"missing {TESTER_RESULT_ARTIFACT}")
+        environment_issues = [decision for decision in decisions if decision.has_environment_dependency_issue]
+        if environment_issues:
+            return environment_issues[-1]
         for status in (SOURCE_BUG, ENVIRONMENT_BLOCKED, TESTS_PASSED):
             matching = [decision for decision in decisions if decision.status == status]
             if matching:
                 return matching[-1]
         raise TesterResultError(f"no recognized {TESTER_RESULT_ARTIFACT} decision")
+
+    def _latest_acceptance_oracles(self, task_id: str):
+        artifacts = self.runtime.repository.list_artifacts(task_id, SELECTED_PLAN_ARTIFACT)
+        for artifact in reversed(artifacts):
+            path = Path(artifact["path"])
+            if not path.exists() or not path.is_file():
+                continue
+            try:
+                payload = load_selected_plan(path)
+            except ValueError as exc:
+                raise TesterResultError(f"{SELECTED_PLAN_ARTIFACT} invalid: {exc}") from exc
+            oracle_errors = validate_acceptance_oracles(payload)
+            if oracle_errors:
+                raise TesterResultError(
+                    f"{SELECTED_PLAN_ARTIFACT} acceptance contract invalid: {'; '.join(oracle_errors)}"
+                )
+            return acceptance_oracles_from_payload(payload)
+        return ()
 
     def emit_tester_result_invalid(
         self,
@@ -640,6 +704,33 @@ class WorkflowEngine:
                 data={
                     "next_action": decision.next_action,
                     "failure_type": decision.failure_type,
+                    "environment_dependency_issue": decision.environment_dependency_issue,
+                    "oracle_results": list(decision.oracle_results),
+                    "artifact": str(decision.artifact_path),
+                },
+            )
+        )
+
+    def emit_tester_environment_repair_requested(
+        self,
+        task_id: str,
+        phase: str,
+        round_id: int,
+        repair_attempt: int,
+        decision: TesterResult,
+    ) -> None:
+        self.runtime.emit_progress(
+            ProgressEvent(
+                "tester_environment_repair_requested",
+                task_id=task_id,
+                phase=phase,
+                role="tester",
+                round_id=round_id,
+                attempt=repair_attempt,
+                status="RUNNING",
+                message=decision.summary or "Tester reported an environment dependency issue; rerunning tester repair loop.",
+                data={
+                    "failure_type": decision.failure_type,
                     "artifact": str(decision.artifact_path),
                 },
             )
@@ -649,15 +740,112 @@ class WorkflowEngine:
         reason = decision.summary or decision.failure_type or "tester reported environment_blocked"
         raise TaskFailedError(f"Tester blocked the task due to test environment: {reason}; artifact={decision.artifact_path}")
 
+    def should_recheck_fix_tester_plan(self, failed_fix_attempts: int) -> bool:
+        threshold = self.fix_tester_plan_recheck_after()
+        return threshold is not None and failed_fix_attempts >= threshold
+
+    def maybe_run_fix_tester_plan_recheck(
+        self,
+        task_id: str,
+        user_prompt: str,
+        *,
+        parent_round_id: int | None,
+        failed_fix_attempts: int,
+    ) -> int:
+        if not self.should_recheck_fix_tester_plan(failed_fix_attempts):
+            return failed_fix_attempts
+        self.run_fix_tester_plan_recheck(
+            task_id,
+            user_prompt,
+            parent_round_id=parent_round_id,
+            failed_fix_attempts=failed_fix_attempts,
+        )
+        return 0
+
+    def fix_tester_plan_recheck_after(self) -> int | None:
+        value = self.runtime.config.get("limits", {}).get("fix_tester_plan_recheck_after", 5)
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = 5
+        return parsed if parsed > 0 else None
+
+    def run_fix_tester_plan_recheck(
+        self,
+        task_id: str,
+        user_prompt: str,
+        *,
+        parent_round_id: int | None,
+        failed_fix_attempts: int,
+    ) -> None:
+        o = self.runtime
+        self.emit_fix_tester_plan_recheck_requested(task_id, parent_round_id, failed_fix_attempts)
+        max_rounds = max(1, int(o.config["limits"].get("max_planning_rounds", 3)))
+        for iteration_id in range(max_rounds):
+            round_id = self.next_phase_round_id(task_id)
+            phase_scope = self.phase_scope(
+                "fix_tester_plan_recheck",
+                parent_round_id=parent_round_id,
+                iteration_id=iteration_id,
+            )
+            o.run_role_phase(
+                "planner",
+                PLANNING_REVISION,
+                round_id,
+                required_outputs_for("planner", PLANNING_REVISION),
+                user_prompt,
+                agent_count_override=1,
+                phase_scope=phase_scope,
+            )
+            review_results = o.run_role_phase(
+                "reviewer",
+                PLAN_REVIEW,
+                round_id,
+                required_outputs_for("reviewer", PLAN_REVIEW),
+                user_prompt,
+                agent_count_override=1,
+                phase_scope=phase_scope,
+            )
+            if self.plan_review_approved(review_results):
+                return
+        raise TaskFailedError("Fix/test plan recheck was not approved")
+
+    def emit_fix_tester_plan_recheck_requested(
+        self,
+        task_id: str,
+        parent_round_id: int | None,
+        failed_fix_attempts: int,
+    ) -> None:
+        self.runtime.emit_progress(
+            ProgressEvent(
+                "fix_tester_plan_recheck_requested",
+                task_id=task_id,
+                phase=PLANNING_REVISION,
+                role="planner",
+                round_id=parent_round_id,
+                status="RUNNING",
+                message=(
+                    "Fix/test loop reached "
+                    f"{failed_fix_attempts} failed attempt(s); asking planner to recheck the selected plan."
+                ),
+                data={
+                    "failed_fix_attempts": failed_fix_attempts,
+                    "parent_round_id": parent_round_id,
+                },
+            )
+        )
+
     def tester_result_retry_scope(
         self,
         phase_scope: dict[str, int | str | None] | None,
         repair_attempt: int,
+        *,
+        loop_type: str = "tester_result_retry",
     ) -> dict[str, int | str | None] | None:
         if repair_attempt <= 0:
             return phase_scope
         scoped = dict(phase_scope or {})
-        scoped["loop_type"] = "tester_result_retry"
+        scoped["loop_type"] = loop_type
         scoped["iteration_id"] = repair_attempt
         return scoped
 
@@ -706,5 +894,5 @@ class WorkflowEngine:
         o.run_role_phase("communicator", DELIVERY, 0, required_outputs_for("communicator", DELIVERY), user_prompt)
         final_path = o.latest_final_delivery(task_id)
         if not final_path:
-            raise TaskFailedError("Communicator did not produce final_delivery.md")
+            raise TaskFailedError("Communicator did not produce final_delivery.json")
         return o.publish_delivery(task_id, final_path)

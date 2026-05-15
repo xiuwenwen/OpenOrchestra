@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import re
+import json
 from pathlib import Path
 from typing import Any
 
+from harness.artifacts.review_decision import REVIEW_RESULT_ARTIFACT, extract_review_decision_code
 from harness.artifacts.schemas import (
     ANY_PHASE,
     ARTIFACT_VISIBILITY_RULES,
@@ -13,6 +14,7 @@ from harness.artifacts.schemas import (
     ROUND_ANY,
     ROUND_BEFORE_CURRENT,
     ROUND_CURRENT,
+    ROUND_LATEST_COMPLETE_TEST,
     ROUND_LATEST_BEFORE_CURRENT_PER_TYPE,
     ROUND_LATEST_COMPLETE_JUDGE_BEFORE_CURRENT,
     ROUND_LATEST_COMPLETE_TEST_BEFORE_CURRENT,
@@ -73,6 +75,13 @@ class ArtifactVisibilityPolicy:
             artifact_types=TEST_REPORT_ARTIFACTS,
             source_phases=_phases(TESTING, REGRESSION_TESTING),
         )
+        latest_complete_test_round_any = self._latest_complete_artifact_round(
+            artifacts,
+            phases_by_id,
+            source_role="tester",
+            artifact_types=TEST_REPORT_ARTIFACTS,
+            source_phases=_phases(TESTING, REGRESSION_TESTING),
+        )
         latest_complete_judge_round = self._latest_complete_artifact_round_before(
             artifacts,
             phases_by_id,
@@ -106,6 +115,7 @@ class ArtifactVisibilityPolicy:
                     latest_planning_round=latest_planning_round,
                     rejected_plan_review_round=rejected_plan_review_round,
                     latest_complete_test_round=latest_complete_test_round,
+                    latest_complete_test_round_any=latest_complete_test_round_any,
                     latest_complete_judge_round=latest_complete_judge_round,
                 ):
                     continue
@@ -176,6 +186,7 @@ class ArtifactVisibilityPolicy:
         latest_planning_round: int | None,
         rejected_plan_review_round: int | None,
         latest_complete_test_round: int | None,
+        latest_complete_test_round_any: int | None,
         latest_complete_judge_round: int | None,
     ) -> bool:
         artifact_type = artifact["artifact_type"]
@@ -202,6 +213,7 @@ class ArtifactVisibilityPolicy:
             latest_planning_round=latest_planning_round,
             rejected_plan_review_round=rejected_plan_review_round,
             latest_complete_test_round=latest_complete_test_round,
+            latest_complete_test_round_any=latest_complete_test_round_any,
             latest_complete_judge_round=latest_complete_judge_round,
         )
 
@@ -214,6 +226,7 @@ class ArtifactVisibilityPolicy:
         latest_planning_round: int | None,
         rejected_plan_review_round: int | None,
         latest_complete_test_round: int | None,
+        latest_complete_test_round_any: int | None,
         latest_complete_judge_round: int | None,
     ) -> bool:
         if rule.round_policy == ROUND_ANY:
@@ -224,6 +237,8 @@ class ArtifactVisibilityPolicy:
             return latest_planning_round is not None and effective_round == latest_planning_round
         if rule.round_policy == ROUND_REJECTED_PLAN_REVIEW:
             return rejected_plan_review_round is not None and effective_round == rejected_plan_review_round
+        if rule.round_policy == ROUND_LATEST_COMPLETE_TEST:
+            return latest_complete_test_round_any is not None and effective_round == latest_complete_test_round_any
         if rule.round_policy == ROUND_LATEST_COMPLETE_TEST_BEFORE_CURRENT:
             return latest_complete_test_round is not None and effective_round == latest_complete_test_round
         if rule.round_policy == ROUND_LATEST_COMPLETE_JUDGE_BEFORE_CURRENT:
@@ -277,6 +292,34 @@ class ArtifactVisibilityPolicy:
         ]
         return max(complete_rounds, default=None)
 
+    def _latest_complete_artifact_round(
+        self,
+        artifacts: list[dict[str, Any]],
+        phases_by_id: dict[str, dict[str, Any]],
+        *,
+        source_role: str,
+        artifact_types: frozenset[str],
+        source_phases: frozenset[str],
+    ) -> int | None:
+        artifact_types_by_round: dict[int, set[str]] = {}
+        for artifact in artifacts:
+            if (artifact.get("role") or "") != source_role:
+                continue
+            artifact_type = str(artifact.get("artifact_type") or "")
+            if artifact_type not in artifact_types:
+                continue
+            phase_row = phases_by_id.get(artifact.get("phase_id") or "")
+            if not phase_row or phase_row.get("phase_type") not in source_phases or phase_row.get("round_id") is None:
+                continue
+            artifact_round = int(phase_row["round_id"])
+            artifact_types_by_round.setdefault(artifact_round, set()).add(artifact_type)
+        complete_rounds = [
+            artifact_round
+            for artifact_round, round_artifact_types in artifact_types_by_round.items()
+            if artifact_types <= round_artifact_types
+        ]
+        return max(complete_rounds, default=None)
+
     def _latest_rejected_plan_review_round(
         self,
         artifacts: list[dict[str, Any]],
@@ -285,7 +328,7 @@ class ArtifactVisibilityPolicy:
     ) -> int | None:
         latest_round: int | None = None
         for artifact in artifacts:
-            if (artifact.get("role") or "") != "reviewer" or artifact.get("artifact_type") != "review_report.md":
+            if (artifact.get("role") or "") != "reviewer" or artifact.get("artifact_type") != REVIEW_RESULT_ARTIFACT:
                 continue
             phase_row = phases_by_id.get(artifact.get("phase_id") or "")
             if not phase_row or phase_row.get("phase_type") != PLAN_REVIEW or phase_row.get("round_id") is None:
@@ -294,15 +337,15 @@ class ArtifactVisibilityPolicy:
             if current_round_id is not None and artifact_round >= current_round_id:
                 continue
             path = Path(str(artifact.get("path") or ""))
-            if not path.exists() or not self._review_report_requests_changes(path):
+            if not path.exists() or not self._review_result_requests_changes(path):
                 continue
             if latest_round is None or artifact_round > latest_round:
                 latest_round = artifact_round
         return latest_round
 
-    def _review_report_requests_changes(self, path: Path) -> bool:
-        text = path.read_text(encoding="utf-8", errors="replace").lower()
-        return bool(re.search(r"(?m)^\s*review_decision_code\s*:\s*(1|-1)\s*$", text))
+    def _review_result_requests_changes(self, path: Path) -> bool:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return extract_review_decision_code(text) in {1, -1}
 
     def _artifact_declared_round_id(self, artifact: dict[str, Any]) -> int | None:
         path = Path(str(artifact.get("path") or ""))
@@ -312,13 +355,33 @@ class ArtifactVisibilityPolicy:
             content = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return None
-        value = self._markdown_field(content, "round_id")
+        value = self._json_round_field(content)
+        if value is None:
+            value = self._markdown_field(content, "round_id")
+        if value is None:
+            value = self._markdown_field(content, "base_round")
         if value is None:
             return None
         try:
             return int(value)
         except ValueError:
             return None
+
+    def _json_round_field(self, content: str) -> str | None:
+        stripped = content.strip()
+        if not stripped.startswith("{"):
+            return None
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        for field_name in ("round_id", "base_round"):
+            value = payload.get(field_name)
+            if value is not None:
+                return str(value).strip()
+        return None
 
     def _markdown_field(self, content: str, field_name: str) -> str | None:
         prefix = f"{field_name}:"

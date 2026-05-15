@@ -469,6 +469,8 @@ class Orchestrator:
                 "status": result.status,
                 "next_action": result.next_action,
                 "failure_type": result.failure_type,
+                "environment_dependency_issue": result.environment_dependency_issue,
+                "oracle_results": list(result.oracle_results),
                 "summary": result.summary,
                 "artifact_path": str(path),
             }
@@ -575,6 +577,8 @@ class Orchestrator:
 
     def run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:
         if not self.patch_gate_service.latest_merged_patch_for_round(task_id, round_id):
+            if self.patch_gate_service.try_accept_noop_candidate_patch(task_id, round_id):
+                return True
             if self.patch_gate_service.try_skip_noop_candidate_patch(task_id, round_id):
                 return False
             if not self.patch_gate_service.try_deterministic_single_candidate_merge(task_id, round_id):
@@ -799,7 +803,7 @@ class Orchestrator:
         expected_success_path = self._delivery_project_dir(task_id, str(task["user_prompt"]))
         metadata.update({
             "expected_success_path": str(expected_success_path),
-            "expected_final_delivery": str(expected_success_path / "final_delivery.md"),
+            "expected_final_delivery": str(expected_success_path / "final_delivery.json"),
             "expected_usage_guide": str(expected_success_path / "usage_guide.md"),
             "expected_artifacts_manifest": str(expected_success_path / "artifacts_manifest.md"),
             "publish_timing": "Harness will publish these files after the communicator role succeeds.",

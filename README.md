@@ -6,6 +6,10 @@ OpenOrchestra 是一个面向成熟编码 Agent 的本地编排器。它协调 C
 
 OpenOrchestra is a local orchestration harness for mature coding agents such as Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. It coordinates planning, execution, testing, review, judgement, and delivery.
 
+OpenOrchestra 是一个基于 artifact 的 Coding Agent 协作编排内核。Agent 不直接聊天，而是通过版本化产物、客观门禁和结构化裁决协作。
+
+OpenOrchestra is an artifact-mediated orchestration kernel for coding agents. Agents collaborate through versioned artifacts, objective gates, and structured decisions rather than direct free-form chat.
+
 OpenOrchestra 不内置文件编辑、Shell、测试等工具。Agent 在隔离工作区里使用自己的工具完成读写和命令执行；OpenOrchestra 负责阶段流转、重试、超时、日志、artifact 校验、patch gate、judge gate 和最终交付。
 
 OpenOrchestra does not implement internal file, shell, edit, or test tools. Agents work inside isolated workspaces with their own tools; OpenOrchestra handles phase control, retries, timeouts, logs, artifact validation, patch gates, judge gates, and final delivery.
@@ -128,7 +132,7 @@ Common files:
 常见文件：
 
 ```text
-final_delivery.md
+final_delivery.json
 usage_guide.md
 success_path.md
 artifacts_manifest.md
@@ -254,8 +258,9 @@ PLANNING_PEER_REVIEW / PLANNING_REVISION loop
 PLAN_REVIEW
 EXECUTION
 PATCH_MERGE
-TESTING -> FIXING loop when tester_result.json reports source_bug
-REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop when tester_result.json reports source_bug
+TESTING -> TESTING environment repair loop when tester_result.json reports environment_dependency_issue=true
+TESTING -> FIXING loop when tester_result.json reports source_bug and environment_dependency_issue=false
+REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop when tester_result.json reports source_bug and environment_dependency_issue=false
 DELIVERY
 ```
 
@@ -268,14 +273,15 @@ Used to repair an existing project. It skips full planning, loops over fixing, p
 ```text
 FIXING
 PATCH_MERGE
-TESTING -> FIXING loop when tester_result.json reports source_bug
-REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop when tester_result.json reports source_bug
+TESTING -> TESTING environment repair loop when tester_result.json reports environment_dependency_issue=true
+TESTING -> FIXING loop when tester_result.json reports source_bug and environment_dependency_issue=false
+REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop when tester_result.json reports source_bug and environment_dependency_issue=false
 DELIVERY
 ```
 
-Tester owns test-environment repair and command execution. It must write `tester_result.json` with `status: tests_passed | source_bug | environment_blocked`; Harness consumes that result directly and does not run a separate post-tester test gate.
+Tester owns test-environment repair and command execution. It must write `tester_result.json` with `environment_dependency_issue: true | false` and `status: tests_passed | source_bug | environment_blocked`; Harness checks `environment_dependency_issue` before `status`, keeps environment problems in the tester repair loop, and does not run a separate post-tester test gate.
 
-tester 负责测试环境修复和命令执行，必须写入 `tester_result.json`，状态只能是 `tests_passed | source_bug | environment_blocked`；Harness 直接消费该结果，不再在 tester 后单独跑 test gate。
+tester 负责测试环境修复和命令执行，必须写入 `tester_result.json`，其中 `environment_dependency_issue` 表示环境依赖是否仍有问题，状态只能是 `tests_passed | source_bug | environment_blocked`；Harness 先消费 `environment_dependency_issue`，环境问题留在 tester 修复 loop，不再在 tester 后单独跑 test gate。
 
 ### `feature_change`
 
@@ -327,9 +333,9 @@ Every required Markdown artifact must also contain:
 artifact_result_code: 0
 ```
 
-Business verdicts must use numeric fields such as `test_result_code`, `review_decision_code`, `peer_review_code`, `decision_code`, and `final_delivery_code`. Do not copy those verdict codes into `return_code` or `artifact_result_code`.
+Business verdicts must use structured machine fields such as `tester_result.json.status`, `review_result.json.review_decision_code`, `peer_review_code`, `decision.json.decision`, and `final_delivery_code`. Do not copy those verdict codes into `return_code` or `artifact_result_code`.
 
-业务判断必须使用 numeric 字段，例如 `test_result_code`、`review_decision_code`、`peer_review_code`、`decision_code` 和 `final_delivery_code`。不要把这些业务判断码复制到 `return_code` 或 `artifact_result_code`。
+业务判断必须使用结构化机器字段，例如 `tester_result.json.status`、`review_result.json.review_decision_code`、`peer_review_code`、`decision.json.decision` 和 `final_delivery_code`。不要把这些业务判断码复制到 `return_code` 或 `artifact_result_code`。
 
 ## Patch Gate / 补丁门禁
 

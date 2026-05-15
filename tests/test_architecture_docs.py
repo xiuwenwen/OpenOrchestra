@@ -8,7 +8,15 @@ def test_readme_workflow_matches_current_review_flow() -> None:
 
     assert "review judgement" not in readme.lower()
     assert "REVIEWING / REVIEW_JUDGEMENT / REVIEW_FIXING loop" not in readme
-    assert "REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop when tester_result.json reports source_bug" in readme
+    assert "REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop when tester_result.json reports source_bug and environment_dependency_issue=false" in readme
+    assert "TESTING -> TESTING environment repair loop when tester_result.json reports environment_dependency_issue=true" in readme
+
+
+def test_readme_states_artifact_mediated_positioning() -> None:
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    assert "artifact-mediated orchestration kernel for coding agents" in readme
+    assert "基于 artifact 的 Coding Agent 协作编排内核" in readme
 
 
 def test_architecture_flow_does_not_document_removed_final_judgement_path() -> None:

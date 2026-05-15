@@ -11,6 +11,10 @@ _LOCK = threading.RLock()
 _ACTIVE_PROCESSES: set[subprocess.Popen[str]] = set()
 
 
+def supports_process_groups() -> bool:
+    return os.name == "posix" and hasattr(os, "setsid") and hasattr(os, "killpg")
+
+
 def register_process(process: subprocess.Popen[str]) -> None:
     with _LOCK:
         _ACTIVE_PROCESSES.add(process)
@@ -22,13 +26,16 @@ def unregister_process(process: subprocess.Popen[str]) -> None:
 
 
 def kill_process_tree(process: subprocess.Popen[str], sig: int = signal.SIGKILL) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        if hasattr(os, "killpg"):
+    if supports_process_groups():
+        try:
             os.killpg(process.pid, sig)
-        else:  # pragma: no cover - non-POSIX fallback
-            process.send_signal(sig)
+            return
+        except ProcessLookupError:
+            pass
+    try:
+        if process.poll() is not None:
+            return
+        process.send_signal(sig)
     except ProcessLookupError:
         return
 
@@ -38,7 +45,7 @@ def terminate_process_tree(process: subprocess.Popen[str], grace_seconds: float 
     deadline = time.monotonic() + max(0.0, grace_seconds)
     while process.poll() is None and time.monotonic() < deadline:
         time.sleep(0.05)
-    if process.poll() is None:
+    if supports_process_groups() or process.poll() is None:
         kill_process_tree(process, signal.SIGKILL)
 
 

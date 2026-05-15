@@ -9,7 +9,7 @@ COMMANDS = {
     "/continue": "Continue/retry the active historical task",
     "/clean": "Remove intermediate files for the selected task",
     "/diagnose": "Export a diagnostics bundle for a task",
-    "/goal": "Run test/fix loops until fixed without asking at the round limit",
+    "/goal": "Set test/fix max rounds to 10",
     "/current": "Show selected historical context",
     "/clear": "Clear selected historical context",
     "/ui": "Start or show the local Web execution viewer",

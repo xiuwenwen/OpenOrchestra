@@ -42,6 +42,14 @@ from harness.patch.gate import materialized_repo_markdown, run_patch_gate
 from orchestrator_mock_support import _config
 
 
+def _valid_checkpoint_content(artifact_type: str) -> str:
+    if artifact_type == "delivery.md":
+        return "return_code: 0\n"
+    if artifact_type == "todo_breakdown.json":
+        return json.dumps({"schema_version": 1, "todos": [], "risks": []}) + "\n"
+    return f"artifact_result_code: 0\n\n# {artifact_type}\n"
+
+
 def test_failed_phase_with_completed_agent_runs_is_recovered_on_resume(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("recover old concurrent planner phase")
@@ -52,12 +60,7 @@ def test_failed_phase_with_completed_agent_runs_is_recovered_on_resume(tmp_path:
         output_dir.mkdir()
         for artifact_type in required_outputs_for("planner", "PLANNING_DRAFT"):
             path = output_dir / artifact_type
-            content = (
-                "return_code: 0\n"
-                if artifact_type == "delivery.md"
-                else f"artifact_result_code: 0\n\n# {artifact_type}\n"
-            )
-            path.write_text(content, encoding="utf-8")
+            path.write_text(_valid_checkpoint_content(artifact_type), encoding="utf-8")
             orchestrator.repository.create_artifact(
                 ArtifactRef(
                     artifact_id=str(uuid.uuid4()),
@@ -155,12 +158,7 @@ def test_checkpoint_resume_prefers_latest_recoverable_phase(tmp_path: Path) -> N
     latest_output_dir.mkdir()
     for artifact_type in required_outputs_for("planner", PLANNING_DRAFT):
         path = latest_output_dir / artifact_type
-        path.write_text(
-            "return_code: 0\n"
-            if artifact_type == "delivery.md"
-            else f"artifact_result_code: 0\n\n# {artifact_type}\n",
-            encoding="utf-8",
-        )
+        path.write_text(_valid_checkpoint_content(artifact_type), encoding="utf-8")
         orchestrator.repository.create_artifact(
             ArtifactRef(
                 artifact_id=str(uuid.uuid4()),
@@ -199,12 +197,7 @@ def test_checkpoint_resume_ignores_previous_prompt_turn(tmp_path: Path) -> None:
     output_dir.mkdir()
     for artifact_type in required_outputs_for("planner", PLANNING_DRAFT):
         path = output_dir / artifact_type
-        path.write_text(
-            "return_code: 0\n"
-            if artifact_type == "delivery.md"
-            else f"artifact_result_code: 0\n\n# {artifact_type}\n",
-            encoding="utf-8",
-        )
+        path.write_text(_valid_checkpoint_content(artifact_type), encoding="utf-8")
         orchestrator.repository.create_artifact(ArtifactRef(str(uuid.uuid4()), task_id, old_phase_id, "planner", "planner-1", artifact_type, path, 1, "hash"))
     orchestrator.repository.update_agent_run_status(old_run_id, "COMPLETED")
     orchestrator.repository.update_phase_status(old_phase_id, "COMPLETED")
@@ -278,8 +271,7 @@ def test_judge_checkpoint_resume_parses_existing_decision(tmp_path: Path) -> Non
         phase_id = orchestrator.repository.create_phase(task_id, PLAN_JUDGEMENT, "judge", 0)
         run_id = orchestrator.repository.create_agent_run(task_id, phase_id, "judge", "judge-1", 0)
         artifacts = {
-            "decision.json": '{"decision":"approved","changes_required":false}\n',
-            "decision_summary.md": "# Decision\napproved\n",
+            "decision.json": '{"decision_code":0,"decision":"approved","changes_required":false,"summary":"approved","reason":"ok","evidence":[]}\n',
             "delivery.md": "return_code: 0\n",
         }
         for artifact_type, content in artifacts.items():

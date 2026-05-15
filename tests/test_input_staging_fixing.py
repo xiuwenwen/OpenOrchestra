@@ -54,14 +54,13 @@ def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_pat
         ("patch.diff", execution_phase_id, "executor", "old-execution.patch"),
         ("fix_patch.diff", old_fix_phase_id, "executor", "old-fix.patch"),
         ("merged_patch.diff", previous_merge_phase_id, "executor", "previous-merged.patch"),
-        ("merged_patch_metadata.md", previous_merge_phase_id, "executor", "previous-merged-metadata.md"),
-        ("merge_report.md", previous_merge_phase_id, "executor", "previous-merge-report.md"),
+        ("merged_patch_metadata.json", previous_merge_phase_id, "executor", "previous-merged-metadata.json"),
         ("fix_patch.diff", current_fix_phase_id, "executor", "current-fix.patch"),
         ("self_check.md", current_fix_phase_id, "executor", "current-self-check.md"),
         ("fix_notes.md", current_fix_phase_id, "executor", "current-fix-notes.md"),
         ("bug_report.md", old_fix_phase_id, "tester", "old-bug-report.md"),
         ("decision.json", old_fix_phase_id, "judge", "old-decision.json"),
-        ("review_report.md", old_fix_phase_id, "reviewer", "old-review-report.md"),
+        ("review_result.json", old_fix_phase_id, "reviewer", "old-review-result.json"),
         ("plan.md", execution_phase_id, "planner", "old-plan.md"),
     ]
     for artifact_type, phase_id, role, filename in artifact_rows:
@@ -93,8 +92,7 @@ def test_patch_merge_sees_current_round_candidate_and_previous_authoritative_pat
 
     assert "current-fix.patch" in manifest
     assert "previous-merged.patch" in manifest
-    assert "previous-merged-metadata.md" in manifest
-    assert "previous-merge-report.md" not in manifest
+    assert "previous-merged-metadata.json" in manifest
     assert "current-self-check.md" not in manifest
     assert "current-fix-notes.md" not in manifest
     assert "old-bug-report.md" not in manifest
@@ -137,18 +135,15 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
     current_fix_phase_id = orchestrator.repository.create_phase(task_id, FIXING, "executor", 2)
 
     artifact_rows = [
-        ("merged_patch_metadata.md", round0_merge_phase_id, "executor", "old-merged-metadata.md", "executor-1"),
+        ("merged_patch_metadata.json", round0_merge_phase_id, "executor", "old-merged-metadata.json", "executor-1"),
         ("bug_report.md", round0_test_phase_id, "tester", "old-bug-report.md", "tester-1"),
         ("tester_result.json", round0_test_phase_id, "tester", "old-tester-result.json", "tester-1"),
         ("decision.json", round0_judge_phase_id, "judge", "old-decision.json", "judge-1"),
-        ("decision_summary.md", round0_judge_phase_id, "judge", "old-decision-summary.md", "judge-1"),
-        ("merged_patch_metadata.md", round1_merge_phase_id, "executor", "latest-merged-metadata.md", "executor-1"),
+        ("merged_patch_metadata.json", round1_merge_phase_id, "executor", "latest-merged-metadata.json", "executor-1"),
         ("merged_patch.diff", round1_merge_phase_id, "executor", "latest-merged.patch", "executor-1"),
-        ("merge_report.md", round1_merge_phase_id, "executor", "latest-merge-report.md", "executor-1"),
         ("bug_report.md", round1_test_phase_id, "tester", "latest-bug-report.md", "tester-1"),
         ("tester_result.json", round1_test_phase_id, "tester", "latest-tester-result.json", "tester-1"),
         ("decision.json", round1_judge_phase_id, "judge", "latest-decision.json", "judge-1"),
-        ("decision_summary.md", round1_judge_phase_id, "judge", "latest-decision-summary.md", "judge-1"),
         ("self_check.md", stale_fix_phase_id, "executor", "stale-self-check.md", "executor-1"),
         ("implementation_plan.md", stale_fix_phase_id, "executor", "stale-plan.md", "executor-1"),
         ("changed_files.md", stale_fix_phase_id, "executor", "stale-changed-files.md", "executor-1"),
@@ -199,23 +194,20 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
     )
     manifest = staged[0].read_text(encoding="utf-8")
 
-    assert "latest-merged-metadata.md" in manifest
+    assert "latest-merged-metadata.json" in manifest
     assert "latest-bug-report.md" in manifest
     assert "latest-tester-result.json" in manifest
     assert "latest-decision.json" in manifest
-    assert "latest-decision-summary.md" in manifest
     assert "round-1-objective_gate.md" in manifest
 
     assert "latest-merged.patch" not in manifest
-    assert "latest-merge-report.md" not in manifest
     assert "stale-self-check.md" not in manifest
     assert "stale-plan.md" not in manifest
     assert "stale-changed-files.md" not in manifest
-    assert "old-merged-metadata.md" not in manifest
+    assert "old-merged-metadata.json" not in manifest
     assert "old-bug-report.md" not in manifest
     assert "old-test-environment.md" not in manifest
     assert "old-decision.json" not in manifest
-    assert "old-decision-summary.md" not in manifest
     assert "round-0-test_gate.md" not in manifest
     assert "round-1-test_gate.md" not in manifest
     assert "round-1-patch_validation.md" not in manifest
@@ -242,10 +234,9 @@ def test_fixing_falls_back_to_latest_visible_test_evidence_when_previous_test_ou
     artifact_rows = [
         ("bug_report.md", round0_test_phase_id, "tester", "round0-bug-report.md", "tester-1"),
         ("tester_result.json", round0_test_phase_id, "tester", "round0-tester-result.json", "tester-1"),
-        ("review_report.md", round1_test_phase_id, "tester", "round1-non-tester-report.md", "tester-1"),
+        ("notes.md", round1_test_phase_id, "tester", "round1-non-tester-report.md", "tester-1"),
         ("decision.json", round0_judge_phase_id, "judge", "round0-decision.json", "judge-1"),
-        ("decision_summary.md", round0_judge_phase_id, "judge", "round0-decision-summary.md", "judge-1"),
-        ("merged_patch_metadata.md", round1_merge_phase_id, "executor", "round1-merged-metadata.md", "executor-1"),
+        ("merged_patch_metadata.json", round1_merge_phase_id, "executor", "round1-merged-metadata.json", "executor-1"),
         ("merged_patch.diff", round1_merge_phase_id, "executor", "round1-merged.patch", "executor-1"),
     ]
     for artifact_type, phase_id, role, filename, agent_id in artifact_rows:
@@ -297,8 +288,7 @@ def test_fixing_falls_back_to_latest_visible_test_evidence_when_previous_test_ou
     assert "round0-tester-result.json" in manifest
     assert "round1-non-tester-report.md" not in manifest
     assert "round0-decision.json" in manifest
-    assert "round0-decision-summary.md" in manifest
-    assert "round1-merged-metadata.md" in manifest
+    assert "round1-merged-metadata.json" in manifest
     assert "round1-merged.patch" not in manifest
     assert "failed_test_round_count_before_current: 2" in manifest
     assert "failed_test_round_ids_before_current: 0, 1" in manifest

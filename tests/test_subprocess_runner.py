@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -69,6 +70,48 @@ def test_subprocess_runner_can_stream_output_while_writing_logs(tmp_path: Path, 
     assert stdout_path.read_text(encoding="utf-8").strip() == "live stdout"
     assert stderr_path.read_text(encoding="utf-8").strip() == "live stderr"
     assert "[stdout] live stdout" in (tmp_path / "live.log").read_text(encoding="utf-8")
+
+
+def test_subprocess_runner_starts_posix_process_group(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    popen_kwargs: dict[str, object] = {}
+
+    class FakeStream:
+        def readline(self):
+            return ""
+
+        def close(self):
+            return None
+
+    class FakeProcess:
+        pid = 12345
+        stdin = None
+        stdout = FakeStream()
+        stderr = FakeStream()
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+    def fake_popen(*args, **kwargs):
+        popen_kwargs.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr("harness.adapters.subprocess_runner.subprocess.Popen", fake_popen)
+
+    exit_code = SubprocessRunner().run(
+        ["echo", "ok"],
+        tmp_path,
+        0,
+        tmp_path / "stdout.log",
+        tmp_path / "stderr.log",
+    )
+
+    assert exit_code == 0
+    assert popen_kwargs["start_new_session"] is (
+        os.name == "posix" and hasattr(os, "setsid") and hasattr(os, "killpg")
+    )
 
 
 def test_subprocess_runner_kills_process_tree_on_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -10,7 +10,7 @@ class Communicator:
         self.repository = repository
 
     def latest_final_delivery(self, task_id: str) -> Path | None:
-        artifacts = self.repository.list_artifacts(task_id, "final_delivery.md")
+        artifacts = self.repository.list_artifacts(task_id, "final_delivery.json")
         return self._latest_existing_path(artifacts)
 
     def latest_usage_guide(self, task_id: str) -> Path | None:

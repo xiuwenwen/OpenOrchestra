@@ -145,7 +145,7 @@ stateDiagram-v2
         CREATED --> PLANNING_DRAFT: Planner Agents
         PLANNING_DRAFT --> PLANNING_PEER_REVIEW: Peer review when configured
         PLANNING_PEER_REVIEW --> PLANNING_REVISION: Revision requested
-        PLANNING_REVISION --> PLAN_REVIEW: Reviewer merges selected_plan.md
+        PLANNING_REVISION --> PLAN_REVIEW: Reviewer merges selected_plan.json
         PLANNING_DRAFT --> PLAN_REVIEW: No peer loop configured
         PLAN_REVIEW --> PLANNING_REVISION: Reviewer requests changes
     }
@@ -155,9 +155,10 @@ stateDiagram-v2
         EXECUTION --> PATCH_MERGE: Executor Agents output patch.diff
         PATCH_MERGE --> TESTING: merged_patch.diff materialized
         
-        TESTING --> FIXING: tester_result.json status=source_bug
+        TESTING --> TESTING: tester_result.json environment_dependency_issue=true
+        TESTING --> FIXING: status=source_bug and environment_dependency_issue=false
         TESTING --> REVIEWING: tester_result.json status=tests_passed
-        TESTING --> FAILED: tester_result.json status=environment_blocked
+        TESTING --> FAILED: status=environment_blocked after tester environment repair is exhausted
         FIXING --> PATCH_MERGE: Fix loop
     }
     
@@ -176,7 +177,7 @@ stateDiagram-v2
     }
     
     state "Delivery Block" as DB {
-        DELIVERY --> COMPLETED: Communicator generates final_delivery.md
+        DELIVERY --> COMPLETED: Communicator generates final_delivery.json
     }
     
     COMPLETED --> [*]

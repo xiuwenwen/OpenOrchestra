@@ -109,6 +109,57 @@ def test_json_template_pending_decision_remains_invalid_after_marker_key_removed
     assert result.errors == ["decision.json still contains Harness output template marker"]
 
 
+def test_review_result_template_is_strict_json_and_schema_validated(tmp_path: Path) -> None:
+    seed_output_templates(tmp_path, ["review_result.json"], role="reviewer", phase="REVIEWING", agent_id="reviewer-1")
+    review_result_path = tmp_path / "review_result.json"
+    payload = json.loads(review_result_path.read_text(encoding="utf-8"))
+    assert payload["review_decision_code"] == TEMPLATE_PENDING_VALUE
+    assert output_has_pending_template_marker(review_result_path)
+
+    payload.pop("harness_template_status")
+    payload.update(
+        {
+            "review_decision_code": 0,
+            "review_status": "changes_required",
+            "environment_check": {"attempted": True, "status": "ready", "commands_run": ["pytest"], "fixable": True, "blocking_reason": ""},
+        }
+    )
+    review_result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = ArtifactValidator().validate_required_outputs_result(tmp_path, ["review_result.json"])
+    assert (result.ok, result.errors) == (False, ["review_result.json review_status must be approved when review_decision_code is 0"])
+
+
+def test_selected_plan_template_contains_acceptance_oracles(tmp_path: Path) -> None:
+    seed_output_templates(
+        tmp_path,
+        ["selected_plan.json"],
+        role="reviewer",
+        phase="PLAN_REVIEW",
+        agent_id="reviewer-1",
+    )
+
+    payload = json.loads((tmp_path / "selected_plan.json").read_text(encoding="utf-8"))
+
+    assert payload["acceptance_oracles"][0]["id"] == TEMPLATE_PENDING_VALUE
+    assert payload["acceptance_oracles"][0]["required"] is True
+
+
+def test_tester_result_template_contains_oracle_results(tmp_path: Path) -> None:
+    seed_output_templates(
+        tmp_path,
+        ["tester_result.json"],
+        role="tester",
+        phase="TESTING",
+        agent_id="tester-1",
+    )
+
+    payload = json.loads((tmp_path / "tester_result.json").read_text(encoding="utf-8"))
+
+    assert payload["oracle_results"][0]["oracle_id"] == TEMPLATE_PENDING_VALUE
+    assert "commands_run" in payload["oracle_results"][0]
+
+
 def test_runner_seeds_output_templates_before_adapter_invocation(tmp_path: Path, monkeypatch) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("plan with seeded templates")
@@ -134,6 +185,11 @@ def test_runner_seeds_output_templates_before_adapter_invocation(tmp_path: Path,
                             }
                         )
                         + "\n",
+                        encoding="utf-8",
+                    )
+                elif name == "todo_breakdown.json":
+                    path.write_text(
+                        json.dumps({"schema_version": 1, "todos": [], "risks": []}) + "\n",
                         encoding="utf-8",
                     )
                 else:

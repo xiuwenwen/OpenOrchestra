@@ -80,6 +80,8 @@ def test_prompt_builder_marks_merged_patch_as_authoritative(tmp_path: Path) -> N
     assert "## Tester Output" in prompt
     assert "Treat the repository directory as the implementation under test" in prompt
     assert "`tester_result.json` must be exactly one JSON object" in prompt
+    assert "tester_result.json.oracle_results" in prompt
+    assert "environment_dependency_issue" in prompt
     assert "Do not treat executor planning notes, self-checks, or change summaries as test evidence" in prompt
 
 
@@ -137,7 +139,7 @@ def test_prompt_builder_has_patch_merge_contract(tmp_path: Path) -> None:
     assert "exactly one authoritative `merged_patch.diff`" in prompt
     assert "do not paste a large merged diff as a Write-tool payload" in prompt
     assert "`patch_metadata.md`" not in prompt
-    assert "`merged_patch_metadata.md`" in prompt
+    assert "`merged_patch_metadata.json`" in prompt
     assert "`diff --git` file headers" in prompt
     assert "Do not select a patch based only on filename" in prompt
     assert "Prior `merged_patch.diff` artifacts are historical evidence" in prompt
@@ -199,10 +201,10 @@ def test_prompt_builder_uses_balanced_planner_when_count_is_one(tmp_path: Path) 
     assert "Specialization: Balanced Planner." in prompt
     assert "Balanced planning, covering MVP feasibility" in prompt
     assert "Define clear validation criteria for Tester." in prompt
-    assert "`todo_breakdown.md` must use this exact repeated task schema" in prompt
-    assert "`files: <target paths or path globs>`" in prompt
-    assert "`acceptance_criteria:` with concrete observable outcomes" in prompt
-    assert "`test_commands:` with exact commands or `not_applicable: <reason>`" in prompt
+    assert "`todo_breakdown.json` must be exactly one JSON object" in prompt
+    assert '"todos":[{"id":"T1"' in prompt
+    assert '"acceptance_criteria":[]' in prompt
+    assert '"test_commands":[]' in prompt
 
 
 def test_prompt_builder_uses_fix_modify_planner_profiles_for_existing_project_workflows(tmp_path: Path) -> None:
@@ -289,15 +291,17 @@ def test_prompt_builder_has_planner_peer_review_contract(tmp_path: Path) -> None
         **{
             **context.__dict__,
             "phase": "PLANNING_PEER_REVIEW",
-            "required_outputs": ["peer_review.md", "delivery.md"],
+            "required_outputs": ["peer_review_result.json", "delivery.md"],
         }
     )
 
     prompt = PromptBuilder().build(context)
 
     assert "planner peer-review phase" in prompt
-    assert "`peer_review.md` must include one machine-readable line" in prompt
-    assert "peer_review_code: 1" in prompt
+    assert "Collaboration protocol: PROPOSE -> CRITIQUE -> REVISE -> VOTE -> MERGE" in prompt
+    assert "Allowed message intents for this step: critique, ask, block" in prompt
+    assert "Set `peer_review_result.json.peer_review_code`" in prompt
+    assert "`1` when any plan needs revision" in prompt
 
 
 def test_prompt_builder_planner_revision_prioritizes_plan_review_feedback(tmp_path: Path) -> None:
@@ -306,15 +310,34 @@ def test_prompt_builder_planner_revision_prioritizes_plan_review_feedback(tmp_pa
         **{
             **context.__dict__,
             "phase": "PLANNING_REVISION",
-            "required_outputs": ["plan.md", "assumptions.md", "risk.md", "todo_breakdown.md", "delivery.md"],
+            "required_outputs": ["plan.md", "assumptions.md", "risk.md", "todo_breakdown.json", "delivery.md"],
         }
     )
 
     prompt = PromptBuilder().build(context)
 
-    assert "review_report.md" in prompt
+    assert "review_result.json" in prompt
     assert "authoritative revision request" in prompt
     assert "do not re-litigate old planner proposals" in prompt
+
+
+def test_prompt_builder_planner_revision_handles_fix_tester_plan_recheck(tmp_path: Path) -> None:
+    context = make_context(tmp_path, role="planner", agent_id="planner-1", role_count=1)
+    context = AgentRunContext(
+        **{
+            **context.__dict__,
+            "phase": "PLANNING_REVISION",
+            "required_outputs": ["plan.md", "assumptions.md", "risk.md", "todo_breakdown.json", "delivery.md"],
+            "metadata": {"phase_scope_loop_type": "fix_tester_plan_recheck"},
+        }
+    )
+
+    prompt = PromptBuilder().build(context)
+
+    assert "fix/test plan recheck" in prompt
+    assert "repeated executor fix and tester failure cycles" in prompt
+    assert "selected_plan.json" in prompt
+    assert "no plan change is needed" in prompt
 
 
 def test_prompt_builder_hides_generic_error_code_tables_from_judge(tmp_path: Path) -> None:
@@ -323,7 +346,7 @@ def test_prompt_builder_hides_generic_error_code_tables_from_judge(tmp_path: Pat
         **{
             **context.__dict__,
             "phase": "TEST_JUDGEMENT",
-            "required_outputs": ["decision.json", "decision_summary.md", "delivery.md"],
+            "required_outputs": ["decision.json", "delivery.md"],
         }
     )
 
@@ -333,7 +356,7 @@ def test_prompt_builder_hides_generic_error_code_tables_from_judge(tmp_path: Pat
     assert "`delivery.md` must be exactly one JSON object" in prompt
     assert "Return code meanings:" not in prompt
     assert "Markdown artifact result code meanings:" not in prompt
-    assert "`decision_summary.md` must contain `artifact_result_code: 0` somewhere in the file" in prompt
+    assert "Set `decision.json.decision_code` to `0` for pass or `-1` for fail" in prompt
     assert "Put the phase verdict only in `decision.json.decision`" in prompt
     assert "Do not copy `decision_code` or `decision.json.decision` into `artifact_result_code` or `return_code`" in prompt
     assert "If you choose `decision: fail` because tests failed, write JSON `return_code: 0` in `delivery.md`" in prompt
@@ -345,16 +368,23 @@ def test_prompt_builder_has_plan_review_merge_contract(tmp_path: Path) -> None:
         **{
             **context.__dict__,
             "phase": "PLAN_REVIEW",
-            "required_outputs": ["review_report.md", "selected_plan.md", "delivery.md"],
+            "required_outputs": ["review_result.json", "selected_plan.json", "delivery.md"],
         }
     )
 
     prompt = PromptBuilder().build(context)
 
     assert "planning merge-review phase" in prompt
+    assert "Current collaboration step: MERGE" in prompt
     assert "Merge the current-round planner" in prompt
-    assert "`selected_plan.md` is the single authoritative plan" in prompt
+    assert "`selected_plan.json` is the single authoritative plan" in prompt
+    assert "selected_plan.json.acceptance_oracles" in prompt
+    assert "Do not equate plan selection with acceptance selection" in prompt
+    assert "any proposal" in prompt
+    assert "non-selected, partially selected, or rejected proposal" in prompt
+    assert "proposal B" not in prompt
     assert "Do not merely pick one planner proposal" in prompt
+    assert "do not create `review_report.md`" in prompt
 
 
 def test_prompt_builder_reviewer_requires_runtime_verdict_json(tmp_path: Path) -> None:
@@ -363,16 +393,35 @@ def test_prompt_builder_reviewer_requires_runtime_verdict_json(tmp_path: Path) -
         **{
             **context.__dict__,
             "phase": "REVIEWING",
-            "required_outputs": ["review_report.md", "delivery.md"],
+            "required_outputs": ["review_result.json", "delivery.md"],
         }
     )
 
     prompt = PromptBuilder().build(context)
 
     assert "run the repository on this machine" in prompt
-    assert "Review Verdict JSON" in prompt
+    assert "review_result.json" in prompt
+    assert "Treat `tester_result.json` as the structured test verdict" in prompt
+    assert "do not request source changes solely because `runtime_readiness.md` ran a generic/default command" in prompt
     assert '"review_status":"approved|changes_required|blocked"' in prompt
     assert "environment_check.status: blocked" in prompt
+
+
+def test_prompt_builder_executor_allows_recorded_noop_fix(tmp_path: Path) -> None:
+    context = make_context(tmp_path, role="executor", agent_id="executor-1", role_count=1)
+    context = AgentRunContext(
+        **{
+            **context.__dict__,
+            "phase": "REVIEW_FIXING",
+            "required_outputs": ["fix_schedule.md", "fix_patch.diff", "fix_notes.md", "self_check.md", "delivery.md"],
+        }
+    )
+
+    prompt = PromptBuilder().build(context)
+
+    assert "valid no-op fix" in prompt
+    assert "no_op_fix: true" in prompt
+    assert "do not recreate or paste a historical patch" in prompt
 
 
 def test_prompt_builder_injects_communicator_publish_metadata(tmp_path: Path) -> None:
@@ -391,7 +440,7 @@ def test_prompt_builder_injects_communicator_publish_metadata(tmp_path: Path) ->
         output_dir=tmp_path / "workspace" / "output",
         log_dir=tmp_path / "workspace" / "logs",
         input_artifacts=[],
-        required_outputs=["final_delivery.md", "usage_guide.md", "delivery.md"],
+        required_outputs=["final_delivery.json", "usage_guide.md", "delivery.md"],
         timeout_seconds=30,
         config={},
         metadata={
@@ -404,7 +453,7 @@ def test_prompt_builder_injects_communicator_publish_metadata(tmp_path: Path) ->
 
     assert "## Harness Metadata" in prompt
     assert f"- expected_success_path: {tmp_path / 'deliver' / 'weather-task'}" in prompt
-    assert "Use `selected_plan.md`, final executor artifacts, final `bug_report.md`, and final `tester_result.json` as your primary sources of truth" in prompt
+    assert "Use `selected_plan.json`, final executor artifacts, final `bug_report.md`, and final `tester_result.json` as your primary sources of truth" in prompt
     assert "The expected success path is precomputed before publishing" in prompt
     assert "`## Actual Usage` section written for the end user" in prompt
     assert "enter project directory, install dependencies when needed, run the program or tests" in prompt

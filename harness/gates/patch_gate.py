@@ -17,6 +17,7 @@ from harness.patch.gate import (
     run_patch_gate,
 )
 from harness.state.repository import StateRepository
+from harness.testing.tester_result import TesterResultError, load_tester_result
 
 
 EmitProgress = Callable[[ProgressEvent], None]
@@ -66,7 +67,6 @@ class PatchGateService:
             if patch_text and not patch_text.endswith("\n"):
                 patch_text += "\n"
             metadata = self.deterministic_merge_metadata(candidate, candidate_path, patch_text, round_id)
-            report = self.deterministic_merge_report(candidate, candidate_path, round_id)
             delivery = json.dumps(
                 {
                     "return_code": 0,
@@ -86,16 +86,8 @@ class PatchGateService:
             )
             self.artifact_manager.create_text_artifact(
                 task_id,
-                "merged_patch_metadata.md",
+                "merged_patch_metadata.json",
                 metadata,
-                phase_id=phase_id,
-                role="executor",
-                agent_id="deterministic-patch-merge",
-            )
-            self.artifact_manager.create_text_artifact(
-                task_id,
-                "merge_report.md",
-                report,
                 phase_id=phase_id,
                 role="executor",
                 agent_id="deterministic-patch-merge",
@@ -127,6 +119,19 @@ class PatchGateService:
             self.repository.update_agent_run_status(run_id, "FAILED", str(exc))
             self.repository.update_phase_status(phase_id, "FAILED")
             raise
+        return True
+
+    def try_accept_noop_candidate_patch(self, task_id: str, round_id: int) -> bool:
+        candidates = self.current_round_candidate_patches(task_id, round_id)
+        if len(candidates) != 1:
+            return False
+        candidate_path = Path(candidates[0]["path"])
+        if not candidate_path.exists() or not candidate_path.is_file():
+            return False
+        reason = self.noop_candidate_patch_reason(task_id, round_id, candidate_path)
+        if reason is None or not self.noop_candidate_patch_is_accepted(task_id):
+            return False
+        self.accept_noop_candidate_patch(task_id, round_id, candidate_path, reason)
         return True
 
     def try_skip_noop_candidate_patch(self, task_id: str, round_id: int) -> bool:
@@ -180,6 +185,80 @@ class PatchGateService:
         )
         return True
 
+    def noop_candidate_patch_is_accepted(self, task_id: str) -> bool:
+        return self.latest_passing_tester_result_artifact(task_id) is not None
+
+    def latest_passing_tester_result_artifact(self, task_id: str) -> dict[str, Any] | None:
+        current_phase_ids = self.current_prompt_turn_phase_ids(task_id)
+        candidates: list[dict[str, Any]] = []
+        for artifact in self.repository.list_artifacts(task_id, "tester_result.json"):
+            if artifact.get("phase_id") not in current_phase_ids:
+                continue
+            path = Path(artifact["path"])
+            if not path.is_file():
+                continue
+            try:
+                result = load_tester_result(path)
+            except TesterResultError:
+                continue
+            if result.tests_passed and not result.has_environment_dependency_issue:
+                candidates.append(artifact)
+        if not candidates:
+            return None
+        return max(candidates, key=self.noop_tester_result_order_key)
+
+    def noop_tester_result_order_key(self, artifact: dict[str, Any]) -> tuple[int, int, str, str]:
+        try:
+            version = int(artifact.get("version") or 0)
+        except (TypeError, ValueError):
+            version = 0
+        return (
+            self.artifact_round(artifact) or -1,
+            version,
+            str(artifact.get("created_at") or ""),
+            str(artifact.get("artifact_id") or artifact.get("path") or ""),
+        )
+
+    def accept_noop_candidate_patch(self, task_id: str, round_id: int, candidate_path: Path, reason: str) -> None:
+        phase_id = self.repository.create_phase(task_id, PATCH_MERGE, "orchestrator", round_id, status="COMPLETED")
+        self.artifact_manager.create_text_artifact(
+            task_id,
+            "patch_validation.md",
+            self.accepted_noop_patch_validation_report(candidate_path, reason),
+            phase_id=phase_id,
+            role="orchestrator",
+            agent_id="patch-precheck",
+        )
+        self.artifact_manager.create_text_artifact(
+            task_id,
+            "materialized_repo.md",
+            self.accepted_noop_materialized_repo_report(task_id, round_id, candidate_path, reason),
+            phase_id=phase_id,
+            role="orchestrator",
+            agent_id="patch-precheck",
+        )
+        objective_ref = self.artifact_manager.create_text_artifact(
+            task_id,
+            "objective_gate.md",
+            self.accepted_noop_objective_gate_report(task_id, round_id, candidate_path, reason),
+            phase_id=phase_id,
+            role="orchestrator",
+            agent_id="objective-gate",
+        )
+        self.emit(
+            ProgressEvent(
+                "patch_noop_accepted",
+                task_id=task_id,
+                phase=PATCH_MERGE,
+                role="orchestrator",
+                agent_id="patch-precheck",
+                round_id=round_id,
+                status="COMPLETED",
+                message=f"PATCH_MERGE accepted no-op candidate because latest tester_result.json passed: {reason}",
+                data={"candidate_patch": str(candidate_path), "objective_gate": str(objective_ref.path)},
+            )
+        )
+
     def noop_candidate_patch_reason(self, task_id: str, round_id: int, candidate_path: Path) -> str | None:
         patch_text = candidate_path.read_text(encoding="utf-8", errors="replace")
         if not patch_text.strip():
@@ -228,6 +307,27 @@ class PatchGateService:
             ]
         )
 
+    def accepted_noop_patch_validation_report(self, candidate_path: Path, reason: str) -> str:
+        return "\n".join(
+            [
+                "# Patch Validation",
+                "",
+                "status: pass",
+                f"patch: {candidate_path}",
+                f"precheck_status: accepted_{reason}",
+                "patch_apply_status: skipped",
+                "materialize_status: skipped",
+                "diff_check_status: skipped",
+                "",
+                "## stdout",
+                "",
+                "```text",
+                "No source changes remain to apply from the current repository baseline.",
+                "```",
+                "",
+            ]
+        )
+
     def noop_materialized_repo_report(self, task_id: str, round_id: int, candidate_path: Path, reason: str) -> str:
         return "\n".join(
             [
@@ -240,6 +340,22 @@ class PatchGateService:
                 f"patch: {candidate_path}",
                 "diff_check_status: skipped",
                 f"skip_reason: {reason}",
+                "",
+            ]
+        )
+
+    def accepted_noop_materialized_repo_report(self, task_id: str, round_id: int, candidate_path: Path, reason: str) -> str:
+        return "\n".join(
+            [
+                "# Materialized Repository",
+                "",
+                "status: skipped",
+                f"task_id: {task_id}",
+                f"round_id: {round_id}",
+                "repo_path: latest_successful_materialized_repo",
+                f"patch: {candidate_path}",
+                "diff_check_status: skipped",
+                f"skip_reason: accepted_{reason}",
                 "",
             ]
         )
@@ -283,6 +399,46 @@ class PatchGateService:
             ]
         )
 
+    def accepted_noop_objective_gate_report(self, task_id: str, round_id: int, candidate_path: Path, reason: str) -> str:
+        evidence = {
+            "patch_apply_check": True,
+            "materialize_status": "skipped",
+            "diff_check": True,
+            "legal_unified_diff": True,
+            "scope_ok": True,
+            "size_ok": True,
+            "changed_files": [],
+            "deleted_files": [],
+            "changed_line_count": 0,
+            "precheck_status": f"accepted_{reason}",
+        }
+        return "\n".join(
+            [
+                "# Objective Gate",
+                "",
+                "status: pass",
+                f"task_id: {task_id}",
+                f"round_id: {round_id}",
+                f"patch: {candidate_path}",
+                f"precheck_status: accepted_{reason}",
+                "patch_apply_status: pass",
+                "materialize_status: skipped",
+                "diff_check_status: pass",
+                "",
+                "## Evidence JSON",
+                "",
+                "```json",
+                json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True),
+                "```",
+                "",
+                "## Gate Notes",
+                "",
+                "- No source changes remain to apply from the current repository baseline.",
+                "- The no-op candidate is accepted only because the latest tester_result.json reports tests_passed.",
+                "",
+            ]
+        )
+
     def current_round_candidate_patches(self, task_id: str, round_id: int) -> list[dict[str, Any]]:
         source_phase_ids = {
             phase["phase_id"]
@@ -300,46 +456,33 @@ class PatchGateService:
 
     def deterministic_merge_metadata(self, candidate: dict[str, Any], candidate_path: Path, patch_text: str, round_id: int) -> str:
         stats = analyze_unified_diff(patch_text, self.policy())
-        changed_files = ", ".join(str(path) for path in stats.changed_files) or "none"
-        return "\n".join(
-            [
-                "artifact_result_code: 0",
-                "",
-                "# Merged Patch Metadata",
-                "",
-                "patch_artifact: merged_patch.diff",
-                f"selected_candidate_artifacts: {candidate['artifact_type']}",
-                f"selected_candidate_path: {candidate_path}",
-                f"base_round: {round_id}",
-                f"base_task_id: {candidate['task_id']}",
-                "base_source_type: current_round_candidate_patch",
-                "base_source_path: repository workspace for this PATCH_MERGE round",
-                "apply_target: repository_root",
-                "patch_scope: merged_authoritative",
-                f"changed_files: {changed_files}",
-                "expected_apply_command: git apply --whitespace=nowarn merged_patch.diff",
-                "compatibility_notes: Single candidate patch promoted without an LLM merge call; objective patch gate remains authoritative.",
-                "",
-            ]
-        )
-
-    def deterministic_merge_report(self, candidate: dict[str, Any], candidate_path: Path, round_id: int) -> str:
-        return "\n".join(
-            [
-                "artifact_result_code: 0",
-                "",
-                "# Merge Report",
-                "",
-                "merge_strategy: deterministic_single_candidate",
-                f"round_id: {round_id}",
-                f"selected_candidate_artifacts: {candidate['artifact_type']}",
-                f"selected_candidate_path: {candidate_path}",
-                "rejected_candidate_artifacts: none",
-                "conflict_handling: not_applicable_single_candidate",
-                "ready_for_testing: pending_objective_patch_gate",
-                "",
-            ]
-        )
+        payload = {
+            "schema_version": 1,
+            "patch_artifact": "merged_patch.diff",
+            "selected_candidate_artifacts": [candidate["artifact_type"]],
+            "selected_candidate_path": str(candidate_path),
+            "round_id": round_id,
+            "base_round": round_id,
+            "base_task_id": candidate["task_id"],
+            "base_source_type": "current_round_candidate_patch",
+            "base_source_path": "repository workspace for this PATCH_MERGE round",
+            "apply_target": "repository_root",
+            "patch_scope": "merged_authoritative",
+            "changed_files": [str(path) for path in stats.changed_files],
+            "expected_apply_command": "git apply --whitespace=nowarn merged_patch.diff",
+            "compatibility_notes": (
+                "Single candidate patch promoted without an LLM merge call; objective patch gate remains authoritative."
+            ),
+            "merge_report": {
+                "merge_strategy": "deterministic_single_candidate",
+                "selected_candidate_artifacts": [candidate["artifact_type"]],
+                "selected_candidate_path": str(candidate_path),
+                "rejected_candidate_artifacts": [],
+                "conflict_handling": "not_applicable_single_candidate",
+                "ready_for_testing": "pending_objective_patch_gate",
+            },
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
     def run_validation(self, task_id: str, round_id: int) -> bool:
         latest = self.latest_merged_patch_for_round(task_id, round_id)

@@ -69,13 +69,33 @@ def test_tester_visibility_is_empty(tmp_path: Path) -> None:
     artifacts = [
         _project_context(tmp_path),
         _artifact(tmp_path, phases_by_id, role="planner", agent_id="planner-1", artifact_type="plan.md", phase_type=PLANNING_DRAFT, round_id=0, label="plan"),
-        _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="merged_patch_metadata.md", phase_type="PATCH_MERGE", round_id=0, label="merge"),
+        _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="merged_patch_metadata.json", phase_type="PATCH_MERGE", round_id=0, label="merge"),
         _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="patch-validator", artifact_type="patch_validation.md", phase_type="PATCH_GATE", round_id=0, label="gate"),
     ]
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "tester", TESTING, 0)
 
     assert _names(visible) == set()
+
+
+def test_tester_visibility_includes_selected_plan_acceptance_contract(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    artifacts = [
+        _artifact(
+            tmp_path,
+            phases_by_id,
+            role="reviewer",
+            agent_id="reviewer-1",
+            artifact_type="selected_plan.json",
+            phase_type=PLAN_REVIEW,
+            round_id=1,
+            label="selected",
+        )
+    ]
+
+    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "tester", TESTING, 2)
+
+    assert _names(visible) == {"selected-selected_plan.json"}
 
 
 def test_project_context_visibility_is_role_scoped(tmp_path: Path) -> None:
@@ -149,12 +169,25 @@ def test_fixing_visibility_uses_latest_complete_test_round_before_current(tmp_pa
     artifacts = [
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=0, label="r0-bug"),
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", phase_type=TESTING, round_id=0, label="r0-result"),
-        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="review_report.md", phase_type=REGRESSION_TESTING, round_id=1, label="r1-non-test-report"),
+        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="notes.md", phase_type=REGRESSION_TESTING, round_id=1, label="r1-non-test-report"),
     ]
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "executor", FIXING, 2)
 
     assert _names(visible) == {"r0-bug-bug_report.md", "r0-result-tester_result.json"}
+
+
+def test_tester_environment_repair_visibility_keeps_current_round_tester_artifacts(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    artifacts = [
+        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=0, label="retry-bug"),
+        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", phase_type=TESTING, round_id=0, label="retry-result"),
+        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=1, label="other-round"),
+    ]
+
+    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "tester", TESTING, 0)
+
+    assert _names(visible) == {"retry-bug-bug_report.md", "retry-result-tester_result.json"}
 
 
 def test_planner_peer_review_visibility_is_current_round_other_planners_only(tmp_path: Path) -> None:
@@ -163,7 +196,7 @@ def test_planner_peer_review_visibility_is_current_round_other_planners_only(tmp
         _artifact(tmp_path, phases_by_id, role="planner", agent_id="planner-1", artifact_type="plan.md", phase_type=PLANNING_DRAFT, round_id=1, label="current-self"),
         _artifact(tmp_path, phases_by_id, role="planner", agent_id="planner-2", artifact_type="plan.md", phase_type=PLANNING_DRAFT, round_id=1, label="current-other"),
         _artifact(tmp_path, phases_by_id, role="planner", agent_id="planner-2", artifact_type="risk.md", phase_type=PLANNING_DRAFT, round_id=0, label="old-other"),
-        _artifact(tmp_path, phases_by_id, role="planner", agent_id="planner-2", artifact_type="peer_review.md", phase_type=PLANNING_PEER_REVIEW, round_id=1, label="current-peer-review"),
+        _artifact(tmp_path, phases_by_id, role="planner", agent_id="planner-2", artifact_type="peer_review_result.json", phase_type=PLANNING_PEER_REVIEW, round_id=1, label="current-peer-review"),
     ]
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(
@@ -178,7 +211,7 @@ def test_planner_peer_review_visibility_is_current_round_other_planners_only(tmp
     assert _names(visible) == {"current-other-plan.md"}
 
 
-def test_executor_execution_visibility_excludes_plan_review_report(tmp_path: Path) -> None:
+def test_executor_execution_visibility_excludes_plan_review_result(tmp_path: Path) -> None:
     phases_by_id: dict[str, dict] = {}
     artifacts = [
         _artifact(
@@ -196,7 +229,7 @@ def test_executor_execution_visibility_excludes_plan_review_report(tmp_path: Pat
             phases_by_id,
             role="reviewer",
             agent_id="reviewer-1",
-            artifact_type="selected_plan.md",
+            artifact_type="selected_plan.json",
             phase_type=PLAN_REVIEW,
             round_id=1,
             label="selected",
@@ -206,7 +239,7 @@ def test_executor_execution_visibility_excludes_plan_review_report(tmp_path: Pat
             phases_by_id,
             role="reviewer",
             agent_id="reviewer-1",
-            artifact_type="review_report.md",
+            artifact_type="review_result.json",
             phase_type=PLAN_REVIEW,
             round_id=1,
             label="review",
@@ -215,10 +248,10 @@ def test_executor_execution_visibility_excludes_plan_review_report(tmp_path: Pat
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "executor", EXECUTION, 1)
 
-    assert _names(visible) == {"selected-selected_plan.md"}
+    assert _names(visible) == {"selected-selected_plan.json"}
 
 
-def test_executor_review_fixing_visibility_excludes_reviewer_report(tmp_path: Path) -> None:
+def test_executor_review_fixing_visibility_excludes_reviewer_result(tmp_path: Path) -> None:
     phases_by_id: dict[str, dict] = {}
     artifacts = [
         _artifact(
@@ -226,7 +259,7 @@ def test_executor_review_fixing_visibility_excludes_reviewer_report(tmp_path: Pa
             phases_by_id,
             role="reviewer",
             agent_id="reviewer-1",
-            artifact_type="review_report.md",
+            artifact_type="review_result.json",
             phase_type=REVIEWING,
             round_id=2,
             label="review",
@@ -236,7 +269,7 @@ def test_executor_review_fixing_visibility_excludes_reviewer_report(tmp_path: Pa
             phases_by_id,
             role="executor",
             agent_id="executor-1",
-            artifact_type="merged_patch_metadata.md",
+            artifact_type="merged_patch_metadata.json",
             phase_type=PATCH_MERGE,
             round_id=1,
             label="metadata",
@@ -251,16 +284,17 @@ def test_executor_review_fixing_visibility_excludes_reviewer_report(tmp_path: Pa
         2,
     )
 
-    assert _names(visible) == {"metadata-merged_patch_metadata.md"}
+    assert _names(visible) == {"metadata-merged_patch_metadata.json"}
 
 
-def test_reviewer_visibility_excludes_test_and_gate_noise(tmp_path: Path) -> None:
+def test_reviewer_visibility_includes_structured_tester_report_but_excludes_gate_noise(tmp_path: Path) -> None:
     phases_by_id: dict[str, dict] = {}
     artifacts = [
-        _artifact(tmp_path, phases_by_id, role="reviewer", agent_id="reviewer-1", artifact_type="selected_plan.md", phase_type=PLAN_REVIEW, round_id=1, label="selected"),
+        _artifact(tmp_path, phases_by_id, role="reviewer", agent_id="reviewer-1", artifact_type="selected_plan.json", phase_type=PLAN_REVIEW, round_id=1, label="selected"),
         _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="merged_patch.diff", phase_type=PATCH_MERGE, round_id=3, label="merged"),
         _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="self_check.md", phase_type=PATCH_MERGE, round_id=3, label="self"),
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=3, label="bug"),
+        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", phase_type=TESTING, round_id=3, label="result"),
         _artifact(tmp_path, phases_by_id, role="judge", agent_id="judge-1", artifact_type="decision.json", phase_type=TEST_JUDGEMENT, round_id=3, label="judge"),
         _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="orchestrator", artifact_type="test_gate.md", phase_type="TEST_GATE", round_id=3, label="gate"),
     ]
@@ -268,9 +302,11 @@ def test_reviewer_visibility_excludes_test_and_gate_noise(tmp_path: Path) -> Non
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "reviewer", REVIEWING, 0)
 
     assert _names(visible) == {
-        "selected-selected_plan.md",
+        "selected-selected_plan.json",
         "merged-merged_patch.diff",
         "self-self_check.md",
+        "bug-bug_report.md",
+        "result-tester_result.json",
     }
 
 
@@ -281,7 +317,7 @@ def test_latest_visibility_uses_round_before_input_order(tmp_path: Path) -> None
         phases_by_id,
         role="executor",
         agent_id="executor-1",
-        artifact_type="merged_patch_metadata.md",
+        artifact_type="merged_patch_metadata.json",
         phase_type=PATCH_MERGE,
         round_id=1,
         label="old-metadata",
@@ -292,7 +328,7 @@ def test_latest_visibility_uses_round_before_input_order(tmp_path: Path) -> None
         phases_by_id,
         role="executor",
         agent_id="executor-1",
-        artifact_type="merged_patch_metadata.md",
+        artifact_type="merged_patch_metadata.json",
         phase_type=PATCH_MERGE,
         round_id=3,
         label="latest-metadata",
@@ -302,7 +338,7 @@ def test_latest_visibility_uses_round_before_input_order(tmp_path: Path) -> None
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "reviewer", REVIEWING, 0)
 
-    assert _names(visible) == {"latest-metadata-merged_patch_metadata.md"}
+    assert _names(visible) == {"latest-metadata-merged_patch_metadata.json"}
 
 
 def test_latest_visibility_uses_version_when_rounds_match(tmp_path: Path) -> None:
@@ -312,7 +348,7 @@ def test_latest_visibility_uses_version_when_rounds_match(tmp_path: Path) -> Non
         phases_by_id,
         role="executor",
         agent_id="executor-1",
-        artifact_type="merged_patch_metadata.md",
+        artifact_type="merged_patch_metadata.json",
         phase_type=PATCH_MERGE,
         round_id=3,
         label="old-version",
@@ -323,7 +359,7 @@ def test_latest_visibility_uses_version_when_rounds_match(tmp_path: Path) -> Non
         phases_by_id,
         role="executor",
         agent_id="executor-1",
-        artifact_type="merged_patch_metadata.md",
+        artifact_type="merged_patch_metadata.json",
         phase_type=PATCH_MERGE,
         round_id=3,
         label="latest-version",
@@ -333,7 +369,7 @@ def test_latest_visibility_uses_version_when_rounds_match(tmp_path: Path) -> Non
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "reviewer", REVIEWING, 0)
 
-    assert _names(visible) == {"latest-version-merged_patch_metadata.md"}
+    assert _names(visible) == {"latest-version-merged_patch_metadata.json"}
 
 
 def test_latest_visibility_uses_declared_round_when_phase_row_is_missing(tmp_path: Path) -> None:
@@ -343,7 +379,7 @@ def test_latest_visibility_uses_declared_round_when_phase_row_is_missing(tmp_pat
         phases_by_id,
         role="executor",
         agent_id="executor-1",
-        artifact_type="merged_patch_metadata.md",
+        artifact_type="merged_patch_metadata.json",
         phase_type=PATCH_MERGE,
         round_id=1,
         label="declared-old",
@@ -355,7 +391,7 @@ def test_latest_visibility_uses_declared_round_when_phase_row_is_missing(tmp_pat
         phases_by_id,
         role="executor",
         agent_id="executor-1",
-        artifact_type="merged_patch_metadata.md",
+        artifact_type="merged_patch_metadata.json",
         phase_type=PATCH_MERGE,
         round_id=5,
         label="declared-latest",
@@ -366,20 +402,20 @@ def test_latest_visibility_uses_declared_round_when_phase_row_is_missing(tmp_pat
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "reviewer", REVIEWING, 0)
 
-    assert _names(visible) == {"declared-latest-merged_patch_metadata.md"}
+    assert _names(visible) == {"declared-latest-merged_patch_metadata.json"}
 
 
 def test_communicator_visibility_uses_only_plan_and_final_executor_artifacts(tmp_path: Path) -> None:
     phases_by_id: dict[str, dict] = {}
     artifacts = [
-        _artifact(tmp_path, phases_by_id, role="reviewer", agent_id="reviewer-1", artifact_type="selected_plan.md", phase_type=PLAN_REVIEW, round_id=1, label="selected"),
+        _artifact(tmp_path, phases_by_id, role="reviewer", agent_id="reviewer-1", artifact_type="selected_plan.json", phase_type=PLAN_REVIEW, round_id=1, label="selected"),
         _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="merged_patch.diff", phase_type=PATCH_MERGE, round_id=3, label="merged"),
-        _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="merged_patch_metadata.md", phase_type=PATCH_MERGE, round_id=3, label="metadata"),
+        _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="merged_patch_metadata.json", phase_type=PATCH_MERGE, round_id=3, label="metadata"),
         _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="changed_files.md", phase_type=PATCH_MERGE, round_id=3, label="changed"),
         _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="self_check.md", phase_type=PATCH_MERGE, round_id=3, label="self"),
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=3, label="bug"),
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", phase_type=TESTING, round_id=3, label="result"),
-        _artifact(tmp_path, phases_by_id, role="reviewer", agent_id="reviewer-1", artifact_type="review_report.md", phase_type=REVIEWING, round_id=1, label="review"),
+        _artifact(tmp_path, phases_by_id, role="reviewer", agent_id="reviewer-1", artifact_type="review_result.json", phase_type=REVIEWING, round_id=1, label="review"),
         _artifact(tmp_path, phases_by_id, role="judge", agent_id="judge-1", artifact_type="decision.json", phase_type=TEST_JUDGEMENT, round_id=3, label="judge"),
         _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="orchestrator", artifact_type="test_gate.md", phase_type="TEST_GATE", round_id=3, label="gate"),
     ]
@@ -387,8 +423,8 @@ def test_communicator_visibility_uses_only_plan_and_final_executor_artifacts(tmp
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "communicator", DELIVERY, 0)
 
     assert _names(visible) == {
-        "selected-selected_plan.md",
-        "metadata-merged_patch_metadata.md",
+        "selected-selected_plan.json",
+        "metadata-merged_patch_metadata.json",
         "changed-changed_files.md",
         "self-self_check.md",
         "bug-bug_report.md",

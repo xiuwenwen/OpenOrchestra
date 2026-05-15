@@ -52,10 +52,19 @@ def test_visibility_rules_live_in_artifact_schema_layer() -> None:
 def test_role_phase_contract_binds_outputs_and_visibility() -> None:
     contract = role_phase_contract_for("judge", "TEST_JUDGEMENT")
 
-    assert contract.required_outputs_with_delivery() == ["decision.json", "decision_summary.md", "delivery.md"]
+    assert contract.required_outputs_with_delivery() == ["decision.json", "delivery.md"]
     assert {(rule.source_role, tuple(sorted(rule.artifact_types))) for rule in contract.visibility_rules} == {
         ("orchestrator", ("objective_gate.md",)),
+        ("reviewer", ("selected_plan.json",)),
         ("tester", ("bug_report.md", "tester_result.json")),
+    }
+
+
+def test_reviewing_contract_includes_tester_result_visibility() -> None:
+    contract = role_phase_contract_for("reviewer", "REVIEWING")
+
+    assert ("tester", ("bug_report.md", "tester_result.json")) in {
+        (rule.source_role, tuple(sorted(rule.artifact_types))) for rule in contract.visibility_rules
     }
 
 

@@ -70,9 +70,9 @@ def test_role_phase_artifact_input_override_limits_staged_files(tmp_path: Path) 
     current_phase_id = orchestrator.repository.create_phase(task_id, REVIEWING, "reviewer", 0)
 
     for artifact_type, phase_id, role, filename in (
-        ("selected_plan.md", plan_phase_id, "reviewer", "selected-plan.md"),
+        ("selected_plan.json", plan_phase_id, "reviewer", "selected-plan.json"),
         ("changed_files.md", merge_phase_id, "executor", "changed-files.md"),
-        ("merged_patch_metadata.md", merge_phase_id, "executor", "metadata.md"),
+        ("merged_patch_metadata.json", merge_phase_id, "executor", "metadata.json"),
         ("self_check.md", merge_phase_id, "executor", "self-check.md"),
     ):
         path = tmp_path / filename

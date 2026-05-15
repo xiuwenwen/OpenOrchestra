@@ -30,6 +30,7 @@ ROUND_PREVIOUS = "previous"
 ROUND_BEFORE_CURRENT = "before_current"
 ROUND_LATEST_PER_TYPE = "latest_per_type"
 ROUND_LATEST_BEFORE_CURRENT_PER_TYPE = "latest_before_current_per_type"
+ROUND_LATEST_COMPLETE_TEST = "latest_complete_test"
 ROUND_LATEST_COMPLETE_TEST_BEFORE_CURRENT = "latest_complete_test_before_current"
 ROUND_LATEST_COMPLETE_JUDGE_BEFORE_CURRENT = "latest_complete_judge_before_current"
 ROUND_LATEST_PLANNING = "latest_planning_round"
@@ -75,22 +76,30 @@ def _phases(*phases: str) -> frozenset[str]:
     return frozenset(phases)
 
 
-PLANNING_ARTIFACTS = _types("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md")
+PLANNING_ARTIFACTS = _types("plan.md", "assumptions.md", "risk.md", "todo_breakdown.json")
 PROJECT_CONTEXT_ARTIFACTS = _types("project_context.md")
 TEST_REPORT_ARTIFACTS = _types("bug_report.md", "tester_result.json")
-JUDGE_DECISION_ARTIFACTS = _types("decision.json", "decision_summary.md")
+JUDGE_DECISION_ARTIFACTS = _types("decision.json")
 PATCH_FIX_GATE_ARTIFACTS = _types("objective_gate.md")
 TEST_JUDGE_GATE_ARTIFACTS = _types("objective_gate.md")
 RUNTIME_READINESS_ARTIFACTS = _types("runtime_readiness.md")
 EXECUTOR_REVIEW_ARTIFACTS = _types(
     "changed_files.md",
     "merged_patch.diff",
-    "merged_patch_metadata.md",
+    "merged_patch_metadata.json",
     "self_check.md",
 )
 DELIVERY_EXECUTOR_ARTIFACTS = _types(
     "changed_files.md",
-    "merged_patch_metadata.md",
+    "merged_patch_metadata.json",
+    "self_check.md",
+)
+PLAN_RECHECK_EXECUTOR_ARTIFACTS = _types(
+    "changed_files.md",
+    "fix_notes.md",
+    "fix_schedule.md",
+    "merged_patch.diff",
+    "merged_patch_metadata.json",
     "self_check.md",
 )
 ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
@@ -116,7 +125,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "planner",
         PLANNING_REVISION,
         "planner",
-        PLANNING_ARTIFACTS | _types("peer_review.md"),
+        PLANNING_ARTIFACTS | _types("peer_review_result.json"),
         round_policy=ROUND_PREVIOUS,
         condition=CONDITION_NO_REJECTED_PLAN_REVIEW,
     ),
@@ -132,16 +141,40 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "planner",
         PLANNING_REVISION,
         "reviewer",
-        _types("review_report.md"),
+        _types("review_result.json"),
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_REJECTED_PLAN_REVIEW,
         condition=CONDITION_HAS_REJECTED_PLAN_REVIEW,
     ),
     ArtifactVisibilityRule(
+        "planner",
+        PLANNING_REVISION,
+        "reviewer",
+        _types("selected_plan.json"),
+        source_phases=_phases(PLAN_REVIEW),
+        round_policy=ROUND_LATEST_PER_TYPE,
+    ),
+    ArtifactVisibilityRule(
+        "planner",
+        PLANNING_REVISION,
+        "executor",
+        PLAN_RECHECK_EXECUTOR_ARTIFACTS,
+        source_phases=_phases(EXECUTION, FIXING, REVIEW_FIXING, PATCH_MERGE),
+        round_policy=ROUND_BEFORE_CURRENT,
+    ),
+    ArtifactVisibilityRule(
+        "planner",
+        PLANNING_REVISION,
+        "tester",
+        TEST_REPORT_ARTIFACTS,
+        source_phases=_phases(TESTING, REGRESSION_TESTING),
+        round_policy=ROUND_BEFORE_CURRENT,
+    ),
+    ArtifactVisibilityRule(
         "reviewer",
         PLAN_REVIEW,
         "planner",
-        PLANNING_ARTIFACTS | _types("peer_review.md"),
+        PLANNING_ARTIFACTS | _types("peer_review_result.json"),
         source_phases=_phases(PLANNING_DRAFT, PLANNING_REVISION, PLANNING_PEER_REVIEW),
         round_policy=ROUND_CURRENT,
     ),
@@ -149,9 +182,25 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "executor",
         EXECUTION,
         "reviewer",
-        _types("selected_plan.md"),
+        _types("selected_plan.json"),
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PLANNING,
+    ),
+    ArtifactVisibilityRule(
+        "executor",
+        FIXING,
+        "reviewer",
+        _types("selected_plan.json"),
+        source_phases=_phases(PLAN_REVIEW),
+        round_policy=ROUND_LATEST_PER_TYPE,
+    ),
+    ArtifactVisibilityRule(
+        "executor",
+        REVIEW_FIXING,
+        "reviewer",
+        _types("selected_plan.json"),
+        source_phases=_phases(PLAN_REVIEW),
+        round_policy=ROUND_LATEST_PER_TYPE,
     ),
     ArtifactVisibilityRule(
         "executor",
@@ -165,7 +214,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "executor",
         PATCH_MERGE,
         "executor",
-        _types("merged_patch.diff", "merged_patch_metadata.md"),
+        _types("merged_patch.diff", "merged_patch_metadata.json"),
         source_phases=_phases(PATCH_MERGE),
         round_policy=ROUND_LATEST_BEFORE_CURRENT_PER_TYPE,
     ),
@@ -174,7 +223,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "executor",
         FIXING,
         "executor",
-        _types("merged_patch_metadata.md"),
+        _types("merged_patch_metadata.json"),
         source_phases=_phases(PATCH_MERGE),
         round_policy=ROUND_PREVIOUS,
     ),
@@ -199,7 +248,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "executor",
         REVIEW_FIXING,
         "executor",
-        _types("merged_patch_metadata.md"),
+        _types("merged_patch_metadata.json"),
         source_phases=_phases(PATCH_MERGE),
         round_policy=ROUND_PREVIOUS,
     ),
@@ -220,16 +269,64 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         round_policy=ROUND_LATEST_COMPLETE_JUDGE_BEFORE_CURRENT,
     ),
     ArtifactVisibilityRule(
+        "tester",
+        TESTING,
+        "reviewer",
+        _types("selected_plan.json"),
+        source_phases=_phases(PLAN_REVIEW),
+        round_policy=ROUND_LATEST_PER_TYPE,
+    ),
+    ArtifactVisibilityRule(
+        "tester",
+        REGRESSION_TESTING,
+        "reviewer",
+        _types("selected_plan.json"),
+        source_phases=_phases(PLAN_REVIEW),
+        round_policy=ROUND_LATEST_PER_TYPE,
+    ),
+    ArtifactVisibilityRule(
+        "tester",
+        TESTING,
+        "tester",
+        TEST_REPORT_ARTIFACTS,
+        source_phases=_phases(TESTING),
+        round_policy=ROUND_CURRENT,
+    ),
+    ArtifactVisibilityRule(
+        "tester",
+        REGRESSION_TESTING,
+        "tester",
+        TEST_REPORT_ARTIFACTS,
+        source_phases=_phases(REGRESSION_TESTING),
+        round_policy=ROUND_CURRENT,
+    ),
+    ArtifactVisibilityRule(
         "reviewer",
         REVIEWING,
         "reviewer",
-        _types("selected_plan.md"),
+        _types("selected_plan.json"),
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
     ArtifactVisibilityRule("reviewer", REVIEWING, "executor", EXECUTOR_REVIEW_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
+    ArtifactVisibilityRule(
+        "reviewer",
+        REVIEWING,
+        "tester",
+        TEST_REPORT_ARTIFACTS,
+        source_phases=_phases(TESTING, REGRESSION_TESTING),
+        round_policy=ROUND_LATEST_COMPLETE_TEST,
+    ),
     ArtifactVisibilityRule("reviewer", REVIEWING, "orchestrator", RUNTIME_READINESS_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
     ArtifactVisibilityRule("judge", TEST_JUDGEMENT, "orchestrator", TEST_JUDGE_GATE_ARTIFACTS, round_policy=ROUND_CURRENT),
+    ArtifactVisibilityRule(
+        "judge",
+        TEST_JUDGEMENT,
+        "reviewer",
+        _types("selected_plan.json"),
+        source_phases=_phases(PLAN_REVIEW),
+        round_policy=ROUND_LATEST_PER_TYPE,
+    ),
     ArtifactVisibilityRule(
         "judge",
         TEST_JUDGEMENT,
@@ -241,8 +338,16 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
     ArtifactVisibilityRule(
         "judge",
         REVIEW_JUDGEMENT,
+        "reviewer",
+        _types("selected_plan.json"),
+        source_phases=_phases(PLAN_REVIEW),
+        round_policy=ROUND_LATEST_PER_TYPE,
+    ),
+    ArtifactVisibilityRule(
+        "judge",
+        REVIEW_JUDGEMENT,
         "executor",
-        _types("merged_patch_metadata.md"),
+        _types("merged_patch_metadata.json"),
         source_phases=_phases(PATCH_MERGE),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
@@ -250,7 +355,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "judge",
         REVIEW_JUDGEMENT,
         "reviewer",
-        _types("review_report.md"),
+        _types("review_result.json"),
         source_phases=_phases(REVIEWING),
         round_policy=ROUND_CURRENT,
     ),
@@ -258,7 +363,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "communicator",
         DELIVERY,
         "reviewer",
-        _types("selected_plan.md"),
+        _types("selected_plan.json"),
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
@@ -290,21 +395,21 @@ def _contract(role: str, phase: str, outputs: tuple[str, ...]) -> RolePhaseContr
     return contract
 
 
-_contract("planner", PLANNING_DRAFT, ("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md"))
-_contract("planner", PLANNING_PEER_REVIEW, ("peer_review.md",))
-_contract("planner", PLANNING_REVISION, ("plan.md", "assumptions.md", "risk.md", "todo_breakdown.md"))
+_contract("planner", PLANNING_DRAFT, ("plan.md", "assumptions.md", "risk.md", "todo_breakdown.json"))
+_contract("planner", PLANNING_PEER_REVIEW, ("peer_review_result.json",))
+_contract("planner", PLANNING_REVISION, ("plan.md", "assumptions.md", "risk.md", "todo_breakdown.json"))
 _contract("executor", EXECUTION, ("implementation_plan.md", "changed_files.md", "patch.diff", "self_check.md"))
-_contract("executor", PATCH_MERGE, ("merged_patch.diff", "merged_patch_metadata.md", "merge_report.md"))
+_contract("executor", PATCH_MERGE, ("merged_patch.diff", "merged_patch_metadata.json"))
 _contract("executor", MISC_RESPONSE, ("response.md", "notes.md"))
 _contract("executor", FIXING, ("fix_schedule.md", "fix_patch.diff", "fix_notes.md", "self_check.md"))
 _contract("executor", REVIEW_FIXING, ("fix_schedule.md", "fix_patch.diff", "fix_notes.md", "self_check.md"))
 _contract("tester", TESTING, ("bug_report.md", "tester_result.json"))
 _contract("tester", REGRESSION_TESTING, ("bug_report.md", "tester_result.json"))
-_contract("reviewer", PLAN_REVIEW, ("review_report.md", "selected_plan.md"))
-_contract("reviewer", REVIEWING, ("review_report.md",))
-_contract("judge", TEST_JUDGEMENT, ("decision.json", "decision_summary.md"))
-_contract("judge", REVIEW_JUDGEMENT, ("decision.json", "decision_summary.md"))
-_contract("communicator", DELIVERY, ("final_delivery.md", "usage_guide.md"))
+_contract("reviewer", PLAN_REVIEW, ("review_result.json", "selected_plan.json"))
+_contract("reviewer", REVIEWING, ("review_result.json",))
+_contract("judge", TEST_JUDGEMENT, ("decision.json",))
+_contract("judge", REVIEW_JUDGEMENT, ("decision.json",))
+_contract("communicator", DELIVERY, ("final_delivery.json", "usage_guide.md"))
 
 
 REQUIRED_OUTPUTS: dict[str, dict[str, list[str]] | list[str]] = {
@@ -373,37 +478,44 @@ def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]
             "- If testing is blocked by a broken implementation, still write a complete `bug_report.md` with `artifact_result_code: 0` and describe the blocker in the verdict fields.",
             "- Write `tester_result.json` as one strict JSON object; it is the workflow decision contract, not Markdown.",
             '- `tester_result.json.status` must be exactly one of `"tests_passed"`, `"source_bug"`, or `"environment_blocked"`.',
+            '- `tester_result.json.environment_dependency_issue` must be a boolean and must be `true` whenever setup/build/test execution is blocked by dependency, interpreter, package, import, toolchain, or runtime environment issues.',
             '- `tester_result.json.next_action` must match the status: `"continue"`, `"fix_code"`, or `"block_task"`.',
+            "- `tester_result.json.oracle_results` must be a list of per-acceptance-oracle verdict objects with `oracle_id`, `status`, `evidence`, and `commands_run`.",
             "- Tester owns environment setup and command execution before writing `tester_result.json`; do not rely on a later Harness test gate.",
             "- Use `environment_blocked` only after safe project-declared or minimal test-tooling setup/repair was attempted and the environment still cannot run.",
+            "- Harness checks `environment_dependency_issue` before `status`; when it is true Harness reruns the tester environment repair loop instead of sending the report to executor.",
             "- Harness validates `delivery.md` and report headers; any non-zero `return_code` or non-zero `artifact_result_code` prevents the run from advancing.",
         ]
     if role == "reviewer":
         return [
             *base,
-            "- Put review outcome only in `review_report.md` as `review_decision_code: 0`, `review_decision_code: 1`, or `review_decision_code: -1`.",
+            "- Put review outcome only in `review_result.json.review_decision_code` as `0`, `1`, or `-1`.",
             "- Do not copy `review_decision_code` into `artifact_result_code` or `return_code`.",
-            "- `review_report.md` must also include a `## Review Verdict JSON` section with one fenced `json` object describing runtime/environment verification.",
-            '- Required JSON keys: `review_status`, `environment_check.attempted`, `environment_check.status`, `environment_check.commands_run`, `environment_check.fixable`, and `environment_check.blocking_reason`.',
+            "- `review_result.json` must be exactly one JSON object with no Markdown, prose, YAML, or code fence.",
+            '- Required JSON keys: `review_decision_code`, `review_status`, `summary`, `findings`, `required_changes`, `environment_check.attempted`, `environment_check.status`, `environment_check.commands_run`, `environment_check.fixable`, and `environment_check.blocking_reason`.',
+            "- During PLAN_REVIEW, `selected_plan.json.acceptance_oracles` must be the authoritative structured acceptance contract.",
             "- Use `environment_check.status: blocked` only for irreconcilable runtime or system conflicts that should stop Harness immediately.",
         ]
     if role == "judge":
         return [
             *base,
             "- Put the phase verdict only in `decision.json.decision`.",
-            "- Put the numeric summary only in `decision_summary.md` as `decision_code: 0`, `decision_code: 1`, or `decision_code: -1` according to the phase rules below.",
+            "- Put the numeric summary in `decision.json.decision_code` as `0`, `1`, or `-1` according to the phase rules below.",
+            "- Put `summary`, `reason`, and `evidence` directly in `decision.json`; do not create a separate decision summary artifact.",
             "- Do not copy `decision_code` or `decision.json.decision` into `artifact_result_code` or `return_code`.",
         ]
     if role == "planner":
         return [
             *base,
-            "- For `peer_review.md`, put peer-review outcome only in `peer_review_code: 0`, `peer_review_code: 1`, or `peer_review_code: -1`.",
+            "- For peer review, write exactly one JSON object to `peer_review_result.json`.",
+            "- Put peer-review outcome only in `peer_review_result.json.peer_review_code` as `0`, `1`, or `-1`.",
             "- Do not copy `peer_review_code` into `artifact_result_code` or `return_code`.",
         ]
     if role == "communicator":
         return [
             *base,
-            "- Put final delivery outcome only in `final_delivery.md` as `final_delivery_code: 0`, `final_delivery_code: 1`, `final_delivery_code: 2`, or `final_delivery_code: -1`.",
+            "- Put final delivery outcome only in `final_delivery.json.final_delivery_code` as `0`, `1`, `2`, or `-1`.",
+            "- Put operator-facing instructions only in `usage_guide.md`.",
             "- Do not copy `final_delivery_code` into `artifact_result_code` or `return_code`.",
         ]
     return [

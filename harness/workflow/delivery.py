@@ -45,7 +45,7 @@ class DeliveryPublisher:
         deliver_root = self.deliver_root()
         project_dir = self.delivery_project_dir(task_id, prompt, deliver_root)
         project_dir.mkdir(parents=True, exist_ok=True)
-        destination = project_dir / "final_delivery.md"
+        destination = project_dir / "final_delivery.json"
         shutil.copy2(final_path, destination)
         usage_guide = self.latest_usage_guide(task_id)
         if usage_guide and usage_guide.exists():
@@ -68,7 +68,7 @@ class DeliveryPublisher:
             "",
             "## Published Files",
             "",
-            f"- final_delivery.md: {destination}",
+            f"- final_delivery.json: {destination}",
             f"- success_path.md: {success_path}",
         ]
         if usage_guide and usage_guide.exists():
@@ -184,11 +184,11 @@ class DeliveryPublisher:
         )
         artifact_types = (
             [
-                "merged_patch_metadata.md",
+                "merged_patch_metadata.json",
                 "changed_files.md",
                 "self_check.md",
                 "fix_notes.md",
-                "review_report.md",
+                "review_result.json",
             ]
             if include_internal_artifacts
             else []
@@ -327,7 +327,7 @@ class DeliveryPublisher:
         text_parts: list[str] = []
         for path in (
             project_dir / "usage_guide.md",
-            project_dir / "final_delivery.md",
+            project_dir / "final_delivery.json",
             source_dir / "README.md",
             source_dir / "readme.md",
         ):

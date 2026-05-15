@@ -117,7 +117,7 @@ PLANNER_SPECIALIZATIONS: dict[int, list[tuple[str, str, list[str]]]] = {
             "User-goal alignment, final deliverability, acceptance criteria, explainability.",
             [
                 "Define what the user ultimately receives.",
-                "Define the contents of final_delivery.md.",
+                "Define the contents of final_delivery.json.",
                 "Make the result understandable.",
                 "Define acceptance criteria.",
                 "Document known limitations.",

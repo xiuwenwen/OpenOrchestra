@@ -284,7 +284,7 @@ function renderAgentCards(runs){
   if(!runs.length)return`<div class="empty-msg">${esc(t("noRole"))}</div>`;
   return runs.map(r=>{
     const arts=(r.artifacts||[]).filter(a=>a.exists);
-  const deliveryTypes=["delivery.md","final_delivery.md","usage_guide.md","response.md","plan.md","decision_summary.md","review_report.md","bug_report.md","tester_result.json","self_check.md","merge_report.md"];
+  const deliveryTypes=["delivery.md","final_delivery.json","usage_guide.md","response.md","plan.md","decision.json","review_result.json","bug_report.md","tester_result.json","self_check.md","merged_patch_metadata.json"];
     const priArts=arts.filter(a=>deliveryTypes.includes(a.artifact_type));
     const otherArts=arts.filter(a=>!deliveryTypes.includes(a.artifact_type));
     return`<div class="ag-card">

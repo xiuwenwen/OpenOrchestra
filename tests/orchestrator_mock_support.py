@@ -30,7 +30,7 @@ def _config(tmp_path: Path) -> dict:
         },
         "limits": {
             "max_planning_rounds": 3,
-            "max_test_fix_rounds": 5,
+            "max_test_fix_rounds": 10,
             "max_review_rounds": 3,
             "max_agent_retry": 2,
         },

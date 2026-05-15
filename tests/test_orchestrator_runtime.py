@@ -49,15 +49,22 @@ def _tester_result(tmp_path: Path, status: str) -> HarnessTesterResult:
         "source_bug": "fix_code",
         "environment_blocked": "block_task",
     }[status]
-    return HarnessTesterResult(status, next_action, status, status, tmp_path / "tester_result.json", {"status": status})
+    env_issue = status == "environment_blocked"
+    return HarnessTesterResult(
+        status,
+        next_action,
+        status,
+        status,
+        tmp_path / "tester_result.json",
+        {"status": status, "environment_dependency_issue": env_issue},
+        env_issue,
+    )
 
 
 def test_artifact_visibility_rule_table_covers_role_phases() -> None:
     covered = {(rule.target_role, rule.target_phase) for rule in orchestrator_module.ARTIFACT_VISIBILITY_RULES}
     intentionally_empty_inputs = {
         ("executor", "MISC_RESPONSE"),
-        ("tester", TESTING),
-        ("tester", REGRESSION_TESTING),
     }
     role_phases = {
         ("planner", PLANNING_DRAFT),
@@ -115,21 +122,18 @@ def test_orchestrator_emits_progress_events(tmp_path: Path) -> None:
     assert completed_agent.span_id
     assert completed_agent.parent_span_id
 
-def test_uncompleted_markdown_template_is_output_invalid_not_file_error(monkeypatch, tmp_path: Path) -> None:
+def test_uncompleted_json_template_is_output_invalid_not_file_error(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     config["roles"]["executor"]["count"] = 1
     config["limits"]["max_agent_retry"] = 0
     orchestrator = Orchestrator(config)
-    task_id = orchestrator.create_task("merge without merge report")
+    task_id = orchestrator.create_task("merge without metadata")
 
-    class MissingMergeReportAdapter:
+    class MissingMetadataAdapter:
         def run(self, context):
             context.output_dir.mkdir(parents=True, exist_ok=True)
             context.log_dir.mkdir(parents=True, exist_ok=True)
             (context.output_dir / "merged_patch.diff").write_text("diff --git a/a b/a\n", encoding="utf-8")
-            (context.output_dir / "merged_patch_metadata.md").write_text(
-                "artifact_result_code: 0\n\npatch_artifact: merged_patch.diff\n", encoding="utf-8"
-            )
             (context.output_dir / "delivery.md").write_text(
                 json.dumps(
                     {
@@ -158,7 +162,7 @@ def test_uncompleted_markdown_template_is_output_invalid_not_file_error(monkeypa
                 stderr_path=stderr,
             )
 
-    monkeypatch.setattr(orchestrator, "_adapter_for_backend", lambda backend: MissingMergeReportAdapter())
+    monkeypatch.setattr(orchestrator, "_adapter_for_backend", lambda backend: MissingMetadataAdapter())
 
     try:
         orchestrator.run_role_phase(
@@ -166,17 +170,17 @@ def test_uncompleted_markdown_template_is_output_invalid_not_file_error(monkeypa
             PATCH_MERGE,
             0,
             required_outputs_for("executor", PATCH_MERGE),
-            "merge without merge report",
+            "merge without metadata",
         )
     except Exception as exc:
-        assert "merge_report.md still contains Harness output template marker" in str(exc)
+        assert "merged_patch_metadata.json still contains Harness output template marker" in str(exc)
         assert "No such file or directory" not in str(exc)
     else:
-        raise AssertionError("Expected uncompleted merge_report.md template to fail validation")
+        raise AssertionError("Expected uncompleted merged_patch_metadata.json template to fail validation")
 
     runs = orchestrator.repository.list_agent_runs(task_id)
     assert runs[-1]["status"] == "OUTPUT_INVALID"
-    assert runs[-1]["error_message"] == "merge_report.md still contains Harness output template marker"
+    assert runs[-1]["error_message"] == "merged_patch_metadata.json still contains Harness output template marker"
 
 def test_context_window_failure_is_not_retried(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)

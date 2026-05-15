@@ -51,7 +51,7 @@ class RetentionService:
         if not task:
             return RetentionPlan(task_id, dry_run, None, None, None, [], [RetentionAction(Path(task_id), reason="task not found")])
         success_path = self.success_path(task_id)
-        final_delivery = success_path / "final_delivery.md" if success_path else None
+        final_delivery = success_path / "final_delivery.json" if success_path else None
         response = self.latest_artifact_path(task_id, "response.md")
         if str(task["status"]) not in CLEANABLE_TASK_STATUSES:
             return self.refusal_plan(task_id, dry_run, success_path, final_delivery, response, "task is active")
@@ -107,7 +107,7 @@ class RetentionService:
             provided = self.success_path_provider(task_id)
             if provided:
                 return provided
-        final_delivery = self.latest_artifact_path(task_id, "final_delivery.md")
+        final_delivery = self.latest_artifact_path(task_id, "final_delivery.json")
         return final_delivery.parent if final_delivery else None
 
     def latest_artifact_path(self, task_id: str, artifact_type: str) -> Path | None:

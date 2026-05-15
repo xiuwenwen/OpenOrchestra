@@ -30,6 +30,7 @@ ENV_CONFIG_SPECS: dict[str, tuple[tuple[str, ...], type]] = {
     "OO_MAX_PLANNING_ROUNDS": (("limits", "max_planning_rounds"), int),
     "OO_PLANNING_PEER_REVIEW_LOOPS": (("limits", "planning_peer_review_loops"), int),
     "OO_MAX_TEST_FIX_ROUNDS": (("limits", "max_test_fix_rounds"), str),
+    "OO_FIX_TESTER_PLAN_RECHECK_AFTER": (("limits", "fix_tester_plan_recheck_after"), int),
     "OO_MAX_REVIEW_ROUNDS": (("limits", "max_review_rounds"), int),
     "OO_MAX_AGENT_RETRY": (("limits", "max_agent_retry"), int),
     "OO_TIMEOUT_PLANNER": (("timeouts", "planner"), int),

@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 from harness.adapters.command_runner import CommandRunner
-from harness.adapters.process_registry import kill_process_tree, register_process, unregister_process
+from harness.adapters.process_registry import kill_process_tree, register_process, supports_process_groups, unregister_process
 from harness.ui.terminal import TerminalStatusLine
 
 
@@ -44,7 +44,7 @@ class SubprocessRunner:
                     stderr=subprocess.PIPE,
                     text=True,
                     bufsize=1,
-                    start_new_session=hasattr(os, "setsid"),
+                    start_new_session=supports_process_groups(),
                     env={**os.environ, **env} if env else None,
                 )
                 register_process(process)

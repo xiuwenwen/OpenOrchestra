@@ -81,6 +81,7 @@ class MockAgentAdapter(AgentAdapter):
                     "status": "tests_passed",
                     "next_action": "continue",
                     "failure_type": "none",
+                    "environment_dependency_issue": False,
                     "summary": "Mock tester completed environment setup and verification.",
                     "setup_commands_run": [],
                     "test_commands_run": [
@@ -88,6 +89,15 @@ class MockAgentAdapter(AgentAdapter):
                             "command": "python -m compileall -q .",
                             "exit_code": 0,
                             "phase": "test",
+                        }
+                    ],
+                    "oracle_results": [
+                        {
+                            "oracle_id": "A1",
+                            "status": "passed",
+                            "evidence": "Mock verification passed.",
+                            "commands_run": ["python -m compileall -q ."],
+                            "output_excerpt": "mock compile passed",
                         }
                     ],
                     "remaining_blockers": [],
@@ -99,42 +109,99 @@ class MockAgentAdapter(AgentAdapter):
             return "artifact_result_code: 0\n\n# Response\n\nMock informational response for the user's request.\n"
         if context.role == "executor" and name == "notes.md":
             return "artifact_result_code: 0\n\n# Notes\n\nContext used: mock input artifacts.\nLimitations: mock adapter output.\n"
-        if context.role == "reviewer" and name == "review_report.md":
-            return (
-                "artifact_result_code: 0\n\n"
-                "# Review Report\n\n"
-                "review_decision_code: 0\n"
-                "Runtime verification passed on the current machine.\n\n"
-                "## Review Verdict JSON\n\n"
-                "```json\n"
-                "{\n"
-                '  "review_status": "approved",\n'
-                '  "environment_check": {\n'
-                '    "attempted": true,\n'
-                '    "status": "ready",\n'
-                '    "commands_run": ["python mock.py"],\n'
-                '    "fixable": true,\n'
-                '    "blocking_reason": ""\n'
-                "  }\n"
-                "}\n"
-                "```\n"
-            )
-        if context.role == "reviewer" and name == "selected_plan.md":
-            return "artifact_result_code: 0\n\n# Selected Plan\n\nUse the merged mock planner proposal as the single execution plan.\n"
-        if context.role == "planner" and name == "peer_review.md":
-            return "artifact_result_code: 0\n\n# Peer Review\n\npeer_review_code: 1\nMock peer review requests one bounded revision loop.\n"
-        if context.role == "communicator" and name == "final_delivery.md":
-            return (
-                "artifact_result_code: 0\n\n"
-                "# Final Delivery\n\n"
-                "final_delivery_code: 0\n\n"
-                f"Task `{context.task_id}` completed through the mock harness flow.\n\n"
-                "## Handoff\n\n"
-                "- project_dir: source\n"
-                "- run_command: python mock.py\n"
-                "- dependency_install: none\n\n"
-                "The orchestrator collected the accepted plan and final implementation artifacts for delivery.\n"
-            )
+        if context.role == "reviewer" and name == "review_result.json":
+            return json.dumps(
+                {
+                    "schema_version": 1,
+                    "review_decision_code": 0,
+                    "review_status": "approved",
+                    "summary": "Mock reviewer approved the implementation.",
+                    "findings": [],
+                    "required_changes": [],
+                    "environment_check": {
+                        "attempted": True,
+                        "status": "ready",
+                        "commands_run": ["python mock.py"],
+                        "fixable": True,
+                        "blocking_reason": "",
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
+        if context.role == "reviewer" and name == "selected_plan.json":
+            return json.dumps(
+                {
+                    "schema_version": 1,
+                    "selected_plan_id": "mock-plan",
+                    "summary": "Use the merged mock planner proposal as the single execution plan.",
+                    "source_artifacts": ["plan.md", "todo_breakdown.json"],
+                    "execution_order": ["implement mock change", "run mock verification"],
+                    "acceptance_criteria": ["mock verification passes"],
+                    "acceptance_oracles": [
+                        {
+                            "id": "A1",
+                            "description": "Mock verification passes.",
+                            "kind": "test",
+                            "required": True,
+                            "commands": ["python -m compileall -q ."],
+                            "expected_exception": "",
+                            "must_contain": [],
+                            "must_not_contain": ["Traceback"],
+                            "semantic_assertions": ["Mock verification reports no blocking bugs."],
+                            "failure_signal": "Compile/check command fails or emits a traceback.",
+                            "evidence_hint": "Record command exit code and relevant output excerpt.",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
+        if context.role == "planner" and name == "peer_review_result.json":
+            return json.dumps(
+                {
+                    "schema_version": 1,
+                    "peer_review_code": 1,
+                    "peer_review_status": "changes_requested",
+                    "summary": "Mock peer review requests one bounded revision loop.",
+                    "findings": ["mock revision requested"],
+                    "required_changes": ["revise once before plan review"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
+        if context.role == "planner" and name == "todo_breakdown.json":
+            return json.dumps(
+                {
+                    "schema_version": 1,
+                    "todos": [
+                        {
+                            "id": "mock-1",
+                            "title": "Implement mock change",
+                            "owner_role": "executor",
+                            "status": "pending",
+                            "acceptance_criteria": ["mock verification passes"],
+                        }
+                    ],
+                    "risks": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
+        if context.role == "communicator" and name == "final_delivery.json":
+            return json.dumps(
+                {
+                    "schema_version": 1,
+                    "final_delivery_code": 0,
+                    "status": "delivered",
+                    "summary": f"Task {context.task_id} completed through the mock harness flow.",
+                    "delivered_artifacts": ["source", "usage_guide.md"],
+                    "verification": ["Every role delivery.md reports return_code 0."],
+                    "known_risks": ["This is mock output and does not contain a real implementation."],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
         if context.role == "communicator" and name == "usage_guide.md":
             return (
                 "artifact_result_code: 0\n\n"
@@ -153,17 +220,7 @@ class MockAgentAdapter(AgentAdapter):
             )
         if context.role == "judge" and name == "decision.json":
             return json.dumps(self._decision_payload(context), ensure_ascii=False, indent=2) + "\n"
-        if context.role == "judge" and name == "decision_summary.md":
-            payload = self._decision_payload(context)
-            decision_code = -1 if payload["decision"] == "fail" else 1 if payload["decision"] == "changes_required" else 0
-            return (
-                "artifact_result_code: 0\n\n"
-                "# Decision Summary\n\n"
-                f"decision_code: {decision_code}\n"
-                "decision_source: decision.json\n"
-                f"Reason: {payload['reason']}\n"
-            )
-        if context.role == "executor" and name == "merged_patch_metadata.md":
+        if context.role == "executor" and name == "merged_patch_metadata.json":
             return self._merged_patch_metadata(context)
         if name.endswith(".diff"):
             return "diff --git a/mock.txt b/mock.txt\nnew file mode 100644\n--- /dev/null\n+++ b/mock.txt\n@@ -0,0 +1 @@\n+mock change\n"
@@ -179,29 +236,78 @@ class MockAgentAdapter(AgentAdapter):
         source_path = context.config.get("repository_source_path") or context.config.get("project_context", {}).get(
             "repository_source_path", str(context.repo_dir)
         )
-        return (
-            "artifact_result_code: 0\n\n"
-            "# Merged Patch Metadata\n\n"
-            "patch_artifact: merged_patch.diff\n"
-            f"base_source_type: {source_type}\n"
-            f"base_source_path: {source_path}\n"
-            f"base_round: {context.round_id}\n"
-            f"base_task_id: {context.task_id}\n"
-            f"apply_target: {context.repo_dir}\n"
-            "patch_scope: merged_authoritative\n"
-            "changed_files: mock.txt\n"
-            "selected_candidate_artifacts: patch.diff, fix_patch.diff\n"
-            "expected_apply_command: git apply --check merged_patch.diff\n"
-            "compatibility_notes: Mock merged patch metadata matches the current PATCH_MERGE workspace.\n"
-        )
+        return json.dumps(
+            {
+                "schema_version": 1,
+                "patch_artifact": "merged_patch.diff",
+                "base_source_type": source_type,
+                "base_source_path": str(source_path),
+                "round_id": context.round_id,
+                "base_round": context.round_id,
+                "base_task_id": context.task_id,
+                "apply_target": str(context.repo_dir),
+                "patch_scope": "merged_authoritative",
+                "changed_files": ["mock.txt"],
+                "selected_candidate_artifacts": ["patch.diff", "fix_patch.diff"],
+                "expected_apply_command": "git apply --check merged_patch.diff",
+                "compatibility_notes": "Mock merged patch metadata matches the current PATCH_MERGE workspace.",
+                "merge_report": {
+                    "merge_strategy": "mock_merge",
+                    "selected_candidate_artifacts": ["patch.diff", "fix_patch.diff"],
+                    "rejected_candidate_artifacts": [],
+                    "conflict_handling": "not_applicable",
+                    "ready_for_testing": "yes",
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n"
 
     def _decision_payload(self, context: AgentRunContext) -> dict[str, object]:
         if context.phase == PLAN_JUDGEMENT:
-            return {"decision": "approved", "evidence": {}, "reason": "Mock plan is acceptable."}
+            return {
+                "schema_version": 1,
+                "decision_code": 0,
+                "decision": "approved",
+                "summary": "Mock plan is acceptable.",
+                "evidence": [],
+                "reason": "Mock plan is acceptable.",
+            }
         if context.phase == TEST_JUDGEMENT:
-            return {"decision": "pass", "tests_passed": True, "evidence": {}, "reason": "Mock tests passed."}
+            return {
+                "schema_version": 1,
+                "decision_code": 0,
+                "decision": "pass",
+                "tests_passed": True,
+                "summary": "Mock tests passed.",
+                "evidence": [],
+                "reason": "Mock tests passed.",
+            }
         if context.phase == REVIEW_JUDGEMENT:
-            return {"decision": "approved", "changes_required": False, "evidence": {}, "reason": "Mock review approved."}
+            return {
+                "schema_version": 1,
+                "decision_code": 0,
+                "decision": "approved",
+                "changes_required": False,
+                "summary": "Mock review approved.",
+                "evidence": [],
+                "reason": "Mock review approved.",
+            }
         if context.phase == FINAL_JUDGEMENT:
-            return {"decision": "approved", "final_approved": True, "evidence": {}, "reason": "Mock final approval granted."}
-        return {"decision": "approved", "evidence": {}, "reason": "Mock judge approved."}
+            return {
+                "schema_version": 1,
+                "decision_code": 0,
+                "decision": "approved",
+                "final_approved": True,
+                "summary": "Mock final approval granted.",
+                "evidence": [],
+                "reason": "Mock final approval granted.",
+            }
+        return {
+            "schema_version": 1,
+            "decision_code": 0,
+            "decision": "approved",
+            "summary": "Mock judge approved.",
+            "evidence": [],
+            "reason": "Mock judge approved.",
+        }

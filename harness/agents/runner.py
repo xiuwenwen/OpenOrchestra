@@ -66,6 +66,7 @@ class AgentPhaseRunner:
             round_id,
             agent_count,
             required_outputs,
+            phase_scope,
         )
         if checkpoint_phase:
             phase_id = checkpoint_phase["phase_id"]
@@ -207,10 +208,12 @@ class AgentPhaseRunner:
         round_id: int,
         agent_count: int,
         required_outputs: list[str],
+        phase_scope: dict[str, int | str | None] | None = None,
     ) -> tuple[dict[str, Any] | None, list[AgentRunResult]]:
         existing_phases = self.orchestrator.repository.list_phases(task_id)
         task = self.orchestrator.repository.get_task(task_id)
         prompt_turn_id = int(task["prompt_turn_id"] or 0) if task else 0
+        phase_scope = phase_scope or {}
         checkpoint_candidates = [
             p
             for p in existing_phases
@@ -218,6 +221,7 @@ class AgentPhaseRunner:
             and p["role"] == role
             and p["round_id"] == round_id
             and int(p["prompt_turn_id"] or 0) == prompt_turn_id
+            and self._phase_scope_matches(p, phase_scope)
             and p["status"] in {"COMPLETED", "FAILED"}
         ]
         for candidate in reversed(checkpoint_candidates):
@@ -229,6 +233,13 @@ class AgentPhaseRunner:
             if recoverable:
                 return candidate, candidate_results
         return None, []
+
+    def _phase_scope_matches(self, phase_row: dict[str, Any], phase_scope: dict[str, int | str | None]) -> bool:
+        return (
+            phase_row.get("loop_type") == phase_scope.get("loop_type")
+            and phase_row.get("parent_round_id") == phase_scope.get("parent_round_id")
+            and phase_row.get("iteration_id") == phase_scope.get("iteration_id")
+        )
 
     def recover_phase_results(self, task_id: str, phase_id: str) -> list[AgentRunResult]:
         o = self.orchestrator
@@ -398,6 +409,15 @@ class AgentPhaseRunner:
             task_for_metadata = o.repository.get_task(task_id) or {"task_id": task_id, "user_prompt": user_prompt}
             metadata = o.context_metadata(task_for_metadata, role, phase)
             metadata.update(o.repo_context_metadata(task_id, role, phase))
+            phase_row = next((item for item in o.repository.list_phases(task_id) if item["phase_id"] == phase_id), None)
+            if phase_row:
+                metadata.update(
+                    {
+                        "phase_scope_loop_type": phase_row.get("loop_type") or "none",
+                        "phase_scope_parent_round_id": phase_row.get("parent_round_id"),
+                        "phase_scope_iteration_id": phase_row.get("iteration_id"),
+                    }
+                )
             context_config = o.config_service.config_for_task(task_id)
             if downgraded_max_output_tokens is not None:
                 context_config = self.config_with_role_max_output_override(

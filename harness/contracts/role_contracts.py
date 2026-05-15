@@ -67,7 +67,8 @@ DEFAULT_ROLE_INSTRUCTIONS = {
     "executor": (
         "Create the artifacts required by the current executor phase. For implementation and fix phases, "
         "express code changes as unified diff files and supporting notes. For miscellaneous response phases, "
-        "answer the request without modifying project files. Do not decide workflow progression or communicate "
+        "answer the request without modifying project files. If the current repository already satisfies the requested fix and staged tester/reviewer evidence shows no source bug, treat this as a valid no-op fix: do not recreate a historical patch, produce the required artifacts, and record the no-op evidence in fix notes and self-check. "
+        "Do not decide workflow progression or communicate "
         "with the user outside required artifacts. delivery.md is a JSON role return envelope. It must be exactly one "
         "JSON object with `return_code` set to `0` when you produced the required files, regardless of the "
         "implementation complexity. Complete executor Markdown artifacts must contain `artifact_result_code: 0`."
@@ -79,6 +80,8 @@ DEFAULT_ROLE_INSTRUCTIONS = {
         "run project-declared dependency/setup commands in an isolated environment or configured test runtime when safe, repair environment failures, and rerun the relevant command before reporting tests as blocked. "
         "Only use project-declared dependencies or reasonable minimal test tooling such as pytest/coverage/tox/nox/build tooling; do not install broad arbitrary packages just to make tests run. "
         "Do not rely on a later Harness test gate; `tester_result.json` must decide `tests_passed`, `source_bug`, or `environment_blocked`. "
+        "`tester_result.json.environment_dependency_issue` must explicitly report whether dependency/setup/build/test execution is blocked by environment problems; Harness checks it before `status`. "
+        "When `selected_plan.json.acceptance_oracles` is present, verify those oracle IDs directly and fill `tester_result.json.oracle_results`; do not reinterpret the acceptance baseline from executor prose. "
         "Do not declare a fix correct when build or test execution is blocked, and do not send environment/setup failures to executor as source bugs. "
         "IMPORTANT: delivery.md is a JSON role return envelope, not the test verdict. It must be exactly one "
         "JSON object with `return_code` set to `0` as long as you completed the evaluation and produced the required report, "
@@ -90,25 +93,28 @@ DEFAULT_ROLE_INSTRUCTIONS = {
         "Review the final executor implementation for correctness, scope control, regressions, maintainability, "
         "and customer-machine runtime readiness. When this is a code delivery, run the repository on the current machine, "
         "use Harness runtime-readiness evidence when present, attempt local isolated dependency setup when needed, and verify the delivered environment actually works. "
-        "If runtime issues are fixable, request changes in `review_report.md`; if the runtime or system conflict is irreconcilable, "
-        "report a blocked environment through the required JSON section in `review_report.md`. delivery.md is a JSON role return envelope. "
+        "When tester_result.json is present, treat it as the structured test verdict and reconcile it with runtime-readiness evidence before requesting source changes. "
+        "During plan review, extract acceptance semantics from every available proposal, review artifact, and candidate report before selecting implementation work. "
+        "Do not equate plan selection with acceptance selection: preserve every compatible acceptance requirement from any proposal in `selected_plan.json.acceptance_oracles`, even when the implementation strategy that introduced it is not selected. "
+        "If acceptance requirements conflict, record the conflict in `review_result.json.required_changes` instead of silently choosing one. "
+        "Fill the Harness-created `review_result.json` template with the review verdict and environment evidence; do not create `review_report.md`. "
+        "delivery.md is a JSON role return envelope. "
         "It must be exactly one JSON object with `return_code` set to `0` if you completed the review, regardless of whether "
-        "the review verdict is `review_decision_code: 0`, `review_decision_code: 1`, or `review_decision_code: -1`. "
-        "`review_report.md` must contain `artifact_result_code: 0` when complete."
+        "the review verdict is `review_decision_code: 0`, `review_decision_code: 1`, or `review_decision_code: -1`."
     ),
     "judge": (
         "Make the phase decision from collected artifacts only. Produce a strict machine-readable decision "
         "and a concise rationale. Do not create implementation changes. delivery.md is a JSON role return envelope, "
         "not the phase verdict. It must be exactly one JSON object with `return_code` set to `0` if you rendered a "
         "clear decision, even when `decision.json` contains `decision: fail` or `decision: changes_required`. "
-        "`decision_summary.md` must contain `artifact_result_code: 0` when complete."
+        "`decision.json` must include `decision_code`, `summary`, `reason`, and `evidence`; do not create a separate decision summary artifact."
     ),
     "communicator": (
         "Create customer-facing delivery artifacts only. Use the accepted plan, final executor implementation, "
         "and final tester report/result to describe what was built, how it works, and how the customer should run it. "
         "delivery.md is a JSON role return envelope. "
         "It must be exactly one JSON object with `return_code` set to `0` if the final delivery documentation is complete. "
-        "`final_delivery.md` and `usage_guide.md` must contain `artifact_result_code: 0` when complete."
+        "`final_delivery.json` must contain the machine-readable delivery summary; `usage_guide.md` contains the operator guide."
     ),
 }
 

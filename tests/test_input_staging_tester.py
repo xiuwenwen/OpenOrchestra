@@ -48,7 +48,7 @@ def test_current_phase_artifacts_are_excluded_from_agent_inputs(tmp_path: Path) 
     previous_phase_id = orchestrator.repository.create_phase(task_id, "TESTING", "tester", 0)
     current_phase_id = orchestrator.repository.create_phase(task_id, "REVIEWING", "reviewer", 0)
     previous_artifact = tmp_path / "bug_report.md"
-    current_artifact = tmp_path / "review_report.md"
+    current_artifact = tmp_path / "review_result.json"
     previous_artifact.write_text("previous", encoding="utf-8")
     current_artifact.write_text("current", encoding="utf-8")
     for phase_id, path, agent_id in (
@@ -73,7 +73,61 @@ def test_current_phase_artifacts_are_excluded_from_agent_inputs(tmp_path: Path) 
     manifest = staged[0].read_text(encoding="utf-8")
 
     assert "bug_report.md" not in manifest
-    assert "review_report.md" not in manifest
+    assert "review_result.json" not in manifest
+
+
+def test_reviewer_receives_latest_complete_tester_result(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("review should see tester verdict")
+    test_phase_id = orchestrator.repository.create_phase(task_id, TESTING, "tester", 0)
+    review_phase_id = orchestrator.repository.create_phase(task_id, REVIEWING, "reviewer", 0)
+    bug_report = tmp_path / "bug_report.md"
+    bug_report.write_text("artifact_result_code: 0\n", encoding="utf-8")
+    tester_result = tmp_path / "tester_result.json"
+    tester_result.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "tests_passed",
+                "next_action": "continue",
+                "failure_type": "none",
+                "environment_dependency_issue": False,
+                "summary": "ok",
+                "setup_commands_run": [],
+                "test_commands_run": [],
+                "oracle_results": [],
+                "remaining_blockers": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    for artifact_type, path in (("bug_report.md", bug_report), ("tester_result.json", tester_result)):
+        orchestrator.repository.create_artifact(
+            ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id=test_phase_id,
+                role="tester",
+                agent_id="tester-1",
+                artifact_type=artifact_type,
+                path=path,
+                version=1,
+                hash="hash",
+            )
+        )
+
+    staged = orchestrator._stage_input_artifacts(
+        task_id,
+        tmp_path / "review-input",
+        "reviewer",
+        REVIEWING,
+        exclude_phase_id=review_phase_id,
+        round_id=0,
+    )
+    manifest = staged[0].read_text(encoding="utf-8")
+
+    assert "bug_report.md" in manifest
+    assert "tester_result.json" in manifest
 
 def test_tester_receives_no_executor_markdown_artifacts(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
@@ -84,8 +138,7 @@ def test_tester_receives_no_executor_markdown_artifacts(tmp_path: Path) -> None:
         ("patch.diff", execution_phase_id, "executor-1"),
         ("fix_patch.diff", execution_phase_id, "executor-2"),
         ("merged_patch.diff", merge_phase_id, "executor-1"),
-        ("merged_patch_metadata.md", merge_phase_id, "executor-1"),
-        ("merge_report.md", merge_phase_id, "executor-1"),
+        ("merged_patch_metadata.json", merge_phase_id, "executor-1"),
         ("implementation_plan.md", execution_phase_id, "executor-1"),
         ("changed_files.md", execution_phase_id, "executor-1"),
         ("self_check.md", execution_phase_id, "executor-1"),
@@ -120,7 +173,6 @@ def test_tester_receives_no_executor_markdown_artifacts(tmp_path: Path) -> None:
     assert "implementation_plan.md" not in manifest
     assert "changed_files.md" not in manifest
     assert "self_check.md" not in manifest
-    assert "merge_report.md" not in manifest
     assert "merged_patch.diff" not in manifest
     assert "patch.diff" not in manifest
     assert "fix_patch.diff" not in manifest

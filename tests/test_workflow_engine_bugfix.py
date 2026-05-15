@@ -49,7 +49,172 @@ def _tester_result(tmp_path: Path, status: str) -> HarnessTesterResult:
         "source_bug": "fix_code",
         "environment_blocked": "block_task",
     }[status]
-    return HarnessTesterResult(status, next_action, status, status, tmp_path / "tester_result.json", {"status": status})
+    env_issue = status == "environment_blocked"
+    return HarnessTesterResult(
+        status,
+        next_action,
+        status,
+        status,
+        tmp_path / "tester_result.json",
+        {"status": status, "environment_dependency_issue": env_issue},
+        env_issue,
+    )
+
+
+def _tester_run_result(
+    tmp_path: Path,
+    task_id: str,
+    phase_id: str,
+    status: str,
+    env_issue: bool,
+    *,
+    oracle_id: str = "A1",
+) -> AgentRunResult:
+    next_action = {
+        "tests_passed": "continue",
+        "source_bug": "fix_code",
+        "environment_blocked": "block_task",
+    }[status]
+    result_path = tmp_path / f"{phase_id}_tester_result.json"
+    result_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": status,
+                "next_action": next_action,
+                "failure_type": "env_setup" if env_issue else status,
+                "environment_dependency_issue": env_issue,
+                "summary": "dependency issue" if env_issue else status,
+                "setup_commands_run": [],
+                "test_commands_run": [],
+                "oracle_results": [
+                    {
+                        "oracle_id": oracle_id,
+                        "status": "blocked" if env_issue else ("passed" if status == "tests_passed" else "failed"),
+                        "evidence": "dependency issue" if env_issue else status,
+                        "commands_run": ["pytest"],
+                        "output_excerpt": "",
+                    }
+                ],
+                "remaining_blockers": ["missing dependency"] if env_issue else [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return AgentRunResult(
+        task_id=task_id,
+        phase_id=phase_id,
+        role="tester",
+        agent_id="tester-1",
+        status="COMPLETED",
+        artifacts=[
+            ArtifactRef(
+                artifact_id=f"artifact-{phase_id}",
+                task_id=task_id,
+                phase_id=phase_id,
+                role="tester",
+                agent_id="tester-1",
+                artifact_type="tester_result.json",
+                path=result_path,
+                version=1,
+                hash=None,
+            )
+        ],
+    )
+
+
+def _selected_plan_artifact(orchestrator: Orchestrator, tmp_path: Path, task_id: str) -> None:
+    phase_id = orchestrator.repository.create_phase(task_id, PLAN_REVIEW, "reviewer", 0, status="COMPLETED")
+    path = tmp_path / "selected_plan.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "selected_plan_id": "plan",
+                "summary": "verify A1",
+                "acceptance_oracles": [
+                    {
+                        "id": "A1",
+                        "description": "A1 passes",
+                        "kind": "test",
+                        "required": True,
+                        "commands": ["pytest"],
+                        "expected_exception": "",
+                        "must_contain": [],
+                        "must_not_contain": ["Traceback"],
+                        "semantic_assertions": [],
+                        "failure_signal": "pytest fails",
+                        "evidence_hint": "pytest output",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    orchestrator.repository.create_artifact(
+        ArtifactRef(str(uuid.uuid4()), task_id, phase_id, "reviewer", "reviewer-1", "selected_plan.json", path, 1, "hash")
+    )
+
+
+def test_tester_environment_dependency_issue_retries_tester_before_source_bug(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_tester_environment_repair_rounds"] = 2
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("fix a dependency-sensitive bug", workflow_type=BUGFIX)
+    calls: list[dict[str, int | str | None] | None] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append(kwargs.get("phase_scope"))
+        env_issue = len(calls) == 1
+        return [_tester_run_result(tmp_path, task_id, f"phase-{len(calls)}", "source_bug", env_issue)]
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+
+    decision = orchestrator.workflow_engine.run_testing_until_tester_decision(task_id, TESTING, 0, "fix")
+
+    assert decision.source_bug
+    assert not decision.has_environment_dependency_issue
+    assert calls == [None, {"loop_type": "tester_environment_repair", "iteration_id": 1}]
+
+
+def test_tester_result_must_satisfy_selected_plan_acceptance_oracles(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_tester_environment_repair_rounds"] = 1
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("fix acceptance drift", workflow_type=BUGFIX)
+    _selected_plan_artifact(orchestrator, tmp_path, task_id)
+    calls: list[dict[str, int | str | None] | None] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append(kwargs.get("phase_scope"))
+        oracle_id = "B1" if len(calls) == 1 else "A1"
+        return [_tester_run_result(tmp_path, task_id, f"phase-{len(calls)}", "tests_passed", False, oracle_id=oracle_id)]
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+
+    decision = orchestrator.workflow_engine.run_testing_until_tester_decision(task_id, TESTING, 0, "fix")
+
+    assert decision.tests_passed
+    assert calls == [None, {"loop_type": "tester_result_retry", "iteration_id": 1}]
+
+
+def test_tester_environment_dependency_issue_exhaustion_blocks_executor(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_tester_environment_repair_rounds"] = 1
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("fix a dependency-sensitive bug", workflow_type=BUGFIX)
+    calls: list[dict[str, int | str | None] | None] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append(kwargs.get("phase_scope"))
+        return [_tester_run_result(tmp_path, task_id, f"phase-{len(calls)}", "source_bug", True)]
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+
+    with pytest.raises(orchestrator_module.TaskFailedError, match="did not clear environment dependencies"):
+        orchestrator.workflow_engine.run_testing_until_tester_decision(task_id, TESTING, 0, "fix")
+
+    assert calls == [None, {"loop_type": "tester_environment_repair", "iteration_id": 1}]
 
 
 def test_failed_exhausted_bugfix_continue_appends_new_round_window(monkeypatch, tmp_path: Path) -> None:
@@ -91,6 +256,7 @@ def test_unlimited_bugfix_rounds_continue_until_pass(monkeypatch, tmp_path: Path
 
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
     monkeypatch.setattr(orchestrator, "run_patch_merge", lambda *args, **kwargs: True)
+    monkeypatch.setattr(orchestrator.workflow_engine, "plan_review_approved", lambda results: True)
     monkeypatch.setattr(
         orchestrator.workflow_engine,
         "run_testing_until_tester_decision",
@@ -98,7 +264,7 @@ def test_unlimited_bugfix_rounds_continue_until_pass(monkeypatch, tmp_path: Path
     )
     monkeypatch.setattr(orchestrator.workflow_engine, "run_bugfix_planning_block", lambda *args, **kwargs: None)
     monkeypatch.setattr(orchestrator.workflow_engine, "run_review_loop", lambda *args, **kwargs: None)
-    delivery = tmp_path / "final_delivery.md"
+    delivery = tmp_path / "final_delivery.json"
     delivery.write_text("ok", encoding="utf-8")
     monkeypatch.setattr(orchestrator.workflow_engine, "run_delivery", lambda *args, **kwargs: delivery)
 
@@ -106,6 +272,45 @@ def test_unlimited_bugfix_rounds_continue_until_pass(monkeypatch, tmp_path: Path
 
     assert result == delivery
     assert fix_rounds == list(range(7))
+
+
+def test_bugfix_rechecks_plan_before_sixth_fix_attempt(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_test_fix_rounds"] = 10
+    config["limits"]["fix_tester_plan_recheck_after"] = 5
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("fix repeated failure", workflow_type=BUGFIX)
+    calls: list[tuple[str, str, int]] = []
+    fix_rounds: list[int] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append((role, phase, round_id))
+        if phase == FIXING:
+            fix_rounds.append(round_id)
+        if phase in {PLANNING_REVISION, PLAN_REVIEW}:
+            assert kwargs["phase_scope"]["loop_type"] == "fix_tester_plan_recheck"
+        return []
+
+    def fake_testing(task_id: str, phase: str, round_id: int, user_prompt: str, **kwargs) -> HarnessTesterResult:
+        return _tester_result(tmp_path, "tests_passed" if len(fix_rounds) >= 6 else "source_bug")
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+    monkeypatch.setattr(orchestrator, "run_patch_merge", lambda *args, **kwargs: True)
+    monkeypatch.setattr(orchestrator.workflow_engine, "plan_review_approved", lambda results: True)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_testing_until_tester_decision", fake_testing)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_bugfix_planning_block", lambda *args, **kwargs: None)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_review_loop", lambda *args, **kwargs: None)
+    delivery = tmp_path / "final_delivery.json"
+    delivery.write_text("ok", encoding="utf-8")
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_delivery", lambda *args, **kwargs: delivery)
+
+    orchestrator._run_bugfix_flow(task_id, "fix repeated failure")
+
+    recheck_index = next(index for index, call in enumerate(calls) if call[:2] == ("planner", PLANNING_REVISION))
+    sixth_fix_index = calls.index(("executor", FIXING, 5))
+    assert recheck_index < sixth_fix_index
+    assert any(call[:2] == ("reviewer", PLAN_REVIEW) for call in calls[recheck_index:sixth_fix_index])
+    assert fix_rounds == list(range(6))
 
 
 def test_bugfix_flow_runs_two_planners_before_fixing(monkeypatch, tmp_path: Path) -> None:
@@ -128,7 +333,7 @@ def test_bugfix_flow_runs_two_planners_before_fixing(monkeypatch, tmp_path: Path
         lambda *args, **kwargs: _tester_result(tmp_path, "tests_passed"),
     )
     monkeypatch.setattr(orchestrator.workflow_engine, "run_review_loop", lambda *args, **kwargs: None)
-    delivery = tmp_path / "final_delivery.md"
+    delivery = tmp_path / "final_delivery.json"
     delivery.write_text("ok", encoding="utf-8")
     monkeypatch.setattr(orchestrator.workflow_engine, "run_delivery", lambda *args, **kwargs: delivery)
 
@@ -159,7 +364,7 @@ def test_bugfix_flow_uses_tester_result_without_harness_test_gate(monkeypatch, t
     monkeypatch.setattr(orchestrator.workflow_engine, "run_testing_until_tester_decision", fake_testing)
     monkeypatch.setattr(orchestrator.workflow_engine, "run_bugfix_planning_block", lambda *args, **kwargs: None)
     monkeypatch.setattr(orchestrator.workflow_engine, "run_review_loop", lambda *args, **kwargs: None)
-    delivery = tmp_path / "final_delivery.md"
+    delivery = tmp_path / "final_delivery.json"
     delivery.write_text("ok", encoding="utf-8")
     monkeypatch.setattr(orchestrator.workflow_engine, "run_delivery", lambda *args, **kwargs: delivery)
 

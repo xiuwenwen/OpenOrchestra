@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from harness.adapters.process_registry import kill_process_tree, register_process, unregister_process
+from harness.adapters.process_registry import kill_process_tree, register_process, supports_process_groups, unregister_process
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ class CommandRunner:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            start_new_session=hasattr(os, "setsid"),
+            start_new_session=supports_process_groups(),
             env={**os.environ, **env} if env else None,
         )
         register_process(process)

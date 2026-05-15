@@ -201,6 +201,9 @@ def main() -> int:
                 print(f"[classifier] workflow_type={workflow_type}", flush=True)
             if args.ui:
                 cli.ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port, args.config)
+            # One-shot runs must fail closed at the fix-round limit instead of
+            # waiting for the interactive /goal continuation prompt.
+            orchestrator.fix_round_limit_callback = None
             return run_once(orchestrator, prompt, workflow_type)
         if args.ui:
             cli.ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port, args.config)

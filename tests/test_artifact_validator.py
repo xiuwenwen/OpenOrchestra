@@ -87,11 +87,14 @@ def test_artifact_validator_accepts_blank_lines_before_raw_delivery_return_code(
 def test_artifact_validator_rejects_empty_required_output(tmp_path: Path) -> None:
     validator = ArtifactValidator()
     (tmp_path / "merged_patch.diff").write_text("", encoding="utf-8")
-    (tmp_path / "merge_report.md").write_text(md_ok(), encoding="utf-8")
+    (tmp_path / "merged_patch_metadata.json").write_text(
+        json.dumps({"patch_artifact": "merged_patch.diff", "changed_files": [], "merge_report": {}}),
+        encoding="utf-8",
+    )
     (tmp_path / "delivery.md").write_text("return_code: 0\n", encoding="utf-8")
 
     ok, errors = validator.validate_required_outputs(
-        tmp_path, ["merged_patch.diff", "merge_report.md", "delivery.md"]
+        tmp_path, ["merged_patch.diff", "merged_patch_metadata.json", "delivery.md"]
     )
 
     assert not ok
@@ -226,6 +229,78 @@ def test_parse_delivery_status_maps_return_codes(tmp_path: Path) -> None:
 
     delivery.write_text("return_code: -3\n", encoding="utf-8")
     assert validator.parse_delivery_status(delivery) == "failed"
+
+
+def test_validator_rejects_selected_plan_without_acceptance_oracles(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    (tmp_path / "selected_plan.json").write_text(
+        json.dumps({"schema_version": 1, "selected_plan_id": "plan", "summary": "do it"}),
+        encoding="utf-8",
+    )
+
+    ok, errors = validator.validate_required_outputs(tmp_path, ["selected_plan.json"])
+
+    assert not ok
+    assert errors == ["selected_plan.json.acceptance_oracles must be a non-empty list"]
+
+
+def test_validator_accepts_selected_plan_with_acceptance_oracles(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    (tmp_path / "selected_plan.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "selected_plan_id": "plan",
+                "summary": "do it",
+                "acceptance_oracles": [
+                    {
+                        "id": "A1",
+                        "description": "expected behavior is preserved",
+                        "kind": "runtime",
+                        "required": True,
+                        "commands": ["pytest"],
+                        "expected_exception": "",
+                        "must_contain": [],
+                        "must_not_contain": ["Traceback"],
+                        "semantic_assertions": [],
+                        "failure_signal": "pytest fails",
+                        "evidence_hint": "pytest output",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ok, errors = validator.validate_required_outputs(tmp_path, ["selected_plan.json"])
+
+    assert ok
+    assert errors == []
+
+
+def test_validator_rejects_tester_result_without_oracle_results(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    (tmp_path / "tester_result.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "tests_passed",
+                "next_action": "continue",
+                "failure_type": "none",
+                "environment_dependency_issue": False,
+                "summary": "passed",
+                "setup_commands_run": [],
+                "test_commands_run": [],
+                "remaining_blockers": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ok, errors = validator.validate_required_outputs(tmp_path, ["tester_result.json"])
+
+    assert not ok
+    assert errors == ["tester_result.json.oracle_results must be a list"]
 
 
 def test_delivery_return_codes_have_canonical_meanings() -> None:

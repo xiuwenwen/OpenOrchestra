@@ -68,16 +68,14 @@ def test_reviewer_stages_only_plan_executor_and_test_evidence(tmp_path: Path) ->
     current_phase_id = orchestrator.repository.create_phase(task_id, REVIEWING, "reviewer", 0)
 
     artifact_rows = [
-        ("selected_plan.md", plan_review_phase_id, "reviewer", "selected-plan.md", "reviewer-1"),
+        ("selected_plan.json", plan_review_phase_id, "reviewer", "selected-plan.json", "reviewer-1"),
         ("merged_patch.diff", merge_phase_id, "executor", "merged.patch", "executor-1"),
-        ("merged_patch_metadata.md", merge_phase_id, "executor", "merged-metadata.md", "executor-1"),
+        ("merged_patch_metadata.json", merge_phase_id, "executor", "merged-metadata.json", "executor-1"),
         ("changed_files.md", merge_phase_id, "executor", "changed-files.md", "executor-1"),
         ("self_check.md", merge_phase_id, "executor", "self-check.md", "executor-1"),
         ("fix_schedule.md", merge_phase_id, "executor", "fix-schedule.md", "executor-1"),
         ("fix_notes.md", merge_phase_id, "executor", "fix-notes.md", "executor-1"),
-        ("merge_report.md", merge_phase_id, "executor", "merge-report.md", "executor-1"),
         ("decision.json", judge_phase_id, "judge", "test-decision.json", "judge-1"),
-        ("decision_summary.md", judge_phase_id, "judge", "test-decision-summary.md", "judge-1"),
     ]
     for artifact_type, phase_id, role, filename, agent_id in artifact_rows:
         path = tmp_path / filename
@@ -127,18 +125,16 @@ def test_reviewer_stages_only_plan_executor_and_test_evidence(tmp_path: Path) ->
     )
     manifest = staged[0].read_text(encoding="utf-8")
 
-    assert "selected-plan.md" in manifest
+    assert "selected-plan.json" in manifest
     assert "merged.patch" in manifest
-    assert "merged-metadata.md" in manifest
+    assert "merged-metadata.json" in manifest
     assert "changed-files.md" in manifest
     assert "self-check.md" in manifest
 
     assert "bug-report.md" not in manifest
     assert "fix-schedule.md" not in manifest
     assert "fix-notes.md" not in manifest
-    assert "merge-report.md" not in manifest
     assert "test-decision.json" not in manifest
-    assert "test-decision-summary.md" not in manifest
     assert "test-gate.md" not in manifest
     assert "objective-gate.md" not in manifest
     assert "patch-validation.md" not in manifest
@@ -155,11 +151,11 @@ def test_review_judgement_legacy_visibility_is_lean_review_and_metadata_only(tmp
     current_judge_phase_id = orchestrator.repository.create_phase(task_id, REVIEW_JUDGEMENT, "judge", 0)
 
     artifact_rows = [
-        ("merged_patch_metadata.md", old_merge_phase_id, "executor", "old-merged-metadata.md", "executor-1"),
+        ("merged_patch_metadata.json", old_merge_phase_id, "executor", "old-merged-metadata.json", "executor-1"),
         ("bug_report.md", old_test_phase_id, "tester", "old-bug-report.md", "tester-1"),
-        ("merged_patch_metadata.md", latest_merge_phase_id, "executor", "latest-merged-metadata.md", "executor-1"),
+        ("merged_patch_metadata.json", latest_merge_phase_id, "executor", "latest-merged-metadata.json", "executor-1"),
         ("bug_report.md", latest_test_phase_id, "tester", "latest-bug-report.md", "tester-1"),
-        ("review_report.md", review_phase_id, "reviewer", "current-review-report.md", "reviewer-1"),
+        ("review_result.json", review_phase_id, "reviewer", "current-review-result.json", "reviewer-1"),
     ]
     for artifact_type, phase_id, role, filename, agent_id in artifact_rows:
         path = tmp_path / filename
@@ -207,10 +203,10 @@ def test_review_judgement_legacy_visibility_is_lean_review_and_metadata_only(tmp
     )
     manifest = staged[0].read_text(encoding="utf-8")
 
-    assert "latest-merged-metadata.md" in manifest
-    assert "current-review-report.md" in manifest
+    assert "latest-merged-metadata.json" in manifest
+    assert "current-review-result.json" in manifest
 
-    assert "old-merged-metadata.md" not in manifest
+    assert "old-merged-metadata.json" not in manifest
     assert "old-bug-report.md" not in manifest
     assert "latest-bug-report.md" not in manifest
     assert "review-judge-round-1-test_gate.md" not in manifest
@@ -230,25 +226,26 @@ def test_review_loop_fails_immediately_on_blocked_environment_json(monkeypatch, 
     def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
         results = real_run_role_phase(role, phase, round_id, required_outputs, user_prompt, **kwargs)
         if phase == REVIEWING:
-            review_report = next(ref.path for result in results for ref in result.artifacts if ref.artifact_type == "review_report.md")
-            review_report.write_text(
-                "artifact_result_code: 0\n\n"
-                "# Review Report\n\n"
-                "review_decision_code: -1\n"
-                "Runtime blocked by incompatible platform dependency.\n\n"
-                "## Review Verdict JSON\n\n"
-                "```json\n"
-                "{\n"
-                '  "review_status": "blocked",\n'
-                '  "environment_check": {\n'
-                '    "attempted": true,\n'
-                '    "status": "blocked",\n'
-                '    "commands_run": ["pip install -r requirements.txt", "python app.py"],\n'
-                '    "fixable": false,\n'
-                '    "blocking_reason": "requires Linux-only system package not available on this machine"\n'
-                "  }\n"
-                "}\n"
-                "```\n",
+            review_result = next(ref.path for result in results for ref in result.artifacts if ref.artifact_type == "review_result.json")
+            review_result.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "review_decision_code": -1,
+                        "review_status": "blocked",
+                        "summary": "Runtime blocked by incompatible platform dependency.",
+                        "findings": [],
+                        "required_changes": [],
+                        "environment_check": {
+                            "attempted": True,
+                            "status": "blocked",
+                            "commands_run": ["pip install -r requirements.txt", "python app.py"],
+                            "fixable": False,
+                            "blocking_reason": "requires Linux-only system package not available on this machine",
+                        },
+                    }
+                )
+                + "\n",
                 encoding="utf-8",
             )
         return results
@@ -263,36 +260,85 @@ def test_review_loop_fails_immediately_on_blocked_environment_json(monkeypatch, 
     with pytest.raises(orchestrator_module.TaskFailedError, match="requires Linux-only system package"):
         orchestrator._run_review_loop(task_id, "deliver runtime-sensitive project")
 
-def test_review_approval_requires_verdict_json_environment_check(tmp_path: Path) -> None:
+def test_review_approval_requires_review_result_environment_check(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("review strict environment verdict")
     phase_id = "review-phase"
-    report_path = tmp_path / "review_report.md"
+    report_path = tmp_path / "review_result.json"
     report_ref = ArtifactRef(
         artifact_id=str(uuid.uuid4()),
         task_id=task_id,
         phase_id=phase_id,
         role="reviewer",
         agent_id="reviewer-1",
-        artifact_type="review_report.md",
+        artifact_type="review_result.json",
         path=report_path,
         version=1,
         hash="hash",
     )
     result = AgentRunResult(task_id, phase_id, "reviewer", "reviewer-1", "COMPLETED", artifacts=[report_ref])
 
-    report_path.write_text("artifact_result_code: 0\n\nreview_decision_code: 0\n", encoding="utf-8")
+    report_path.write_text(json.dumps({"review_decision_code": 0, "review_status": "approved"}) + "\n", encoding="utf-8")
     assert not orchestrator.workflow_engine.review_approved([result])
 
     report_path.write_text(
-        "artifact_result_code: 0\n\n"
-        "review_decision_code: 0\n\n"
-        "## Review Verdict JSON\n\n"
-        "```json\n"
-        '{"review_status":"approved","environment_check":{"attempted":true,"status":"ready","commands_run":["pytest"],"fixable":true,"blocking_reason":""}}\n'
-        "```\n",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "review_decision_code": 0,
+                "review_status": "approved",
+                "summary": "ready",
+                "findings": [],
+                "required_changes": [],
+                "environment_check": {
+                    "attempted": True,
+                    "status": "ready",
+                    "commands_run": ["pytest"],
+                    "fixable": True,
+                    "blocking_reason": "",
+                },
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
+    assert orchestrator.workflow_engine.review_approved([result])
+
+
+def test_review_approval_reads_review_result_json(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("review json verdict")
+    phase_id = "review-phase"
+    report_path = tmp_path / "review_result.json"
+    report_ref = ArtifactRef(
+        artifact_id=str(uuid.uuid4()),
+        task_id=task_id,
+        phase_id=phase_id,
+        role="reviewer",
+        agent_id="reviewer-1",
+        artifact_type="review_result.json",
+        path=report_path,
+        version=1,
+        hash="hash",
+    )
+    result = AgentRunResult(task_id, phase_id, "reviewer", "reviewer-1", "COMPLETED", artifacts=[report_ref])
+    payload = {
+        "schema_version": 1,
+        "review_decision_code": 0,
+        "review_status": "approved",
+        "summary": "approved",
+        "findings": [],
+        "required_changes": [],
+        "environment_check": {
+            "attempted": True,
+            "status": "ready",
+            "commands_run": ["pytest"],
+            "fixable": True,
+            "blocking_reason": "",
+        },
+    }
+    report_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
     assert orchestrator.workflow_engine.review_approved([result])
 
 
@@ -317,28 +363,31 @@ def test_review_approval_requires_positive_code_approved_status_and_safe_environ
 ) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("review verdict matrix")
-    report_path = tmp_path / "review_report.md"
+    report_path = tmp_path / "review_result.json"
     report_ref = ArtifactRef(
         artifact_id=str(uuid.uuid4()),
         task_id=task_id,
         phase_id="review-phase",
         role="reviewer",
         agent_id="reviewer-1",
-        artifact_type="review_report.md",
+        artifact_type="review_result.json",
         path=report_path,
         version=1,
         hash="hash",
     )
     result = AgentRunResult(task_id, "review-phase", "reviewer", "reviewer-1", "COMPLETED", artifacts=[report_ref])
-    payload = {"review_status": review_status, "environment_check": environment_check}
-    report_path.write_text(
-        "artifact_result_code: 0\n\n"
-        f"review_decision_code: {decision_code}\n\n"
-        "## Review Verdict JSON\n\n"
-        "```json\n"
-        f"{json.dumps(payload)}\n"
-        "```\n",
-        encoding="utf-8",
-    )
+    payload = {
+        "schema_version": 1,
+        "review_decision_code": decision_code,
+        "review_status": review_status,
+        "summary": "matrix",
+        "findings": [],
+        "required_changes": [],
+        "environment_check": environment_check,
+    }
+    if isinstance(environment_check, dict):
+        environment_check.setdefault("fixable", True)
+        environment_check.setdefault("blocking_reason", "")
+    report_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
     assert orchestrator.workflow_engine.review_approved([result]) is expected

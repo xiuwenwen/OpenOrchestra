@@ -41,7 +41,7 @@ def test_retention_service_dry_run_keeps_files_and_reports_freed_bytes(tmp_path:
     success_dir.mkdir(parents=True)
     success_path = success_dir / "success_path.md"
     success_path.write_text(f"success_path: {success_dir}\n", encoding="utf-8")
-    final_delivery = success_dir / "final_delivery.md"
+    final_delivery = success_dir / "final_delivery.json"
     final_delivery.write_text("done", encoding="utf-8")
     repo.create_artifact(_artifact(task_id, "success_path.md", success_path))
     workspace_dir = Path(config["system"]["workspace_root"]) / task_id
@@ -66,9 +66,9 @@ def test_retention_service_deletes_intermediate_dirs_and_keeps_delivery(tmp_path
     task_id = repo.create_task("clean delivered task")
     success_dir = tmp_path / "deliver" / "project"
     success_dir.mkdir(parents=True)
-    final_delivery = success_dir / "final_delivery.md"
+    final_delivery = success_dir / "final_delivery.json"
     final_delivery.write_text("done", encoding="utf-8")
-    repo.create_artifact(_artifact(task_id, "final_delivery.md", final_delivery))
+    repo.create_artifact(_artifact(task_id, "final_delivery.json", final_delivery))
     workspace_dir = Path(config["system"]["workspace_root"]) / task_id
     artifact_dir = Path(config["system"]["artifact_root"]) / task_id
     workspace_dir.mkdir(parents=True)

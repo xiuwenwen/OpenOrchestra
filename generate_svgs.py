@@ -95,7 +95,7 @@ stateDiagram-v2
     state "Delivery Block" as DB {
         REVIEW_JUDGEMENT --> FINAL_JUDGEMENT: Review Approved
         FINAL_JUDGEMENT --> DELIVERY: Final Sanity Check Passed
-        DELIVERY --> COMPLETED: Communicator generates final_delivery.md
+        DELIVERY --> COMPLETED: Communicator generates final_delivery.json
     }
     COMPLETED --> [*]
 """

@@ -54,10 +54,10 @@ def test_delivery_contract_review_accepts_format_only_failure(monkeypatch, tmp_p
             context.output_dir.mkdir(parents=True, exist_ok=True)
             context.log_dir.mkdir(parents=True, exist_ok=True)
             (context.output_dir / "merged_patch.diff").write_text("diff --git a/a b/a\n", encoding="utf-8")
-            (context.output_dir / "merged_patch_metadata.md").write_text(
-                "artifact_result_code: 0\n\npatch_artifact: merged_patch.diff\n", encoding="utf-8"
+            (context.output_dir / "merged_patch_metadata.json").write_text(
+                json.dumps({"patch_artifact": "merged_patch.diff", "changed_files": [], "merge_report": {}}),
+                encoding="utf-8",
             )
-            (context.output_dir / "merge_report.md").write_text("artifact_result_code: 0\n\nmerged", encoding="utf-8")
             (context.output_dir / "delivery.md").write_text("status: success\nsummary: completed\n", encoding="utf-8")
             stdout = context.log_dir / "stdout.log"
             stderr = context.log_dir / "stderr.log"
@@ -113,19 +113,18 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
         ("plan.md", latest_plan_phase_id, "planner", "latest-plan.md", "planner-1"),
         ("merged_patch.diff", old_exec_phase_id, "executor", "old-merged.patch", "executor-1"),
         ("merged_patch.diff", latest_exec_phase_id, "executor", "latest-merged.patch", "executor-1"),
-        ("merged_patch_metadata.md", latest_exec_phase_id, "executor", "latest-merged-metadata.md", "executor-1"),
+        ("merged_patch_metadata.json", latest_exec_phase_id, "executor", "latest-merged-metadata.json", "executor-1"),
         ("changed_files.md", latest_exec_phase_id, "executor", "latest-changed-files.md", "executor-1"),
         ("self_check.md", latest_exec_phase_id, "executor", "latest-self-check.md", "executor-1"),
         ("fix_notes.md", latest_exec_phase_id, "executor", "latest-fix-notes.md", "executor-1"),
-        ("merge_report.md", latest_exec_phase_id, "executor", "latest-merge-report.md", "executor-1"),
         ("patch.diff", latest_exec_phase_id, "executor", "latest-candidate.patch", "executor-1"),
         ("fix_patch.diff", latest_exec_phase_id, "executor", "latest-fix-candidate.patch", "executor-1"),
         ("bug_report.md", old_test_phase_id, "tester", "old-bug-report.md", "tester-1"),
         ("bug_report.md", latest_test_phase_id, "tester", "latest-bug-report.md", "tester-1"),
         ("tester_result.json", latest_test_phase_id, "tester", "latest-tester-result.json", "tester-1"),
-        ("selected_plan.md", selected_plan_phase_id, "reviewer", "latest-selected-plan.md", "reviewer-1"),
-        ("review_report.md", old_review_phase_id, "reviewer", "old-review-report.md", "reviewer-1"),
-        ("review_report.md", latest_review_phase_id, "reviewer", "latest-review-report.md", "reviewer-1"),
+        ("selected_plan.json", selected_plan_phase_id, "reviewer", "latest-selected-plan.json", "reviewer-1"),
+        ("review_result.json", old_review_phase_id, "reviewer", "old-review-result.json", "reviewer-1"),
+        ("review_result.json", latest_review_phase_id, "reviewer", "latest-review-result.json", "reviewer-1"),
         ("decision.json", old_judge_phase_id, "judge", "old-decision.json", "judge-1"),
         ("decision.json", latest_judge_phase_id, "judge", "latest-decision.json", "judge-1"),
     ]
@@ -172,10 +171,10 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
     )
     manifest = staged[0].read_text(encoding="utf-8")
 
-    assert "latest-merged-metadata.md" in manifest
+    assert "latest-merged-metadata.json" in manifest
     assert "latest-changed-files.md" in manifest
     assert "latest-self-check.md" in manifest
-    assert "latest-selected-plan.md" in manifest
+    assert "latest-selected-plan.json" in manifest
     assert "latest-bug-report.md" in manifest
     assert "latest-tester-result.json" in manifest
 
@@ -184,7 +183,6 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
     assert "latest-merged.patch" not in manifest
     assert "old-merged.patch" not in manifest
     assert "latest-fix-notes.md" not in manifest
-    assert "latest-merge-report.md" not in manifest
     assert "latest-candidate.patch" not in manifest
     assert "latest-fix-candidate.patch" not in manifest
     assert "old-bug-report.md" not in manifest
@@ -208,17 +206,16 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     ]
     assert merge_phases
     assert {phase["role"] for phase in merge_phases} == {"executor"}
-    assert final_delivery == tmp_path / "deliver" / f"build-weather-tool-{task_id[:8]}" / "final_delivery.md"
+    assert final_delivery == tmp_path / "deliver" / f"build-weather-tool-{task_id[:8]}" / "final_delivery.json"
     assert final_delivery.exists()
     assert (final_delivery.parent / "success_path.md").exists()
     assert (final_delivery.parent / "usage_guide.md").exists()
     assert (final_delivery.parent / "tester_result.json").exists()
     assert (final_delivery.parent / "patches" / "final.patch").exists()
-    assert not (final_delivery.parent / "artifacts" / "merged_patch_metadata.md").exists()
+    assert not (final_delivery.parent / "artifacts" / "merged_patch_metadata.json").exists()
     assert not (final_delivery.parent / "artifacts" / "merged_patch.diff").exists()
     assert not (final_delivery.parent / "artifacts" / "patch_validation.md").exists()
     assert not (final_delivery.parent / "artifacts" / "materialized_repo.md").exists()
-    assert not (final_delivery.parent / "artifacts" / "merge_report.md").exists()
     assert not (final_delivery.parent / "artifacts" / "patch.diff").exists()
     assert (final_delivery.parent / "source" / "mock.txt").read_text(encoding="utf-8") == "mock change\n"
     merged_artifacts = orchestrator.repository.list_artifacts(task_id, "merged_patch.diff")
@@ -275,15 +272,15 @@ def test_delivery_internal_artifacts_are_explicit_opt_in(tmp_path: Path) -> None
     final_delivery = orchestrator.run_task(task_id)
 
     artifact_dir = final_delivery.parent / "artifacts"
-    assert (artifact_dir / "merged_patch_metadata.md").exists()
+    assert (artifact_dir / "merged_patch_metadata.json").exists()
     assert (artifact_dir / "changed_files.md").exists()
     assert (artifact_dir / "self_check.md").exists()
-    assert (artifact_dir / "review_report.md").exists()
+    assert (artifact_dir / "review_result.json").exists()
     assert not (artifact_dir / "merged_patch.diff").exists()
     assert not (artifact_dir / "patch_validation.md").exists()
     assert not (artifact_dir / "materialized_repo.md").exists()
     manifest = (final_delivery.parent / "artifacts_manifest.md").read_text(encoding="utf-8")
-    assert "artifacts/merged_patch_metadata.md" in manifest
+    assert "artifacts/merged_patch_metadata.json" in manifest
     assert "patch_validation.md" not in manifest
 
 def test_delivery_dependency_installer_infers_pytest_dependencies(tmp_path: Path) -> None:
