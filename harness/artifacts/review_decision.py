@@ -6,8 +6,8 @@ from typing import Any
 
 
 REVIEW_RESULT_ARTIFACT = "review_result.json"
-VALID_REVIEW_DECISION_CODES = {-1, 0, 1}
-VALID_REVIEW_STATUSES = {"approved", "changes_required", "blocked"}
+VALID_REVIEW_DECISION_CODES = {0, 1, 2}
+LEGACY_REVIEW_BLOCKED_CODE = -1
 VALID_REVIEW_ENVIRONMENT_STATUSES = {"ready", "changes_required", "blocked", "not_applicable"}
 
 
@@ -36,24 +36,16 @@ def load_review_result(path: Path) -> dict[str, Any]:
 
 
 def review_decision_code_from_payload(payload: dict[str, Any]) -> int | None:
-    return _coerce_review_decision_code(payload.get("review_decision_code"))
+    return _coerce_review_decision_code(payload.get("review_decision_code"), allow_legacy=True)
 
 
 def validate_review_result_payload(payload: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    decision_code = review_decision_code_from_payload(payload)
+    decision_code = _coerce_review_decision_code(payload.get("review_decision_code"), allow_legacy=False)
     if decision_code is None:
-        errors.append("review_result.json review_decision_code must be one of -1, 0, or 1")
-
-    status = str(payload.get("review_status") or "").strip()
-    if status not in VALID_REVIEW_STATUSES:
-        errors.append("review_result.json review_status must be approved, changes_required, or blocked")
-    elif decision_code == 0 and status != "approved":
-        errors.append("review_result.json review_status must be approved when review_decision_code is 0")
-    elif decision_code == 1 and status != "changes_required":
-        errors.append("review_result.json review_status must be changes_required when review_decision_code is 1")
-    elif decision_code == -1 and status != "blocked":
-        errors.append("review_result.json review_status must be blocked when review_decision_code is -1")
+        errors.append("review_result.json review_decision_code must be one of 0, 1, or 2")
+    if "review_status" in payload:
+        errors.append("review_result.json review_status is deprecated; route only with review_decision_code")
 
     environment_check = payload.get("environment_check")
     if not isinstance(environment_check, dict):
@@ -73,14 +65,18 @@ def validate_review_result_payload(payload: dict[str, Any]) -> list[str]:
         errors.append("review_result.json environment_check.fixable must be boolean")
     if not isinstance(environment_check.get("blocking_reason"), str):
         errors.append("review_result.json environment_check.blocking_reason must be a string")
-    if environment_status == "blocked" and status != "blocked":
-        errors.append("review_result.json review_status must be blocked when environment_check.status is blocked")
+    if environment_status == "blocked" and decision_code != 2:
+        errors.append("review_result.json review_decision_code must be 2 when environment_check.status is blocked")
     return errors
 
 
-def _coerce_review_decision_code(value: Any) -> int | None:
+def _coerce_review_decision_code(value: Any, *, allow_legacy: bool) -> int | None:
+    if isinstance(value, bool):
+        return None
     try:
         code = int(str(value).strip())
     except (TypeError, ValueError):
         return None
+    if allow_legacy and code == LEGACY_REVIEW_BLOCKED_CODE:
+        return 2
     return code if code in VALID_REVIEW_DECISION_CODES else None

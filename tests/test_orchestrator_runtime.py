@@ -100,6 +100,28 @@ def test_orchestrator_misc_flow_uses_executor_response_only(tmp_path: Path) -> N
     assert response.name == "response.md"
     assert orchestrator.repository.list_artifacts(task_id, "response.md")
 
+
+def test_orchestrator_records_task_classification_in_configuration(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("build a project", workflow_type=NEW_PROJECT)
+
+    orchestrator.record_task_classification(
+        task_id,
+        {
+            "workflow_type": NEW_PROJECT,
+            "confidence": 0.9,
+            "difficulty_score": 6,
+            "difficulty_reason": "multi-service project",
+            "reason": "new build request",
+        },
+    )
+
+    task = orchestrator.repository.get_task(task_id)
+    configuration = json.loads(task["configuration"])
+    assert configuration["classification"]["workflow_type"] == NEW_PROJECT
+    assert configuration["classification"]["difficulty_score"] == 6
+
+
 def test_orchestrator_emits_progress_events(tmp_path: Path) -> None:
     events: list[ProgressEvent] = []
     orchestrator = Orchestrator(_config(tmp_path), progress_callback=events.append)

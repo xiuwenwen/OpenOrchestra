@@ -103,6 +103,22 @@ class Orchestrator:
         if content.strip():
             self.artifact_manager.create_text_artifact(task_id, "project_context.md", content)
 
+    def record_task_classification(self, task_id: str, classification: dict[str, Any]) -> None:
+        task = self.repository.get_task(task_id)
+        if not task:
+            raise KeyError(f"Task not found: {task_id}")
+        try:
+            configuration = json.loads(task["configuration"] or "{}")
+        except json.JSONDecodeError:
+            configuration = {}
+        if not isinstance(configuration, dict):
+            configuration = {}
+        configuration["classification"] = classification
+        self.repository.update_task_configuration(
+            task_id,
+            json.dumps(configuration, ensure_ascii=False, sort_keys=True),
+        )
+
     def run_task(self, task_id: str, workflow_type: str | None = None, user_prompt_override: str | None = None) -> Path:
         task = self.repository.get_task(task_id)
         if not task:

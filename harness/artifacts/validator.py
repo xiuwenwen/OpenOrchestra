@@ -25,9 +25,27 @@ CONTRACT_ARTIFACTS = {
     "validation_contract_draft.json",
     "validation_contract.json",
 }
+PLAN_REVIEW_REQUIRED_ARTIFACTS = {
+    REVIEW_RESULT_ARTIFACT,
+    "selected_plan.json",
+    "environment_contract.json",
+    "validation_contract.json",
+}
 CONTRACT_MODES = {"explicit", "benchmark_spec", "repo_discovery", "agent_discovery", "none", "unknown"}
 CONTRACT_CONFIDENCE_VALUES = {"high", "medium", "low", "unknown"}
 CONTRACT_STATUSES = {"draft", "final"}
+ORACLE_KIND_ALIASES = {
+    "existing_test": "test",
+    "regression": "test",
+    "compile": "test",
+    "unit_test": "test",
+    "integration_test": "test",
+    "pytest": "test",
+    "command": "runtime",
+    "smoke": "runtime",
+    "runtime_check": "runtime",
+    "code_inspection": "static",
+}
 TESTER_FAILURE_TYPES = {
     "none",
     "source_bug",
@@ -149,6 +167,8 @@ class ArtifactValidator:
                         f"{relative_name} reports non-zero artifact_result_code: {artifact_code}",
                     )
                 )
+        if PLAN_REVIEW_REQUIRED_ARTIFACTS.issubset(set(required_outputs)):
+            issues.extend(self.validate_plan_review_handoff(output_dir))
         return ValidationResult(tuple(issues))
 
     def validate_review_result(self, path: Path) -> list[ValidationIssue]:
@@ -202,6 +222,9 @@ class ArtifactValidator:
         elif artifact_name == "selected_plan.json":
             if not isinstance(payload.get("summary"), str) or not payload.get("summary", "").strip():
                 messages.append("selected_plan.json.summary must be a non-empty string")
+            for field in ("risks", "required_executor_notes", "reviewer_integrated_findings"):
+                if field in payload and not isinstance(payload.get(field), list):
+                    messages.append(f"selected_plan.json.{field} must be a list when present")
             messages.extend(validate_acceptance_oracles(payload))
         elif artifact_name == "tester_result.json":
             messages.extend(self.validate_tester_result_json(payload))
@@ -229,6 +252,42 @@ class ArtifactValidator:
             if not isinstance(payload.get("summary"), str) or not payload.get("summary", "").strip():
                 messages.append("final_delivery.json.summary must be a non-empty string")
         return [ValidationIssue(artifact_name, "invalid_json_artifact_schema", message) for message in messages]
+
+    def validate_plan_review_handoff(self, output_dir: Path) -> list[ValidationIssue]:
+        review_payload = self.load_json_object(output_dir / REVIEW_RESULT_ARTIFACT)
+        selected_plan = self.load_json_object(output_dir / "selected_plan.json")
+        if review_payload is None or selected_plan is None:
+            return []
+
+        if self.coerce_int(review_payload.get("review_decision_code")) != 0:
+            return []
+
+        messages: list[str] = []
+        if self._has_non_empty_list(review_payload.get("required_changes")):
+            messages.append(
+                "PLAN_REVIEW review_decision_code 0 requires review_result.json.required_changes to be empty; "
+                "put non-blocking notes into selected_plan.json instead"
+            )
+
+        has_non_blocking_review_notes = (
+            self._has_non_empty_list(review_payload.get("findings"))
+            or self._has_non_empty_list(review_payload.get("acceptance_oracle_changes"))
+        )
+        has_selected_plan_carry_forward = (
+            self._has_non_empty_list(selected_plan.get("reviewer_integrated_findings"))
+            or self._has_non_empty_list(selected_plan.get("required_executor_notes"))
+            or self._has_non_empty_list(selected_plan.get("risks"))
+        )
+        if has_non_blocking_review_notes and not has_selected_plan_carry_forward:
+            messages.append(
+                "PLAN_REVIEW review_decision_code 0 with reviewer findings requires selected_plan.json to carry them "
+                "forward in reviewer_integrated_findings, required_executor_notes, or risks"
+            )
+
+        return [
+            ValidationIssue("selected_plan.json", "plan_review_findings_not_integrated", message)
+            for message in messages
+        ]
 
     def validate_contract_json(self, payload: dict[str, object], artifact_name: str) -> list[str]:
         messages: list[str] = []
@@ -352,6 +411,9 @@ class ArtifactValidator:
     def _non_empty_string(self, value: object) -> bool:
         return isinstance(value, str) and bool(value.strip())
 
+    def _has_non_empty_list(self, value: object) -> bool:
+        return isinstance(value, list) and any(bool(str(item).strip()) for item in value)
+
     def load_json_object(self, path: Path) -> dict[str, object] | None:
         try:
             payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
@@ -360,7 +422,7 @@ class ArtifactValidator:
         return payload if isinstance(payload, dict) else None
 
     def repair_trivial_contract_issues(self, output_dir: Path, validation_result: ValidationResult) -> list[str]:
-        repaired: list[str] = []
+        repaired = self.repair_trivial_json_enum_aliases(output_dir, validation_result)
         for issue in validation_result.issues:
             if issue.severity == "error" and issue.code != "missing_artifact_result_code":
                 continue
@@ -375,6 +437,54 @@ class ArtifactValidator:
             path.write_text(f"artifact_result_code: {DELIVERY_SUCCESS_RETURN_CODE}\n\n{content}", encoding="utf-8")
             repaired.append(issue.artifact)
         return repaired
+
+    def repair_trivial_json_enum_aliases(self, output_dir: Path, validation_result: ValidationResult) -> list[str]:
+        repaired: list[str] = []
+        if any(issue.artifact == "selected_plan.json" and ".kind must be one of" in issue.message for issue in validation_result.issues):
+            if self.repair_selected_plan_oracle_kind_aliases(output_dir / "selected_plan.json"):
+                repaired.append("selected_plan.json")
+        return repaired
+
+    def repair_selected_plan_oracle_kind_aliases(self, path: Path) -> bool:
+        payload = self.load_json_object(path)
+        if payload is None or output_has_pending_template_marker(path):
+            return False
+        oracles = payload.get("acceptance_oracles")
+        if not isinstance(oracles, list):
+            return False
+        notes: list[str] = []
+        for index, oracle in enumerate(oracles):
+            if not isinstance(oracle, dict):
+                continue
+            kind = self._normalized_string(oracle.get("kind"))
+            canonical = ORACLE_KIND_ALIASES.get(kind)
+            if canonical and canonical != kind:
+                oracle["kind"] = canonical
+                notes.append(f"acceptance_oracles[{index}].kind {kind!r} -> {canonical!r}")
+        if not notes:
+            return False
+        for note in notes:
+            self.add_canonicalization_note(payload, note)
+        self.write_json_object(path, payload)
+        return True
+
+    def add_canonicalization_note(self, payload: dict[str, object], note: str) -> None:
+        notes = payload.get("harness_canonicalizations")
+        if not isinstance(notes, list):
+            notes = []
+            payload["harness_canonicalizations"] = notes
+        notes.append(note)
+
+    def write_json_object(self, path: Path, payload: dict[str, object]) -> None:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def coerce_int(self, value: object) -> int | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
 
     def parse_delivery_return_code(self, delivery_path: Path) -> int | None:
         if not delivery_path.exists() or not delivery_path.is_file():

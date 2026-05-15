@@ -43,11 +43,9 @@ from orchestrator_mock_support import _config
 
 
 def _review_result_payload(decision_code: int) -> dict:
-    status = {0: "approved", 1: "changes_required", -1: "blocked"}[decision_code]
     return {
         "schema_version": 1,
         "review_decision_code": decision_code,
-        "review_status": status,
         "summary": "plan review verdict",
         "findings": [],
         "required_changes": [] if decision_code == 0 else ["revise selected plan"],
@@ -128,6 +126,34 @@ def test_plan_review_accepts_review_result_json(tmp_path: Path) -> None:
     result = AgentRunResult(task_id, "plan-review-phase", "reviewer", "reviewer-1", "COMPLETED", artifacts=[report_ref])
 
     assert orchestrator.workflow_engine.plan_review_approved([result])
+
+
+def test_plan_review_blocked_stops_planning(monkeypatch, tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("blocked plan review")
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        if phase != PLAN_REVIEW:
+            return []
+        report_path = tmp_path / f"review_result_{round_id}.json"
+        _write_review_result(report_path, 2)
+        ref = ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=f"plan-review-{round_id}",
+            role="reviewer",
+            agent_id="reviewer-1",
+            artifact_type="review_result.json",
+            path=report_path,
+            version=1,
+            hash="hash",
+        )
+        return [AgentRunResult(task_id, ref.phase_id, "reviewer", "reviewer-1", "COMPLETED", artifacts=[ref])]
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+
+    with pytest.raises(orchestrator_module.TaskFailedError, match="blocked"):
+        orchestrator.workflow_engine.run_light_planning_block(task_id, "blocked plan review")
 
 
 def test_planning_block_runs_peer_review_loop_then_plan_review(monkeypatch, tmp_path: Path) -> None:

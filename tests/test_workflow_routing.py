@@ -19,7 +19,6 @@ from harness.workflow.routing import (
         (
             {
                 "review_decision_code": 0,
-                "review_status": "approved",
                 "environment_check": {"status": "ready"},
             },
             WorkflowRouteAction.CONTINUE,
@@ -28,7 +27,6 @@ from harness.workflow.routing import (
         (
             {
                 "review_decision_code": 0,
-                "review_status": "approved",
                 "environment_check": {"status": "changes_required", "blocking_reason": "venv needs repair"},
             },
             WorkflowRouteAction.TESTER_ENVIRONMENT_REPAIR,
@@ -37,7 +35,6 @@ from harness.workflow.routing import (
         (
             {
                 "review_decision_code": 1,
-                "review_status": "changes_required",
                 "environment_check": {"status": "ready"},
             },
             WorkflowRouteAction.EXECUTOR_FIX,
@@ -46,7 +43,6 @@ from harness.workflow.routing import (
         (
             {
                 "review_decision_code": 0,
-                "review_status": "approved",
                 "environment_check": {"status": "blocked", "blocking_reason": "unsupported platform"},
             },
             WorkflowRouteAction.BLOCK_TASK,
@@ -54,8 +50,7 @@ from harness.workflow.routing import (
         ),
         (
             {
-                "review_decision_code": -1,
-                "review_status": "blocked",
+                "review_decision_code": 2,
                 "environment_check": {"status": "ready"},
             },
             WorkflowRouteAction.BLOCK_TASK,

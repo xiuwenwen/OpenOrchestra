@@ -345,7 +345,7 @@ class ArtifactVisibilityPolicy:
 
     def _review_result_requests_changes(self, path: Path) -> bool:
         text = path.read_text(encoding="utf-8", errors="replace")
-        return extract_review_decision_code(text) in {1, -1}
+        return extract_review_decision_code(text) == 1
 
     def _artifact_declared_round_id(self, artifact: dict[str, Any]) -> int | None:
         path = Path(str(artifact.get("path") or ""))

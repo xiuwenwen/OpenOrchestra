@@ -391,6 +391,10 @@ def test_prompt_builder_has_plan_review_merge_contract(tmp_path: Path) -> None:
     assert "proposal B" not in prompt
     assert "Do not merely pick one planner proposal" in prompt
     assert "do not create `review_report.md`" in prompt
+    assert "review_decision_code` meanings" in prompt
+    assert "reviewer_integrated_findings" in prompt
+    assert "review_status`, `decision`, or `status`" in prompt
+    assert 'acceptance_oracles[*].kind` must be exactly one of `"manual"`, `"runtime"`, `"static"`, or `"test"`' in prompt
 
 
 def test_tester_prompt_uses_environment_and_validation_contracts(tmp_path: Path) -> None:
@@ -420,7 +424,8 @@ def test_prompt_builder_reviewer_requires_runtime_verdict_json(tmp_path: Path) -
     assert "review_result.json" in prompt
     assert "Treat `tester_result.json` as the structured test verdict" in prompt
     assert "do not request source changes solely because `runtime_readiness.md` ran a generic/default command" in prompt
-    assert '"review_status":"approved|changes_required|blocked"' in prompt
+    assert '"review_decision_code":0' in prompt
+    assert "review_status`, `decision`, or `status`" in prompt
     assert "environment_check.status: blocked" in prompt
     assert "routes to tester-owned environment repair" in prompt
 

@@ -11,6 +11,43 @@ def md_ok(text: str = "ok") -> str:
     return f"artifact_result_code: 0\n\n{text}"
 
 
+def write_json_artifact(path: Path, payload: dict[str, object]) -> None:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def write_valid_plan_review_contracts(output_dir: Path) -> None:
+    write_json_artifact(
+        output_dir / "environment_contract.json",
+        {
+            "schema_version": "environment_contract.v1",
+            "contract_id": "env",
+            "contract_status": "final",
+            "source": "test",
+            "confidence": "unknown",
+            "runtime": {"type": "unknown"},
+            "setup": {"mode": "unknown", "commands": [], "discovery_allowed": True},
+            "unknowns": [],
+            "evidence_sources": [],
+        },
+    )
+    write_json_artifact(
+        output_dir / "validation_contract.json",
+        {
+            "schema_version": "validation_contract.v1",
+            "contract_id": "validation",
+            "contract_status": "final",
+            "source": "test",
+            "confidence": "unknown",
+            "runtime": "unknown",
+            "tests": {"mode": "unknown", "commands": [], "discovery_allowed": True},
+            "pass_criteria": {"type": "unknown", "conditions": []},
+            "acceptance_oracle_ids": [],
+            "unknowns": [],
+            "evidence_sources": [],
+        },
+    )
+
+
 def test_artifact_validator_reports_missing_outputs(tmp_path: Path) -> None:
     validator = ArtifactValidator()
     (tmp_path / "plan.md").write_text(md_ok(), encoding="utf-8")
@@ -49,6 +86,208 @@ def test_artifact_validator_repairs_missing_markdown_artifact_result_code(tmp_pa
     assert repaired == ["plan.md"]
     assert repaired_result.ok
     assert path.read_text(encoding="utf-8").startswith("artifact_result_code: 0\n\n# Plan")
+
+
+def test_artifact_validator_rejects_deprecated_review_status_route_field(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    path = tmp_path / "review_result.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "review_decision_code": 0,
+                "review_status": "approved",
+                "summary": "approved with non-blocking findings",
+                "findings": [],
+                "required_changes": [],
+                "environment_check": {
+                    "attempted": False,
+                    "status": "not_applicable",
+                    "commands_run": [],
+                    "fixable": False,
+                    "blocking_reason": "",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = validator.validate_required_outputs_result(tmp_path, ["review_result.json"])
+
+    repaired = validator.repair_trivial_contract_issues(tmp_path, result)
+
+    assert repaired == []
+    assert result.errors == ["review_result.json review_status is deprecated; route only with review_decision_code"]
+
+
+def test_artifact_validator_canonicalizes_selected_plan_oracle_kind_aliases(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    path = tmp_path / "selected_plan.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "summary": "selected plan",
+                "acceptance_oracles": [
+                    {
+                        "id": "AO-1",
+                        "description": "run existing regression",
+                        "kind": "regression",
+                        "required": True,
+                        "commands": ["python -m pytest tests/test_example.py"],
+                        "expected_exception": "",
+                        "must_contain": [],
+                        "must_not_contain": [],
+                        "semantic_assertions": [],
+                        "failure_signal": "pytest exits non-zero",
+                        "evidence_hint": "pytest output",
+                    },
+                    {
+                        "id": "AO-2",
+                        "description": "compile project",
+                        "kind": "compile",
+                        "required": True,
+                        "commands": ["python -m compileall -q ."],
+                        "expected_exception": "",
+                        "must_contain": [],
+                        "must_not_contain": [],
+                        "semantic_assertions": [],
+                        "failure_signal": "compileall exits non-zero",
+                        "evidence_hint": "compileall output",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = validator.validate_required_outputs_result(tmp_path, ["selected_plan.json"])
+
+    repaired = validator.repair_trivial_contract_issues(tmp_path, result)
+    repaired_payload = json.loads(path.read_text(encoding="utf-8"))
+    repaired_result = validator.validate_required_outputs_result(tmp_path, ["selected_plan.json"])
+
+    assert repaired == ["selected_plan.json"]
+    assert [oracle["kind"] for oracle in repaired_payload["acceptance_oracles"]] == ["test", "test"]
+    assert "acceptance_oracles[0].kind 'regression' -> 'test'" in repaired_payload["harness_canonicalizations"]
+    assert "acceptance_oracles[1].kind 'compile' -> 'test'" in repaired_payload["harness_canonicalizations"]
+    assert repaired_result.ok
+
+
+def test_plan_review_approval_requires_nonblocking_findings_in_selected_plan(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    write_valid_plan_review_contracts(tmp_path)
+    write_json_artifact(
+        tmp_path / "review_result.json",
+        {
+            "schema_version": 1,
+            "review_decision_code": 0,
+            "summary": "acceptable with a note",
+            "findings": [{"id": "F-1", "summary": "preserve stricter acceptance oracle"}],
+            "required_changes": [],
+            "acceptance_oracle_changes": [],
+            "environment_check": {
+                "attempted": False,
+                "status": "not_applicable",
+                "commands_run": [],
+                "fixable": False,
+                "blocking_reason": "",
+            },
+        },
+    )
+    write_json_artifact(
+        tmp_path / "selected_plan.json",
+        {
+            "schema_version": 1,
+            "summary": "selected plan",
+            "acceptance_oracles": [
+                {
+                    "id": "AO-1",
+                    "description": "run regression",
+                    "kind": "test",
+                    "required": True,
+                    "commands": ["python -m pytest"],
+                    "expected_exception": "",
+                    "must_contain": [],
+                    "must_not_contain": [],
+                    "semantic_assertions": [],
+                    "failure_signal": "pytest exits non-zero",
+                    "evidence_hint": "pytest output",
+                }
+            ],
+        },
+    )
+
+    result = validator.validate_required_outputs_result(
+        tmp_path,
+        ["review_result.json", "selected_plan.json", "environment_contract.json", "validation_contract.json"],
+    )
+
+    assert not result.ok
+    assert any("requires selected_plan.json to carry them forward" in error for error in result.errors)
+
+    selected_plan = json.loads((tmp_path / "selected_plan.json").read_text(encoding="utf-8"))
+    selected_plan["reviewer_integrated_findings"] = ["F-1 preserved as AO-1"]
+    write_json_artifact(tmp_path / "selected_plan.json", selected_plan)
+
+    repaired_result = validator.validate_required_outputs_result(
+        tmp_path,
+        ["review_result.json", "selected_plan.json", "environment_contract.json", "validation_contract.json"],
+    )
+
+    assert repaired_result.ok
+
+
+def test_plan_review_approval_rejects_required_changes(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    write_valid_plan_review_contracts(tmp_path)
+    write_json_artifact(
+        tmp_path / "review_result.json",
+        {
+            "schema_version": 1,
+            "review_decision_code": 0,
+            "summary": "incorrectly approved with required changes",
+            "findings": [],
+            "required_changes": ["planner must revise acceptance contract"],
+            "acceptance_oracle_changes": [],
+            "environment_check": {
+                "attempted": False,
+                "status": "not_applicable",
+                "commands_run": [],
+                "fixable": False,
+                "blocking_reason": "",
+            },
+        },
+    )
+    write_json_artifact(
+        tmp_path / "selected_plan.json",
+        {
+            "schema_version": 1,
+            "summary": "selected plan",
+            "reviewer_integrated_findings": ["note carried forward"],
+            "acceptance_oracles": [
+                {
+                    "id": "AO-1",
+                    "description": "run regression",
+                    "kind": "test",
+                    "required": True,
+                    "commands": ["python -m pytest"],
+                    "expected_exception": "",
+                    "must_contain": [],
+                    "must_not_contain": [],
+                    "semantic_assertions": [],
+                    "failure_signal": "pytest exits non-zero",
+                    "evidence_hint": "pytest output",
+                }
+            ],
+        },
+    )
+
+    result = validator.validate_required_outputs_result(
+        tmp_path,
+        ["review_result.json", "selected_plan.json", "environment_contract.json", "validation_contract.json"],
+    )
+
+    assert not result.ok
+    assert any("required_changes to be empty" in error for error in result.errors)
 
 
 def test_artifact_validator_accepts_json_delivery_return_code(tmp_path: Path) -> None:

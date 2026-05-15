@@ -7,7 +7,9 @@ from pathlib import Path
 
 from harness.adapters.process_registry import terminate_all_processes
 from harness.cli.interactive import InteractiveCLI
-from harness.cli.runtime import REAL_BACKENDS, classify_workflow, resolve_real_backend, run_once
+from harness.cli.runtime import REAL_BACKENDS, classify_workflow_with_metadata, resolve_real_backend, run_once
+from harness.core.difficulty import planner_peer_review_enabled_for_score
+from harness.core.workflow_classifier import WorkflowClassification
 from harness.config.loader import load_config
 from harness.config.user_env import (
     ENV_CONFIG_SPECS,
@@ -193,18 +195,29 @@ def main() -> int:
             command_line = cli.command_line_for_text(prompt)
             if command_line:
                 return cli.run_command_once(command_line)
-            workflow_type, fallback_answer = (args.workflow, None) if args.workflow else classify_workflow(prompt, backend, config)
+            classification: WorkflowClassification | None = None
+            if args.workflow:
+                workflow_type, fallback_answer = args.workflow, None
+            else:
+                classification, fallback_answer = classify_workflow_with_metadata(prompt, backend, config)
+                workflow_type = classification.workflow_type
             if workflow_type == MISC:
                 print(fallback_answer or MiscChatRunner(backend, config=config).ask(prompt))
                 return 0
             if not args.workflow:
-                print(f"[classifier] workflow_type={workflow_type}", flush=True)
+                assert classification is not None
+                peer_review = planner_peer_review_enabled_for_score(config, workflow_type, classification.difficulty_score)
+                print(
+                    f"[classifier] workflow_type={workflow_type} "
+                    f"difficulty={classification.difficulty_score} peer_review={str(peer_review).lower()}",
+                    flush=True,
+                )
             if args.ui:
                 cli.ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port, args.config)
             # One-shot runs must fail closed at the fix-round limit instead of
             # waiting for the interactive /goal continuation prompt.
             orchestrator.fix_round_limit_callback = None
-            return run_once(orchestrator, prompt, workflow_type)
+            return run_once(orchestrator, prompt, workflow_type, classification=classification)
         if args.ui:
             cli.ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port, args.config)
         return cli.run()

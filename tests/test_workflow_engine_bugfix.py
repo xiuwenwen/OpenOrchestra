@@ -61,6 +61,19 @@ def _tester_result(tmp_path: Path, status: str) -> HarnessTesterResult:
     )
 
 
+def _record_classification(orchestrator: Orchestrator, task_id: str, workflow_type: str, score: int) -> None:
+    orchestrator.record_task_classification(
+        task_id,
+        {
+            "workflow_type": workflow_type,
+            "confidence": 0.9,
+            "difficulty_score": score,  # > configured threshold enables planner peer review.
+            "difficulty_reason": "test difficulty",
+            "reason": "test workflow",
+        },
+    )
+
+
 def _tester_run_result(
     tmp_path: Path,
     task_id: str,
@@ -318,6 +331,7 @@ def test_bugfix_flow_runs_two_planners_before_fixing(monkeypatch, tmp_path: Path
     config["roles"]["planner"]["count"] = 1
     orchestrator = Orchestrator(config)
     task_id = orchestrator.create_task("fix a parsing bug", workflow_type=BUGFIX)
+    _record_classification(orchestrator, task_id, BUGFIX, 5)
     calls: list[tuple[str, str, int]] = []
 
     def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
@@ -345,6 +359,40 @@ def test_bugfix_flow_runs_two_planners_before_fixing(monkeypatch, tmp_path: Path
     assert ("planner", PLANNING_PEER_REVIEW, 0) not in calls[:first_fixing]
     assert ("reviewer", PLAN_REVIEW, 0) in calls[:first_fixing]
     assert orchestrator.effective_agent_count(task_id, "planner", PLANNING_DRAFT) == 2
+
+
+def test_bugfix_flow_runs_peer_review_when_difficulty_above_threshold(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["planning_peer_review_loops"] = 1
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("fix a cross-module parsing bug", workflow_type=BUGFIX)
+    _record_classification(orchestrator, task_id, BUGFIX, 6)
+    calls: list[tuple[str, str, int]] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append((role, phase, round_id))
+        return []
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+    monkeypatch.setattr(orchestrator.workflow_engine, "plan_review_approved", lambda results: True)
+    monkeypatch.setattr(orchestrator, "run_patch_merge", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        orchestrator.workflow_engine,
+        "run_testing_until_tester_decision",
+        lambda *args, **kwargs: _tester_result(tmp_path, "tests_passed"),
+    )
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_review_loop", lambda *args, **kwargs: None)
+    delivery = tmp_path / "final_delivery.json"
+    delivery.write_text("ok", encoding="utf-8")
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_delivery", lambda *args, **kwargs: delivery)
+
+    result = orchestrator._run_bugfix_flow(task_id, "fix a cross-module parsing bug")
+
+    assert result == delivery
+    first_fixing = calls.index(("executor", FIXING, 0))
+    assert ("planner", PLANNING_PEER_REVIEW, 0) in calls[:first_fixing]
+    assert ("reviewer", PLAN_REVIEW, 0) in calls[:first_fixing]
+
 
 def test_bugfix_flow_uses_tester_result_without_harness_test_gate(monkeypatch, tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))

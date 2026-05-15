@@ -35,10 +35,12 @@ except ModuleNotFoundError:
         pass
 
 from harness.cli.commands import bare_command_line, command_description, matching_commands, resolve_command
-from harness.cli.runtime import REAL_BACKENDS, classify_workflow, resolve_real_backend, run_existing, run_once
+from harness.cli.runtime import REAL_BACKENDS, classify_workflow_with_metadata, resolve_real_backend, run_existing, run_once
 from harness.config.user_env import USER_ENV_PATH, save_user_env_value
+from harness.core.difficulty import planner_peer_review_enabled_for_score
 from harness.core.misc_chat import MiscChatRunner
 from harness.core.orchestrator import Orchestrator
+from harness.core.workflow_classifier import WorkflowClassification
 from harness.core.workflow_type import MISC, NEW_PROJECT
 from harness.delivery.handoff import format_delivery_handoff, format_total_elapsed
 from harness.diagnostics.service import DiagnosticsService
@@ -468,17 +470,24 @@ class InteractiveCLI:
             context = self._build_history_context(self.active_task_id)
             print(MiscChatRunner(self.backend, config=self.config).ask(prompt, context=context))
             return
-        workflow_type, fallback_answer = (
-            (self.default_workflow, None)
-            if self.default_workflow
-            else classify_workflow(prompt, self.backend, self.config)
-        )
+        classification: WorkflowClassification | None = None
+        if self.default_workflow:
+            workflow_type, fallback_answer = self.default_workflow, None
+        else:
+            classification, fallback_answer = classify_workflow_with_metadata(prompt, self.backend, self.config)
+            workflow_type = classification.workflow_type
         if workflow_type == MISC:
             context = self._build_history_context(self.active_task_id) if self.active_task_id else None
             print(fallback_answer or MiscChatRunner(self.backend, config=self.config).ask(prompt, context=context))
             return
         if not self.default_workflow:
-            print(f"[classifier] workflow_type={workflow_type}", flush=True)
+            assert classification is not None
+            peer_review = planner_peer_review_enabled_for_score(self.config, workflow_type, classification.difficulty_score)
+            print(
+                f"[classifier] workflow_type={workflow_type} "
+                f"difficulty={classification.difficulty_score} peer_review={str(peer_review).lower()}",
+                flush=True,
+            )
         project_context_md = None
         if self.active_task_id:
             project_context_md = self._build_project_context_md(self.active_task_id)
@@ -488,11 +497,12 @@ class InteractiveCLI:
                 prompt,
                 workflow_type,
                 project_context_md=project_context_md,
+                classification=classification,
             )
             self.ui_store.select_task(self.active_task_id)
             return
         previous_latest = self._latest_task_id()
-        run_once(self.orchestrator, prompt, workflow_type, project_context_md=project_context_md)
+        run_once(self.orchestrator, prompt, workflow_type, project_context_md=project_context_md, classification=classification)
         latest_task_id = self._latest_task_id()
         if latest_task_id and latest_task_id != previous_latest:
             self.active_task_id = latest_task_id

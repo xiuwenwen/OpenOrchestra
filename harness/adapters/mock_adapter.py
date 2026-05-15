@@ -115,7 +115,6 @@ class MockAgentAdapter(AgentAdapter):
                 {
                     "schema_version": 1,
                     "review_decision_code": 0,
-                    "review_status": "approved",
                     "summary": "Mock reviewer approved the implementation.",
                     "findings": [],
                     "required_changes": [],

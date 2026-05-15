@@ -13,6 +13,7 @@ from harness.patch.gate import (
     analyze_unified_diff,
     materialized_repo_markdown,
     objective_gate_markdown,
+    patch_gate_result_json,
     patch_validation_markdown,
     run_patch_gate,
 )
@@ -504,6 +505,7 @@ class PatchGateService:
         report = patch_validation_markdown(gate_result)
         materialize_report = materialized_repo_markdown(gate_result, task_id, round_id)
         objective_report = objective_gate_markdown(gate_result, task_id, round_id)
+        patch_gate_result_report = patch_gate_result_json(gate_result, task_id, round_id)
         ref = self.artifact_manager.create_text_artifact(
             task_id,
             "patch_validation.md",
@@ -528,6 +530,14 @@ class PatchGateService:
             role="orchestrator",
             agent_id="objective-gate",
         )
+        patch_gate_result_ref = self.artifact_manager.create_text_artifact(
+            task_id,
+            "patch_gate_result.json",
+            patch_gate_result_report,
+            phase_id=latest.get("phase_id"),
+            role="orchestrator",
+            agent_id="patch-validator",
+        )
         self.emit(
             ProgressEvent(
                 "patch_validated",
@@ -539,10 +549,11 @@ class PatchGateService:
                 status=gate_result.status.upper(),
                 message=f"Objective patch gate {gate_result.status}",
                 data={
-                    "artifacts": 3,
+                    "artifacts": 4,
                     "patch_validation": str(ref.path),
                     "materialized_repo_report": str(materialized_ref.path),
                     "objective_gate": str(objective_ref.path),
+                    "patch_gate_result": str(patch_gate_result_ref.path),
                     "materialized_repo": str(gate_result.materialized_repo) if gate_result.materialized_repo else "-",
                 },
             )

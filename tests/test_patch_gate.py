@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from harness.patch.gate import PatchGatePolicy, analyze_unified_diff, patch_validation_markdown, run_patch_gate
+from harness.patch.gate import (
+    PatchGatePolicy,
+    analyze_unified_diff,
+    patch_gate_result_json,
+    patch_validation_markdown,
+    run_patch_gate,
+)
 
 
 def test_patch_gate_accepts_applicable_unified_diff(tmp_path: Path) -> None:
@@ -31,6 +38,10 @@ def test_patch_gate_accepts_applicable_unified_diff(tmp_path: Path) -> None:
     assert result.diff_check.status == "pass"
     assert result.materialized_repo
     assert (result.materialized_repo / "app.py").read_text(encoding="utf-8") == "new\n"
+    payload = json.loads(patch_gate_result_json(result, "task-1", 0))
+    assert payload["status"] == "pass"
+    assert payload["failure_type"] == "none"
+    assert payload["next_action"] == "continue"
 
 
 def test_patch_gate_rejects_non_unified_diff(tmp_path: Path) -> None:
@@ -47,6 +58,39 @@ def test_patch_gate_rejects_non_unified_diff(tmp_path: Path) -> None:
     assert not result.stats.legal_unified_diff
     assert "patch does not contain diff --git file headers" in result.stats.legal_errors
     assert "status: fail" in patch_validation_markdown(result)
+    payload = json.loads(patch_gate_result_json(result, "task-1", 0))
+    assert payload["failure_type"] == "invalid_unified_diff"
+    assert payload["commands"]["apply_check"]["command"] == "git apply --check --whitespace=nowarn <merged_patch.diff>"
+
+
+def test_patch_gate_result_json_preserves_apply_failure_stderr(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "app.py").write_text("current\n", encoding="utf-8")
+    patch = tmp_path / "stale.patch"
+    patch.write_text(
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n",
+        encoding="utf-8",
+    )
+
+    result = run_patch_gate(
+        patch_path=patch,
+        source_repo=source,
+        materialized_repo_dir=tmp_path / "materialized",
+    )
+
+    payload = json.loads(patch_gate_result_json(result, "task-1", 1))
+    assert payload["status"] == "fail"
+    assert payload["failure_type"] == "patch_apply"
+    assert payload["round_id"] == 1
+    assert payload["commands"]["apply_check"]["exit_code"] != 0
+    assert "app.py" in payload["commands"]["apply_check"]["stderr"]
+    assert "Patch did not apply" in payload["executor_message"]
 
 
 def test_patch_gate_accepts_empty_new_file_metadata_diff(tmp_path: Path) -> None:

@@ -82,7 +82,7 @@ PLANNING_ARTIFACTS = _types("plan.md", "assumptions.md", "risk.md", "todo_breakd
 PROJECT_CONTEXT_ARTIFACTS = _types("project_context.md")
 TEST_REPORT_ARTIFACTS = _types("bug_report.md", "tester_result.json")
 JUDGE_DECISION_ARTIFACTS = _types("decision.json")
-PATCH_FIX_GATE_ARTIFACTS = _types("objective_gate.md")
+PATCH_FIX_GATE_ARTIFACTS = _types("objective_gate.md", "patch_gate_result.json")
 TEST_JUDGE_GATE_ARTIFACTS = _types("objective_gate.md")
 RUNTIME_READINESS_ARTIFACTS = _types("runtime_readiness.md")
 EXECUTOR_REVIEW_ARTIFACTS = _types(
@@ -516,12 +516,17 @@ def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]
     if role == "reviewer":
         return [
             *base,
-            "- Put review outcome only in `review_result.json.review_decision_code` as `0`, `1`, or `-1`.",
+            "- Put review outcome only in `review_result.json.review_decision_code` as a numeric code.",
+            "- `review_decision_code` meanings are: `0` = approved/continue, `1` = changes required/rework, `2` = blocked.",
             "- Do not copy `review_decision_code` into `artifact_result_code` or `return_code`.",
             "- Keep source-change verdicts separate from environment verdicts: use `review_decision_code: 1` only for executor source changes, and use `environment_check.status: changes_required` only for tester-owned environment follow-up.",
             "- `review_result.json` must be exactly one JSON object with no Markdown, prose, YAML, or code fence.",
-            '- Required JSON keys: `review_decision_code`, `review_status`, `summary`, `findings`, `required_changes`, `environment_check.attempted`, `environment_check.status`, `environment_check.commands_run`, `environment_check.fixable`, and `environment_check.blocking_reason`.',
+            "- Do not write `review_status`, `decision`, or `status` as review route fields; Harness routes only on `review_decision_code`.",
+            '- Required JSON keys: `review_decision_code`, `summary`, `findings`, `required_changes`, `environment_check.attempted`, `environment_check.status`, `environment_check.commands_run`, `environment_check.fixable`, and `environment_check.blocking_reason`.',
+            "- During PLAN_REVIEW, if the plan is overall acceptable but has non-blocking findings, integrate those findings into `selected_plan.json` and use `review_decision_code: 0`.",
+            "- During PLAN_REVIEW, use `review_decision_code: 1` only when planner revision is required before execution.",
             "- During PLAN_REVIEW, `selected_plan.json.acceptance_oracles` must be the authoritative structured acceptance contract.",
+            "- During PLAN_REVIEW, `selected_plan.json.acceptance_oracles[*].kind` must be exactly one of `manual`, `runtime`, `static`, or `test`; encode existing tests, regressions, and compile checks as `test`.",
             "- During PLAN_REVIEW, `environment_contract.json` and `validation_contract.json` must be the authoritative environment and validation contracts for all downstream executor/tester/reviewer/judge phases.",
             "- Use `environment_check.status: blocked` only for irreconcilable runtime or system conflicts that should stop Harness immediately.",
         ]

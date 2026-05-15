@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.orchestrator import Orchestrator
-from harness.core.workflow_classifier import WorkflowClassifier
+from harness.core.workflow_classifier import WorkflowClassification, WorkflowClassifier
 from harness.core.workflow_type import MISC, NEW_PROJECT
 from harness.delivery.handoff import format_delivery_handoff, format_total_elapsed
 
@@ -28,8 +28,11 @@ def run_once(
     prompt: str,
     workflow_type: str = NEW_PROJECT,
     project_context_md: str | None = None,
+    classification: WorkflowClassification | None = None,
 ) -> int:
     task_id = orchestrator.create_task(prompt, workflow_type=workflow_type)
+    if classification is not None:
+        orchestrator.record_task_classification(task_id, classification.to_dict())
     if project_context_md:
         orchestrator.attach_project_context(task_id, project_context_md)
     result_path = orchestrator.run_task(task_id, workflow_type=workflow_type)
@@ -49,7 +52,10 @@ def run_existing(
     prompt: str,
     workflow_type: str = NEW_PROJECT,
     project_context_md: str | None = None,
+    classification: WorkflowClassification | None = None,
 ) -> int:
+    if classification is not None:
+        orchestrator.record_task_classification(task_id, classification.to_dict())
     if project_context_md:
         orchestrator.attach_project_context(task_id, project_context_md)
     result_path = orchestrator.run_task(task_id, workflow_type=workflow_type, user_prompt_override=prompt)
@@ -66,3 +72,12 @@ def run_existing(
 def classify_workflow(prompt: str, backend: str, config: dict[str, Any] | None = None) -> tuple[str, str | None]:
     workflow_type, _log_dir, fallback_answer = WorkflowClassifier(backend, config=config).classify_with_fallback(prompt)
     return workflow_type, fallback_answer
+
+
+def classify_workflow_with_metadata(
+    prompt: str,
+    backend: str,
+    config: dict[str, Any] | None = None,
+) -> tuple[WorkflowClassification, str | None]:
+    classification, _log_dir, fallback_answer = WorkflowClassifier(backend, config=config).classify_with_metadata(prompt)
+    return classification, fallback_answer

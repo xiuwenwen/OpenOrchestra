@@ -61,6 +61,19 @@ def _tester_result(tmp_path: Path, status: str) -> HarnessTesterResult:
     )
 
 
+def _record_classification(orchestrator: Orchestrator, task_id: str, workflow_type: str, score: int) -> None:
+    orchestrator.record_task_classification(
+        task_id,
+        {
+            "workflow_type": workflow_type,
+            "confidence": 0.9,
+            "difficulty_score": score,  # > configured threshold enables planner peer review.
+            "difficulty_reason": "test difficulty",
+            "reason": "test workflow",
+        },
+    )
+
+
 def test_orchestrator_mock_flow_completes_and_generates_delivery(tmp_path: Path) -> None:
     config = _config(tmp_path)
     events: list[ProgressEvent] = []
@@ -99,6 +112,61 @@ def test_orchestrator_mock_flow_completes_and_generates_delivery(tmp_path: Path)
     )
     assert prompt_path.exists()
     assert "Role: planner" in prompt_path.read_text(encoding="utf-8")
+
+
+def test_new_project_flow_skips_peer_review_at_threshold(monkeypatch, tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("build a simple cli", workflow_type=NEW_PROJECT)
+    _record_classification(orchestrator, task_id, NEW_PROJECT, 5)
+    calls: list[tuple[str, str, int]] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append((role, phase, round_id))
+        return []
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+    monkeypatch.setattr(orchestrator.workflow_engine, "plan_review_approved", lambda results: True)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_execution_test_loop", lambda *args, **kwargs: None)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_review_loop", lambda *args, **kwargs: None)
+    delivery = tmp_path / "final_delivery.json"
+    delivery.write_text("ok", encoding="utf-8")
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_delivery", lambda *args, **kwargs: delivery)
+
+    result = orchestrator.workflow_engine.run_new_project_flow(task_id, "build a simple cli")
+
+    assert result == delivery
+    assert ("planner", PLANNING_DRAFT, 0) in calls
+    assert ("planner", PLANNING_PEER_REVIEW, 0) not in calls
+    assert ("reviewer", PLAN_REVIEW, 0) in calls
+
+
+def test_new_project_flow_runs_peer_review_when_difficulty_above_threshold(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["planning_peer_review_loops"] = 1
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("build a multi-service project", workflow_type=NEW_PROJECT)
+    _record_classification(orchestrator, task_id, NEW_PROJECT, 6)
+    calls: list[tuple[str, str, int]] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append((role, phase, round_id))
+        return []
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+    monkeypatch.setattr(orchestrator.workflow_engine, "plan_review_approved", lambda results: True)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_execution_test_loop", lambda *args, **kwargs: None)
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_review_loop", lambda *args, **kwargs: None)
+    delivery = tmp_path / "final_delivery.json"
+    delivery.write_text("ok", encoding="utf-8")
+    monkeypatch.setattr(orchestrator.workflow_engine, "run_delivery", lambda *args, **kwargs: delivery)
+
+    result = orchestrator.workflow_engine.run_new_project_flow(task_id, "build a multi-service project")
+
+    assert result == delivery
+    assert ("planner", PLANNING_DRAFT, 0) in calls
+    assert ("planner", PLANNING_PEER_REVIEW, 0) in calls
+    assert ("reviewer", PLAN_REVIEW, 0) in calls
+
 
 def test_failed_exhausted_new_project_continue_appends_new_fix_window(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)

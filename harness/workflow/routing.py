@@ -34,8 +34,6 @@ class WorkflowRoute:
 
 
 READY_ENVIRONMENT_STATUSES = {"ready", "not_applicable", "pass", "passed", "success"}
-REVIEW_APPROVED_STATUSES = {"approved", "approve", "pass", "passed", "success"}
-REVIEW_CHANGES_REQUIRED_STATUSES = {"changes_required", "changes_requested", "change_required", "failed", "fail"}
 
 
 def route_tester_decision(decision: TesterResult) -> WorkflowRoute:
@@ -68,7 +66,6 @@ def route_tester_decision(decision: TesterResult) -> WorkflowRoute:
 
 def route_review_payload(payload: dict[str, Any]) -> WorkflowRoute:
     decision_code = review_decision_code_from_payload(payload)
-    review_status = _normalized(payload.get("review_status") or payload.get("decision") or payload.get("status"))
     environment_check = payload.get("environment_check")
     environment_status = ""
     blocking_reason = ""
@@ -83,19 +80,19 @@ def route_review_payload(payload: dict[str, Any]) -> WorkflowRoute:
             WorkflowErrorType.ENVIRONMENT_BLOCKED,
             blocking_reason or summary or "reviewer reported a blocked runtime environment",
         )
-    if decision_code == -1 or review_status == "blocked":
+    if decision_code == 2:
         return WorkflowRoute(
             WorkflowRouteAction.BLOCK_TASK,
             WorkflowErrorType.REVIEW_BLOCKED,
             blocking_reason or summary or "reviewer blocked the workflow",
         )
-    if decision_code == 1 or review_status in REVIEW_CHANGES_REQUIRED_STATUSES:
+    if decision_code == 1:
         return WorkflowRoute(
             WorkflowRouteAction.EXECUTOR_FIX,
             WorkflowErrorType.SOURCE_BUG,
             summary or "reviewer requested source changes",
         )
-    if decision_code == 0 and review_status in REVIEW_APPROVED_STATUSES:
+    if decision_code == 0:
         if environment_status in READY_ENVIRONMENT_STATUSES:
             return WorkflowRoute(WorkflowRouteAction.CONTINUE, WorkflowErrorType.NONE, summary)
         if environment_status == "changes_required":

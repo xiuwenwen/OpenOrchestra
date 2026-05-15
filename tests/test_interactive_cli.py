@@ -9,6 +9,7 @@ import harness.main as main_module
 from harness.delivery import handoff as handoff_module
 from harness.agents.result import ArtifactRef
 from harness.core.progress import ProgressEvent
+from harness.core.workflow_classifier import WorkflowClassification
 from harness.main import ConsoleProgressReporter, InteractiveCLI
 from harness.state.db import StateDB
 from harness.state.repository import StateRepository
@@ -84,26 +85,44 @@ def _config(tmp_path: Path) -> dict:
     }
 
 
+def _classification(workflow_type: str, score: int = 3) -> WorkflowClassification:
+    return WorkflowClassification(
+        workflow_type=workflow_type,
+        confidence=0.8,
+        difficulty_score=score,
+        difficulty_reason="test difficulty",
+        reason="test reason",
+    )
+
+
 def test_resume_context_does_not_pollute_project_workflow_classification(monkeypatch, tmp_path: Path) -> None:
     cli = InteractiveCLI(_config(tmp_path), "mock", ConsoleProgressReporter())
     historical_task_id = cli.orchestrator.create_task("Build a small weather app")
     cli.active_task_id = historical_task_id
     captured: dict[str, str] = {}
 
-    def fake_classify(prompt: str, backend: str, config: dict | None = None) -> str:
+    def fake_classify(prompt: str, backend: str, config: dict | None = None) -> tuple[WorkflowClassification, None]:
         captured["classified_prompt"] = prompt
         captured["backend"] = backend
         captured["config_seen"] = "yes" if config else "no"
-        return "feature_change", None
+        return _classification("feature_change"), None
 
-    def fake_run_existing(orchestrator, task_id: str, prompt: str, workflow_type: str, project_context_md: str | None = None) -> int:
+    def fake_run_existing(
+        orchestrator,
+        task_id: str,
+        prompt: str,
+        workflow_type: str,
+        project_context_md: str | None = None,
+        classification: WorkflowClassification | None = None,
+    ) -> int:
         captured["task_id"] = task_id
         captured["run_prompt"] = prompt
         captured["workflow_type"] = workflow_type
         captured["project_context_md"] = project_context_md or ""
+        captured["classification"] = classification.workflow_type if classification else ""
         return 0
 
-    monkeypatch.setattr(interactive_module, "classify_workflow", fake_classify)
+    monkeypatch.setattr(interactive_module, "classify_workflow_with_metadata", fake_classify)
     monkeypatch.setattr(interactive_module, "run_existing", fake_run_existing)
     monkeypatch.setattr(interactive_module, "run_once", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("active project follow-up must not create a new task")))
 
@@ -114,6 +133,7 @@ def test_resume_context_does_not_pollute_project_workflow_classification(monkeyp
     assert captured["config_seen"] == "yes"
     assert captured["task_id"] == historical_task_id
     assert captured["workflow_type"] == "feature_change"
+    assert captured["classification"] == "feature_change"
     assert captured["run_prompt"] == "add an export button to this project"
     assert "Historical task id:" in captured["project_context_md"]
 
@@ -138,7 +158,7 @@ def test_misc_prompt_uses_direct_chat_without_harness_task(monkeypatch, tmp_path
     def fail_run_once(*args, **kwargs) -> int:
         raise AssertionError("misc must not run Harness task flow")
 
-    monkeypatch.setattr(interactive_module, "classify_workflow", lambda prompt, backend, config=None: ("misc", None))
+    monkeypatch.setattr(interactive_module, "classify_workflow_with_metadata", lambda prompt, backend, config=None: (_classification("misc"), None))
     monkeypatch.setattr(interactive_module, "MiscChatRunner", FakeMiscChatRunner)
     monkeypatch.setattr(interactive_module, "run_once", fail_run_once)
 
@@ -170,7 +190,7 @@ def test_active_context_question_skips_classifier_and_new_task(monkeypatch, tmp_
             captured["context"] = context
             return "context answer"
 
-    monkeypatch.setattr(interactive_module, "classify_workflow", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("classifier should not run for active-context question")))
+    monkeypatch.setattr(interactive_module, "classify_workflow_with_metadata", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("classifier should not run for active-context question")))
     monkeypatch.setattr(interactive_module, "MiscChatRunner", FakeMiscChatRunner)
     monkeypatch.setattr(interactive_module, "run_once", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("question should not create task")))
 
@@ -192,7 +212,7 @@ def test_misc_classifier_fallback_prints_raw_answer_only(monkeypatch, tmp_path: 
         def ask(self, prompt: str, context: str | None = None) -> str:
             raise AssertionError("fallback answer should avoid a second model call")
 
-    monkeypatch.setattr(interactive_module, "classify_workflow", lambda prompt, backend, config=None: ("misc", "raw answer"))
+    monkeypatch.setattr(interactive_module, "classify_workflow_with_metadata", lambda prompt, backend, config=None: (_classification("misc"), "raw answer"))
     monkeypatch.setattr(interactive_module, "MiscChatRunner", FailMiscChatRunner)
 
     cli._run_prompt("how do I use this project?")
@@ -484,10 +504,18 @@ def test_project_prompt_reuses_active_task_for_followup_dashboard(monkeypatch, t
     historical_task_id = cli.orchestrator.create_task("Build a previous app")
     cli.active_task_id = historical_task_id
 
-    monkeypatch.setattr(interactive_module, "classify_workflow", lambda prompt, backend, config=None: ("new_project", None))
+    monkeypatch.setattr(interactive_module, "classify_workflow_with_metadata", lambda prompt, backend, config=None: (_classification("new_project", 6), None))
 
-    def fake_run_existing(orchestrator, task_id: str, prompt: str, workflow_type: str, project_context_md: str | None = None) -> int:
+    def fake_run_existing(
+        orchestrator,
+        task_id: str,
+        prompt: str,
+        workflow_type: str,
+        project_context_md: str | None = None,
+        classification: WorkflowClassification | None = None,
+    ) -> int:
         assert task_id == historical_task_id
+        assert classification and classification.workflow_type == "new_project"
         store(ProgressEvent("task_started", task_id=task_id, status="RUNNING"))
         return 0
 
@@ -546,6 +574,7 @@ def test_read_line_uses_prompt_toolkit_session(monkeypatch, tmp_path: Path) -> N
             prompts.append(prompt)
             return "做一个天气软件"
 
+    monkeypatch.setattr(interactive_module, "PROMPT_TOOLKIT_AVAILABLE", True)
     monkeypatch.setattr(main_module.sys, "stdin", FakeTty())
     monkeypatch.setattr(main_module.sys, "stdout", FakeTty())
     cli._prompt_session = FakePromptSession()
@@ -704,7 +733,7 @@ def test_main_source_repo_argument_overrides_persistent_env(monkeypatch, tmp_pat
         config["system"]["source_repo"] = str(configured_source)
         return config
 
-    def fake_run_once(orchestrator, prompt: str, workflow_type: str) -> int:
+    def fake_run_once(orchestrator, prompt: str, workflow_type: str, classification=None) -> int:
         captured["prompt"] = prompt
         captured["workflow_type"] = workflow_type
         captured["source_repo"] = orchestrator.config["system"]["source_repo"]
@@ -755,7 +784,7 @@ def test_main_prompt_file_supplies_one_shot_prompt(monkeypatch, tmp_path: Path) 
         assert str(path) == str(config_path)
         return _config(tmp_path)
 
-    def fake_run_once(orchestrator, prompt: str, workflow_type: str) -> int:
+    def fake_run_once(orchestrator, prompt: str, workflow_type: str, classification=None) -> int:
         captured["prompt"] = prompt
         captured["workflow_type"] = workflow_type
         captured["fix_round_limit_callback"] = orchestrator.fix_round_limit_callback

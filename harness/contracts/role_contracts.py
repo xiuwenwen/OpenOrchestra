@@ -103,7 +103,7 @@ DEFAULT_ROLE_INSTRUCTIONS = {
         "Fill the Harness-created `review_result.json` template with the review verdict and environment evidence; do not create `review_report.md`. "
         "delivery.md is a JSON role return envelope. "
         "It must be exactly one JSON object with `return_code` set to `0` if you completed the review, regardless of whether "
-        "the review verdict is `review_decision_code: 0`, `review_decision_code: 1`, or `review_decision_code: -1`."
+        "the review verdict is `review_decision_code: 0`, `review_decision_code: 1`, or `review_decision_code: 2`."
     ),
     "judge": (
         "Make the phase decision from collected artifacts only. Produce a strict machine-readable decision "

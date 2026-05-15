@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import tempfile
@@ -400,9 +401,90 @@ def objective_gate_markdown(result: PatchGateResult, task_id: str, round_id: int
     )
 
 
-def _json_dumps(payload: dict[str, object]) -> str:
-    import json
+def patch_gate_result_json(result: PatchGateResult, task_id: str, round_id: int) -> str:
+    return _json_dumps(patch_gate_result_payload(result, task_id, round_id)) + "\n"
 
+
+def patch_gate_result_payload(result: PatchGateResult, task_id: str, round_id: int) -> dict[str, object]:
+    failure_type = patch_gate_failure_type(result)
+    return {
+        "schema_version": "patch_gate_result.v1",
+        "task_id": task_id,
+        "round_id": round_id,
+        "status": result.status,
+        "failure_type": failure_type,
+        "next_action": "continue" if result.status == "pass" else "regenerate_patch",
+        "executor_message": patch_gate_executor_message(result, failure_type),
+        "apply_base": _source_repo_label(result.source_repo),
+        "patch_path": str(result.patch_path),
+        "materialized_repo": str(result.materialized_repo) if result.materialized_repo else None,
+        "legal_unified_diff": result.stats.legal_unified_diff,
+        "scope_status": "pass" if result.stats.scope_ok else "fail",
+        "size_status": "pass" if result.stats.size_ok else "fail",
+        "patch_apply_status": result.apply_check.status,
+        "materialize_status": result.materialize.status,
+        "diff_check_status": result.diff_check.status,
+        "changed_files": [str(path) for path in result.stats.changed_files],
+        "deleted_files": [str(path) for path in result.stats.deleted_files],
+        "changed_line_count": result.stats.changed_line_count,
+        "deleted_file_count": len(result.stats.deleted_files),
+        "precheck_errors": result.precheck_errors,
+        "commands": {
+            "apply_check": command_result_payload(result.apply_check),
+            "materialize": command_result_payload(result.materialize),
+            "diff_check": command_result_payload(result.diff_check),
+        },
+    }
+
+
+def command_result_payload(result: CommandResult) -> dict[str, object]:
+    return {
+        "status": result.status,
+        "command": result.command,
+        "exit_code": result.exit_code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+
+
+def patch_gate_failure_type(result: PatchGateResult) -> str:
+    if result.status == "pass":
+        return "none"
+    if not result.stats.legal_unified_diff:
+        return "invalid_unified_diff"
+    if not result.stats.scope_ok:
+        return "patch_scope"
+    if not result.stats.size_ok:
+        return "patch_size"
+    if result.apply_check.status == "fail":
+        return "patch_apply"
+    if result.apply_check.status == "skipped":
+        return "patch_apply_unavailable"
+    if result.materialize.status == "failed":
+        return "patch_materialize"
+    if result.diff_check.status == "fail":
+        return "diff_check"
+    return "patch_gate"
+
+
+def patch_gate_executor_message(result: PatchGateResult, failure_type: str) -> str:
+    if result.status == "pass":
+        return "Patch gate passed; continue with the materialized repository."
+    if failure_type == "patch_apply":
+        return (
+            "Patch did not apply to the authoritative patch-gate base. "
+            "Regenerate the patch mechanically from the current repository state; inspect commands.apply_check.stderr for exact failed hunks."
+        )
+    if failure_type in {"invalid_unified_diff", "patch_scope", "patch_size"}:
+        return "Patch precheck failed; fix the diff format, scope, or size before retrying."
+    if failure_type == "patch_materialize":
+        return "Patch apply-check passed but materialization failed; inspect commands.materialize.stderr and regenerate the patch."
+    if failure_type == "diff_check":
+        return "Patch materialized but failed whitespace/conflict checks; inspect commands.diff_check output."
+    return "Patch gate failed; inspect structured command outputs before retrying."
+
+
+def _json_dumps(payload: dict[str, object]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
 

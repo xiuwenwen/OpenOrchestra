@@ -18,6 +18,7 @@ from harness.artifacts.peer_review import (
 )
 from harness.artifacts.review_decision import REVIEW_RESULT_ARTIFACT, load_review_result, review_decision_code_from_payload
 from harness.contracts.role_contracts import required_outputs_for
+from harness.core.difficulty import difficulty_score_from_task_configuration, planner_peer_review_enabled_for_score
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressEvent
 from harness.core.state_machine import (
@@ -37,7 +38,7 @@ from harness.core.state_machine import (
     TEST_JUDGEMENT,
     TESTING,
 )
-from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC
+from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT
 from harness.testing.tester_result import (
     ENVIRONMENT_BLOCKED,
     SOURCE_BUG,
@@ -122,7 +123,7 @@ class WorkflowEngine:
         return self.run_new_project_flow(task_id, user_prompt)
 
     def run_new_project_flow(self, task_id: str, user_prompt: str) -> Path:
-        self.run_planning_block(task_id, user_prompt)
+        self.run_initial_planning_block(task_id, NEW_PROJECT, user_prompt)
         self.run_execution_test_loop(task_id, user_prompt)
         self.run_review_loop(task_id, user_prompt)
         return self.run_delivery(task_id, user_prompt)
@@ -132,7 +133,7 @@ class WorkflowEngine:
         max_rounds = self.max_test_fix_rounds()
         start_round = self.bugfix_resume_start_round(task_id)
         if self.bugfix_needs_initial_planning(task_id, start_round):
-            self.run_bugfix_planning_block(task_id, user_prompt)
+            self.run_initial_planning_block(task_id, BUGFIX, user_prompt)
         round_id = start_round
         attempts = 0
         fix_attempts_since_plan_recheck = 0
@@ -196,7 +197,7 @@ class WorkflowEngine:
         return max(rounds) if rounds else None
 
     def run_feature_change_flow(self, task_id: str, user_prompt: str) -> Path:
-        self.run_planning_block(task_id, user_prompt)
+        self.run_initial_planning_block(task_id, FEATURE_CHANGE, user_prompt)
         self.run_execution_test_loop(task_id, user_prompt)
         self.run_review_loop(task_id, user_prompt)
         return self.run_delivery(task_id, user_prompt)
@@ -215,6 +216,15 @@ class WorkflowEngine:
         if not artifacts:
             raise TaskFailedError("Misc workflow executor did not produce response.md")
         return Path(artifacts[-1]["path"])
+
+    def run_initial_planning_block(self, task_id: str, workflow_type: str, user_prompt: str) -> None:
+        if self.planning_peer_review_required(task_id, workflow_type):
+            self.run_planning_block(task_id, user_prompt)
+            return
+        if workflow_type == BUGFIX:
+            self.run_bugfix_planning_block(task_id, user_prompt)
+            return
+        self.run_light_planning_block(task_id, user_prompt)
 
     def run_planning_block(self, task_id: str, user_prompt: str) -> None:
         o = self.runtime
@@ -261,11 +271,13 @@ class WorkflowEngine:
             )
             if self.plan_review_approved(review_results):
                 return
+            if self.plan_review_blocked(review_results):
+                raise TaskFailedError("Planning merge review blocked the workflow")
             review_fix_mode = True
             next_round_id = final_round_id + 1
         raise TaskFailedError("Planning merge review was not approved after peer-review loops")
 
-    def run_bugfix_planning_block(self, task_id: str, user_prompt: str) -> None:
+    def run_light_planning_block(self, task_id: str, user_prompt: str) -> None:
         o = self.runtime
         planner_count = int(o.effective_agent_count(task_id, "planner", PLANNING_DRAFT))
         next_round_id = 0
@@ -289,8 +301,18 @@ class WorkflowEngine:
             )
             if self.plan_review_approved(review_results):
                 return
+            if self.plan_review_blocked(review_results):
+                raise TaskFailedError("Planning merge review blocked the workflow")
             next_round_id += 1
-        raise TaskFailedError("Bugfix planning merge review was not approved")
+        raise TaskFailedError("Planning merge review was not approved")
+
+    def run_bugfix_planning_block(self, task_id: str, user_prompt: str) -> None:
+        self.run_light_planning_block(task_id, user_prompt)
+
+    def planning_peer_review_required(self, task_id: str, workflow_type: str) -> bool:
+        task = self.runtime.repository.get_task(task_id)
+        score = difficulty_score_from_task_configuration(task["configuration"] if task else None)
+        return planner_peer_review_enabled_for_score(self.runtime.config, workflow_type, score)
 
     def planning_peer_review_loop_count(self) -> int:
         configured = self.runtime.config.get("limits", {}).get(
@@ -322,13 +344,24 @@ class WorkflowEngine:
         return saw_status
 
     def plan_review_approved(self, results: list[AgentRunResult]) -> bool:
+        return self.plan_review_decision_code(results) == 0
+
+    def plan_review_blocked(self, results: list[AgentRunResult]) -> bool:
+        return self.plan_review_decision_code(results) == 2
+
+    def plan_review_decision_code(self, results: list[AgentRunResult]) -> int | None:
+        codes: list[int] = []
         for result in results:
             for artifact in result.artifacts:
                 if artifact.artifact_type != REVIEW_RESULT_ARTIFACT or not artifact.path.exists():
                     continue
-                if review_decision_code_from_payload(load_review_result(artifact.path)) == 0:
-                    return True
-        return False
+                code = review_decision_code_from_payload(load_review_result(artifact.path))
+                if code is not None:
+                    codes.append(code)
+        for code in (2, 1, 0):
+            if code in codes:
+                return code
+        return None
 
     def run_execution_test_loop(self, task_id: str, user_prompt: str) -> None:
         o = self.runtime
@@ -884,6 +917,8 @@ class WorkflowEngine:
             )
             if self.plan_review_approved(review_results):
                 return
+            if self.plan_review_blocked(review_results):
+                raise TaskFailedError("Fix/test plan recheck was blocked by reviewer")
         raise TaskFailedError("Fix/test plan recheck was not approved")
 
     def emit_fix_tester_plan_recheck_requested(

@@ -367,6 +367,27 @@ def test_executor_review_fixing_visibility_excludes_reviewer_result(tmp_path: Pa
             round_id=1,
             label="metadata",
         ),
+        _artifact(
+            tmp_path,
+            phases_by_id,
+            role="orchestrator",
+            agent_id="objective-gate",
+            artifact_type="objective_gate.md",
+            phase_type=PATCH_MERGE,
+            round_id=1,
+            label="objective",
+        ),
+        _artifact(
+            tmp_path,
+            phases_by_id,
+            role="orchestrator",
+            agent_id="patch-validator",
+            artifact_type="patch_gate_result.json",
+            phase_type=PATCH_MERGE,
+            round_id=1,
+            label="patch-gate",
+            content='{"round_id": 1, "status": "fail", "failure_type": "patch_apply"}\n',
+        ),
     ]
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(
@@ -377,7 +398,11 @@ def test_executor_review_fixing_visibility_excludes_reviewer_result(tmp_path: Pa
         2,
     )
 
-    assert _names(visible) == {"metadata-merged_patch_metadata.json"}
+    assert _names(visible) == {
+        "metadata-merged_patch_metadata.json",
+        "objective-objective_gate.md",
+        "patch-gate-patch_gate_result.json",
+    }
 
 
 def test_reviewer_visibility_includes_structured_tester_report_but_excludes_gate_noise(tmp_path: Path) -> None:

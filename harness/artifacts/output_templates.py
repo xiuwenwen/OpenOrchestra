@@ -173,7 +173,11 @@ def _review_result_template() -> str:
             {
                 "schema_version": 1,
                 "review_decision_code": TEMPLATE_PENDING_VALUE,
-                "review_status": TEMPLATE_PENDING_VALUE,
+                "review_decision_code_meaning": {
+                    "0": "approved_continue",
+                    "1": "changes_required",
+                    "2": "blocked",
+                },
                 "summary": "Replace this Harness output template with the reviewer decision summary.",
                 "findings": [],
                 "required_changes": [],
@@ -249,6 +253,9 @@ def _selected_plan_template() -> str:
                 "source_artifacts": [],
                 "execution_order": [],
                 "acceptance_criteria": [],
+                "required_executor_notes": [],
+                "reviewer_integrated_findings": [],
+                "risks": [],
                 "acceptance_oracles": [
                     {
                         "id": TEMPLATE_PENDING_VALUE,

@@ -36,8 +36,20 @@ class FakeRunner:
         return self.exit_code
 
 
+def classification_json(workflow_type: str, *, score: int = 3, confidence: float = 0.8, reason: str = "test") -> str:
+    return json.dumps(
+        {
+            "workflow_type": workflow_type,
+            "confidence": confidence,
+            "difficulty_score": score,
+            "difficulty_reason": "test difficulty",
+            "reason": reason,
+        }
+    )
+
+
 def test_workflow_classifier_parses_strict_json(tmp_path: Path) -> None:
-    runner = FakeRunner('{"workflow_type":"bugfix","confidence":0.91,"reason":"repair request"}')
+    runner = FakeRunner(classification_json("bugfix", score=7, confidence=0.91, reason="repair request"))
     classifier = WorkflowClassifier("claude", runner=runner, log_root=tmp_path)
 
     workflow_type, log_dir = classifier.classify("fix the failing login test")
@@ -52,8 +64,23 @@ def test_workflow_classifier_parses_strict_json(tmp_path: Path) -> None:
     assert runner.timeout_seconds == 0
 
 
+def test_workflow_classifier_returns_classification_metadata(tmp_path: Path) -> None:
+    runner = FakeRunner(classification_json("bugfix", score=8, confidence=0.91, reason="repair request"))
+    classifier = WorkflowClassifier("claude", runner=runner, log_root=tmp_path)
+
+    classification, log_dir, fallback_answer = classifier.classify_with_metadata("fix the failing login test")
+
+    assert classification.workflow_type == "bugfix"
+    assert classification.confidence == 0.91
+    assert classification.difficulty_score == 8
+    assert classification.difficulty_reason == "test difficulty"
+    assert classification.reason == "repair request"
+    assert fallback_answer is None
+    assert log_dir.exists()
+
+
 def test_workflow_classifier_parses_fenced_json(tmp_path: Path) -> None:
-    runner = FakeRunner('```json\n{"workflow_type":"feature_change","confidence":0.8,"reason":"adds behavior"}\n```')
+    runner = FakeRunner(f"```json\n{classification_json('feature_change', reason='adds behavior')}\n```")
     classifier = WorkflowClassifier("codex", runner=runner, log_root=tmp_path)
 
     workflow_type, _ = classifier.classify("add CSV export")
@@ -66,7 +93,7 @@ def test_workflow_classifier_parses_fenced_json(tmp_path: Path) -> None:
 
 
 def test_workflow_classifier_supports_gemini_headless_cli(tmp_path: Path) -> None:
-    runner = FakeRunner('{"workflow_type":"misc","confidence":0.8,"reason":"question"}')
+    runner = FakeRunner(classification_json("misc", score=1, reason="question"))
     classifier = WorkflowClassifier("gemini", runner=runner, log_root=tmp_path)
 
     workflow_type, _ = classifier.classify("what is this?")
@@ -78,7 +105,7 @@ def test_workflow_classifier_supports_gemini_headless_cli(tmp_path: Path) -> Non
 
 
 def test_workflow_classifier_supports_misc(tmp_path: Path) -> None:
-    runner = FakeRunner('{"workflow_type":"misc","confidence":0.86,"reason":"informational question"}')
+    runner = FakeRunner(classification_json("misc", score=1, confidence=0.86, reason="informational question"))
     classifier = WorkflowClassifier("claude", runner=runner, log_root=tmp_path)
 
     workflow_type, _ = classifier.classify("what does the dashboard mean?")
@@ -87,7 +114,7 @@ def test_workflow_classifier_supports_misc(tmp_path: Path) -> None:
 
 
 def test_workflow_classifier_applies_claude_token_budget(tmp_path: Path) -> None:
-    runner = FakeRunner('{"workflow_type":"misc","confidence":0.86,"reason":"informational question"}')
+    runner = FakeRunner(classification_json("misc", score=1, confidence=0.86, reason="informational question"))
     classifier = WorkflowClassifier(
         "claude",
         runner=runner,
@@ -108,7 +135,7 @@ def test_workflow_classifier_applies_claude_token_budget(tmp_path: Path) -> None
 
 
 def test_workflow_classifier_lowers_claude_token_budget_for_large_prompt(tmp_path: Path) -> None:
-    runner = FakeRunner('{"workflow_type":"misc","confidence":0.86,"reason":"informational question"}')
+    runner = FakeRunner(classification_json("misc", score=1, confidence=0.86, reason="informational question"))
     classifier = WorkflowClassifier(
         "claude",
         runner=runner,
@@ -162,8 +189,24 @@ def test_workflow_classifier_treats_safety_refusal_without_json_as_misc(tmp_path
 
 
 def test_workflow_classifier_rejects_invalid_workflow_type(tmp_path: Path) -> None:
-    runner = FakeRunner('{"workflow_type":"maintenance","confidence":0.5,"reason":"bad label"}')
+    runner = FakeRunner(classification_json("maintenance", score=3, confidence=0.5, reason="bad label"))
     classifier = WorkflowClassifier("claude", runner=runner, log_root=tmp_path)
 
     with pytest.raises(WorkflowClassificationError):
         classifier.classify("do something")
+
+
+def test_workflow_classifier_rejects_missing_difficulty_score(tmp_path: Path) -> None:
+    runner = FakeRunner('{"workflow_type":"bugfix","confidence":0.8,"reason":"missing score"}')
+    classifier = WorkflowClassifier("claude", runner=runner, log_root=tmp_path)
+
+    with pytest.raises(WorkflowClassificationError, match="difficulty_score"):
+        classifier.classify("fix something")
+
+
+def test_workflow_classifier_rejects_out_of_range_difficulty_score(tmp_path: Path) -> None:
+    runner = FakeRunner(classification_json("bugfix", score=11))
+    classifier = WorkflowClassifier("claude", runner=runner, log_root=tmp_path)
+
+    with pytest.raises(WorkflowClassificationError, match="difficulty_score"):
+        classifier.classify("fix something")

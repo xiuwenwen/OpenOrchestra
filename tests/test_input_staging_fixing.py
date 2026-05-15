@@ -166,10 +166,13 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
         )
 
     for round_id in (0, 1):
-        for artifact_type in ("test_gate.md", "objective_gate.md", "patch_validation.md", "materialized_repo.md"):
+        for artifact_type in ("test_gate.md", "objective_gate.md", "patch_gate_result.json", "patch_validation.md", "materialized_repo.md"):
             filename = f"round-{round_id}-{artifact_type}"
             path = tmp_path / filename
-            path.write_text(f"# {artifact_type}\n\nround_id: {round_id}\n", encoding="utf-8")
+            if artifact_type.endswith(".json"):
+                path.write_text(json.dumps({"round_id": round_id}), encoding="utf-8")
+            else:
+                path.write_text(f"# {artifact_type}\n\nround_id: {round_id}\n", encoding="utf-8")
             orchestrator.repository.create_artifact(
                 ArtifactRef(
                     artifact_id=str(uuid.uuid4()),
@@ -199,6 +202,7 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
     assert "latest-tester-result.json" in manifest
     assert "latest-decision.json" in manifest
     assert "round-1-objective_gate.md" in manifest
+    assert "round-1-patch_gate_result.json" in manifest
 
     assert "latest-merged.patch" not in manifest
     assert "stale-self-check.md" not in manifest
@@ -213,6 +217,7 @@ def test_fixing_sees_only_previous_round_failure_evidence(tmp_path: Path) -> Non
     assert "round-1-patch_validation.md" not in manifest
     assert "round-1-materialized_repo.md" not in manifest
     assert "round-0-objective_gate.md" not in manifest
+    assert "round-0-patch_gate_result.json" not in manifest
     assert "round-0-patch_validation.md" not in manifest
     assert "round-0-materialized_repo.md" not in manifest
 
@@ -257,9 +262,12 @@ def test_fixing_falls_back_to_latest_visible_test_evidence_when_previous_test_ou
         )
 
     for round_id in (0, 1):
-        for artifact_type in ("test_gate.md", "objective_gate.md", "patch_validation.md", "materialized_repo.md"):
+        for artifact_type in ("test_gate.md", "objective_gate.md", "patch_gate_result.json", "patch_validation.md", "materialized_repo.md"):
             path = tmp_path / f"round-{round_id}-{artifact_type}"
-            path.write_text(f"# {artifact_type}\n\nround_id: {round_id}\n", encoding="utf-8")
+            if artifact_type.endswith(".json"):
+                path.write_text(json.dumps({"round_id": round_id}), encoding="utf-8")
+            else:
+                path.write_text(f"# {artifact_type}\n\nround_id: {round_id}\n", encoding="utf-8")
             orchestrator.repository.create_artifact(
                 ArtifactRef(
                     artifact_id=str(uuid.uuid4()),

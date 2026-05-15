@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -30,6 +31,18 @@ class WorkflowClassificationError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class WorkflowClassification:
+    workflow_type: str
+    confidence: float
+    difficulty_score: int
+    difficulty_reason: str
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 class WorkflowClassifier:
     def __init__(
         self,
@@ -48,6 +61,10 @@ class WorkflowClassifier:
         return workflow_type, run_dir
 
     def classify_with_fallback(self, user_prompt: str, timeout_seconds: int = 0) -> tuple[str, Path, str | None]:
+        classification, run_dir, fallback_answer = self.classify_with_metadata(user_prompt, timeout_seconds)
+        return classification.workflow_type, run_dir, fallback_answer
+
+    def classify_with_metadata(self, user_prompt: str, timeout_seconds: int = 0) -> tuple[WorkflowClassification, Path, str | None]:
         run_dir = self.log_root / str(uuid.uuid4())
         run_dir.mkdir(parents=True, exist_ok=True)
         prompt = self._classification_prompt(user_prompt)
@@ -70,14 +87,14 @@ class WorkflowClassifier:
             )
         raw_output = stdout_path.read_text(encoding="utf-8", errors="replace")
         try:
-            workflow_type = self._parse_workflow_type(raw_output)
+            classification = self._parse_classification(raw_output)
         except WorkflowClassificationError as exc:
             if "did not contain JSON" in str(exc) and raw_output.strip() and self._looks_like_safety_refusal(raw_output):
-                return MISC, run_dir, raw_output.strip()
+                return self._fallback_misc_classification("safety refusal fallback"), run_dir, raw_output.strip()
             if "did not contain JSON" in str(exc) and raw_output.strip() and self._can_use_raw_misc_answer(user_prompt):
-                return MISC, run_dir, raw_output.strip()
+                return self._fallback_misc_classification("direct answer fallback"), run_dir, raw_output.strip()
             raise
-        return workflow_type, run_dir, None
+        return classification, run_dir, None
 
     def _command(self, run_dir: Path, settings_path: Path | None = None) -> list[str]:
         if self.backend == "claude":
@@ -93,17 +110,56 @@ class WorkflowClassifier:
         raise WorkflowClassificationError(f"Unsupported workflow classifier backend: {self.backend}")
 
     def _parse_workflow_type(self, raw_output: str) -> str:
+        return self._parse_classification(raw_output).workflow_type
+
+    def _parse_classification(self, raw_output: str) -> WorkflowClassification:
         payload = self._extract_json(raw_output)
         if not isinstance(payload, dict):
             raise WorkflowClassificationError("Workflow classifier did not return a JSON object.")
         value = str(payload.get("workflow_type", "")).strip()
         try:
-            return normalize_workflow_type(value)
+            workflow_type = normalize_workflow_type(value)
         except ValueError as exc:
             allowed = ", ".join(sorted(WORKFLOW_TYPES))
             raise WorkflowClassificationError(
                 f"Workflow classifier returned unsupported workflow_type={value!r}. Allowed values: {allowed}."
             ) from exc
+        difficulty_score = self._parse_difficulty_score(payload)
+        confidence = self._parse_confidence(payload)
+        return WorkflowClassification(
+            workflow_type=workflow_type,
+            confidence=confidence,
+            difficulty_score=difficulty_score,
+            difficulty_reason=str(payload.get("difficulty_reason") or "").strip(),
+            reason=str(payload.get("reason") or "").strip(),
+        )
+
+    def _parse_difficulty_score(self, payload: dict[str, object]) -> int:
+        value = payload.get("difficulty_score")
+        if isinstance(value, bool):
+            raise WorkflowClassificationError("Workflow classifier difficulty_score must be an integer from 1 to 10.")
+        try:
+            score = int(value)
+        except (TypeError, ValueError) as exc:
+            raise WorkflowClassificationError("Workflow classifier difficulty_score must be an integer from 1 to 10.") from exc
+        if score < 1 or score > 10:
+            raise WorkflowClassificationError("Workflow classifier difficulty_score must be an integer from 1 to 10.")
+        return score
+
+    def _parse_confidence(self, payload: dict[str, object]) -> float:
+        try:
+            return float(payload.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _fallback_misc_classification(self, reason: str) -> WorkflowClassification:
+        return WorkflowClassification(
+            workflow_type=MISC,
+            confidence=0.0,
+            difficulty_score=1,
+            difficulty_reason=reason,
+            reason=reason,
+        )
 
     def _extract_json(self, raw_output: str) -> dict[str, object]:
         text = raw_output.strip()
@@ -204,8 +260,18 @@ class WorkflowClassifier:
                 "- If ambiguous between feature_change and new_project, choose new_project only when there is no clear existing project context.",
                 "- If ambiguous between misc and a project workflow, choose misc unless the user explicitly asks to build, change, fix, or deliver files.",
                 "",
+                "Difficulty scoring rules:",
+                "- Return `difficulty_score` as an integer from 1 to 10.",
+                "- Score planning and acceptance uncertainty, not expected patch size.",
+                "- 1-2: trivial, localized, obvious behavior, no architecture or test uncertainty.",
+                "- 3-4: simple, small scope, clear validation, low regression risk.",
+                "- 5-6: moderate, multiple files or call chains, some setup/test inference required.",
+                "- 7-8: difficult, ambiguous requirements, drifting acceptance criteria, hidden validation risk, role/workflow/process changes, environment contracts, concurrency, caching, permissions, data migration, or cross-module behavior.",
+                "- 9-10: high risk or expert-level, multi-system coupling, hard-to-reproduce failures, security/runtime boundaries, scheduler/distributed behavior, or repeated failure-loop root cause work.",
+                "- A three-line code change can still be 7+ when the expected behavior or acceptance contract is unclear.",
+                "",
                 "Return exactly one JSON object and no prose:",
-                '{"workflow_type":"bugfix|feature_change|new_project|misc","confidence":0.0,"reason":"short reason"}',
+                '{"workflow_type":"bugfix|feature_change|new_project|misc","confidence":0.0,"difficulty_score":1,"difficulty_reason":"short difficulty reason","reason":"short workflow reason"}',
                 "",
                 "User request:",
                 user_prompt,

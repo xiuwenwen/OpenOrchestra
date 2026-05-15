@@ -114,20 +114,25 @@ def test_review_result_template_is_strict_json_and_schema_validated(tmp_path: Pa
     review_result_path = tmp_path / "review_result.json"
     payload = json.loads(review_result_path.read_text(encoding="utf-8"))
     assert payload["review_decision_code"] == TEMPLATE_PENDING_VALUE
+    assert payload["review_decision_code_meaning"]["2"] == "blocked"
+    assert "review_status" not in payload
     assert output_has_pending_template_marker(review_result_path)
 
     payload.pop("harness_template_status")
     payload.update(
         {
             "review_decision_code": 0,
-            "review_status": "changes_required",
+            "review_status": "approved",
             "environment_check": {"attempted": True, "status": "ready", "commands_run": ["pytest"], "fixable": True, "blocking_reason": ""},
         }
     )
     review_result_path.write_text(json.dumps(payload), encoding="utf-8")
 
     result = ArtifactValidator().validate_required_outputs_result(tmp_path, ["review_result.json"])
-    assert (result.ok, result.errors) == (False, ["review_result.json review_status must be approved when review_decision_code is 0"])
+    assert (result.ok, result.errors) == (
+        False,
+        ["review_result.json review_status is deprecated; route only with review_decision_code"],
+    )
 
 
 def test_selected_plan_template_contains_acceptance_oracles(tmp_path: Path) -> None:
@@ -143,6 +148,8 @@ def test_selected_plan_template_contains_acceptance_oracles(tmp_path: Path) -> N
 
     assert payload["acceptance_oracles"][0]["id"] == TEMPLATE_PENDING_VALUE
     assert payload["acceptance_oracles"][0]["required"] is True
+    assert payload["reviewer_integrated_findings"] == []
+    assert payload["required_executor_notes"] == []
 
 
 def test_tester_result_template_contains_oracle_results(tmp_path: Path) -> None:

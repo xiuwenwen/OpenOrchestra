@@ -153,6 +153,7 @@ def test_patch_validation_uses_project_context_source_repo(tmp_path: Path) -> No
     validation_report = Path(orchestrator.repository.list_artifacts(task_id, "patch_validation.md")[-1]["path"]).read_text(encoding="utf-8")
     materialized_report = Path(orchestrator.repository.list_artifacts(task_id, "materialized_repo.md")[-1]["path"]).read_text(encoding="utf-8")
     objective_report = Path(orchestrator.repository.list_artifacts(task_id, "objective_gate.md")[-1]["path"]).read_text(encoding="utf-8")
+    gate_payload = json.loads(Path(orchestrator.repository.list_artifacts(task_id, "patch_gate_result.json")[-1]["path"]).read_text(encoding="utf-8"))
     materialized_app = orchestrator._latest_materialized_repo(task_id) / "app.py"
 
     assert "source_repo: orchestrator_private_source_repo" in validation_report
@@ -160,6 +161,9 @@ def test_patch_validation_uses_project_context_source_repo(tmp_path: Path) -> No
     assert str(historical_source.resolve()) not in validation_report
     assert str(historical_source.resolve()) not in materialized_report
     assert "status: pass" in objective_report
+    assert gate_payload["status"] == "pass"
+    assert gate_payload["failure_type"] == "none"
+    assert gate_payload["apply_base"] == "orchestrator_private_source_repo"
     assert "diff_check_status: pass" in materialized_report
     assert materialized_app.read_text(encoding="utf-8") == "new\n"
 
@@ -193,10 +197,14 @@ def test_objective_patch_gate_rejects_sensitive_files(tmp_path: Path) -> None:
 
     assert not orchestrator._run_patch_validation(task_id, 0)
     objective_report = Path(orchestrator.repository.list_artifacts(task_id, "objective_gate.md")[-1]["path"]).read_text(encoding="utf-8")
+    gate_payload = json.loads(Path(orchestrator.repository.list_artifacts(task_id, "patch_gate_result.json")[-1]["path"]).read_text(encoding="utf-8"))
 
     assert "status: fail" in objective_report
     assert "scope_status: fail" in objective_report
     assert "forbidden sensitive file path: .env" in objective_report
+    assert gate_payload["status"] == "fail"
+    assert gate_payload["failure_type"] == "patch_scope"
+    assert "forbidden sensitive file path: .env" in gate_payload["precheck_errors"]
 
 def test_test_judgement_cannot_override_failed_objective_gate(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))

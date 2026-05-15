@@ -231,8 +231,7 @@ def test_review_loop_fails_immediately_on_blocked_environment_json(monkeypatch, 
                 json.dumps(
                     {
                         "schema_version": 1,
-                        "review_decision_code": -1,
-                        "review_status": "blocked",
+                        "review_decision_code": 2,
                         "summary": "Runtime blocked by incompatible platform dependency.",
                         "findings": [],
                         "required_changes": [],
@@ -289,7 +288,6 @@ def test_review_environment_changes_required_routes_to_tester_not_executor(monke
                     {
                         "schema_version": 1,
                         "review_decision_code": 0,
-                        "review_status": "approved",
                         "summary": "source is approved; local runtime needs environment follow-up",
                         "findings": [],
                         "required_changes": [],
@@ -378,7 +376,6 @@ def test_review_environment_changes_required_reuses_passing_tester_result(monkey
                     {
                         "schema_version": 1,
                         "review_decision_code": 0,
-                        "review_status": "approved",
                         "summary": "source approved; reviewer local env is incomplete",
                         "findings": [],
                         "required_changes": [],
@@ -429,7 +426,6 @@ def test_unrouteable_review_result_does_not_fall_through_to_executor(monkeypatch
                     {
                         "schema_version": 1,
                         "review_decision_code": 0,
-                        "review_status": "approved",
                         "summary": "invalid env status",
                         "findings": [],
                         "required_changes": [],
@@ -487,7 +483,7 @@ def test_review_approval_requires_review_result_environment_check(tmp_path: Path
     )
     result = AgentRunResult(task_id, phase_id, "reviewer", "reviewer-1", "COMPLETED", artifacts=[report_ref])
 
-    report_path.write_text(json.dumps({"review_decision_code": 0, "review_status": "approved"}) + "\n", encoding="utf-8")
+    report_path.write_text(json.dumps({"review_decision_code": 0}) + "\n", encoding="utf-8")
     assert not orchestrator.workflow_engine.review_approved([result])
 
     report_path.write_text(
@@ -495,7 +491,6 @@ def test_review_approval_requires_review_result_environment_check(tmp_path: Path
             {
                 "schema_version": 1,
                 "review_decision_code": 0,
-                "review_status": "approved",
                 "summary": "ready",
                 "findings": [],
                 "required_changes": [],
@@ -534,7 +529,6 @@ def test_review_approval_reads_review_result_json(tmp_path: Path) -> None:
     payload = {
         "schema_version": 1,
         "review_decision_code": 0,
-        "review_status": "approved",
         "summary": "approved",
         "findings": [],
         "required_changes": [],
@@ -552,22 +546,21 @@ def test_review_approval_reads_review_result_json(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("decision_code", "review_status", "environment_check", "expected"),
+    ("decision_code", "environment_check", "expected"),
     [
-        (0, "approved", {"status": "ready", "attempted": True, "commands_run": ["pytest"]}, True),
-        (0, "approved", {"status": "not_applicable", "attempted": False, "commands_run": []}, True),
-        (0, "approved", {"status": "changes_required", "attempted": True, "commands_run": ["pytest"]}, False),
-        (0, "approved", {"status": "blocked", "attempted": True, "commands_run": ["python app.py"]}, False),
-        (0, "changes_requested", {"status": "ready", "attempted": True, "commands_run": ["pytest"]}, False),
-        (0, "approved", None, False),
-        (1, "approved", {"status": "ready", "attempted": True, "commands_run": ["pytest"]}, False),
+        (0, {"status": "ready", "attempted": True, "commands_run": ["pytest"]}, True),
+        (0, {"status": "not_applicable", "attempted": False, "commands_run": []}, True),
+        (0, {"status": "changes_required", "attempted": True, "commands_run": ["pytest"]}, False),
+        (0, {"status": "blocked", "attempted": True, "commands_run": ["python app.py"]}, False),
+        (0, None, False),
+        (1, {"status": "ready", "attempted": True, "commands_run": ["pytest"]}, False),
+        (2, {"status": "ready", "attempted": True, "commands_run": ["pytest"]}, False),
     ],
 )
 
-def test_review_approval_requires_positive_code_approved_status_and_safe_environment(
+def test_review_approval_requires_positive_code_and_safe_environment(
     tmp_path: Path,
     decision_code: int,
-    review_status: str,
     environment_check: dict | None,
     expected: bool,
 ) -> None:
@@ -589,7 +582,6 @@ def test_review_approval_requires_positive_code_approved_status_and_safe_environ
     payload = {
         "schema_version": 1,
         "review_decision_code": decision_code,
-        "review_status": review_status,
         "summary": "matrix",
         "findings": [],
         "required_changes": [],
