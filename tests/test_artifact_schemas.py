@@ -46,15 +46,14 @@ def test_visibility_rules_live_in_artifact_schema_layer() -> None:
 
     assert ("reviewer", "REVIEWING") in covered
     assert ("executor", "EXECUTION") in covered
-    assert ("judge", "TEST_JUDGEMENT") in covered
+    assert ("tester", "TESTING") in covered
 
 
 def test_role_phase_contract_binds_outputs_and_visibility() -> None:
-    contract = role_phase_contract_for("judge", "TEST_JUDGEMENT")
+    contract = role_phase_contract_for("reviewer", "REVIEWING")
 
-    assert contract.required_outputs_with_delivery() == ["decision.json", "delivery.md"]
-    assert {(rule.source_role, tuple(sorted(rule.artifact_types))) for rule in contract.visibility_rules} == {
-        ("orchestrator", ("objective_gate.md",)),
+    assert contract.required_outputs_with_delivery() == ["review_result.json", "delivery.md"]
+    assert {(rule.source_role, tuple(sorted(rule.artifact_types))) for rule in contract.visibility_rules} >= {
         ("reviewer", ("environment_contract.json", "selected_plan.json", "validation_contract.json")),
         ("tester", ("bug_report.md", "tester_result.json")),
     }
@@ -100,7 +99,6 @@ def test_role_phase_input_budgets_are_defined_for_context_heavy_roles() -> None:
     expected = {
         ("tester", "TESTING"): (8, "path_only"),
         ("tester", "REGRESSION_TESTING"): (8, "path_only"),
-        ("judge", "TEST_JUDGEMENT"): (8, "auto"),
         ("reviewer", "REVIEWING"): (12, "truncated"),
         ("communicator", "DELIVERY"): (8, "path_only"),
     }

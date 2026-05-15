@@ -14,7 +14,6 @@ from harness.core.state_machine import (
     REGRESSION_TESTING,
     REVIEW_FIXING,
     REVIEWING,
-    TEST_JUDGEMENT,
     TESTING,
 )
 
@@ -214,49 +213,6 @@ def test_project_context_visibility_is_role_scoped(tmp_path: Path) -> None:
     assert _names(tester_visible) == set()
 
 
-def test_test_judge_visibility_is_current_test_reports_and_current_gate_only(tmp_path: Path) -> None:
-    phases_by_id: dict[str, dict] = {}
-    artifacts = [
-        _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="test-gate", artifact_type="test_gate.md", phase_type="TEST_GATE", round_id=1, label="current-gate"),
-        _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="objective-gate", artifact_type="objective_gate.md", phase_type="TEST_GATE", round_id=1, label="current-objective"),
-        _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="patch-validator", artifact_type="patch_validation.md", phase_type="TEST_GATE", round_id=1, label="hidden-patch-validation"),
-        _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="test-gate", artifact_type="test_gate.md", phase_type="TEST_GATE", round_id=0, label="old-gate"),
-    ]
-    for round_id, label in ((0, "old"), (1, "current")):
-        artifacts.append(
-            _artifact(
-                tmp_path,
-                phases_by_id,
-                role="tester",
-                agent_id="tester-1",
-                artifact_type="bug_report.md",
-                phase_type=TESTING,
-                round_id=round_id,
-                label=f"{label}-bug_report.md",
-            )
-        )
-        artifacts.append(
-            _artifact(
-                tmp_path,
-                phases_by_id,
-                role="tester",
-                agent_id="tester-1",
-                artifact_type="tester_result.json",
-                phase_type=TESTING,
-                round_id=round_id,
-                label=f"{label}-tester_result.json",
-            )
-        )
-
-    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "judge", TEST_JUDGEMENT, 1)
-
-    assert _names(visible) == {
-        "current-objective-objective_gate.md",
-        "current-bug_report.md-bug_report.md",
-        "current-tester_result.json-tester_result.json",
-    }
-
-
 def test_fixing_visibility_uses_latest_complete_test_round_before_current(tmp_path: Path) -> None:
     phases_by_id: dict[str, dict] = {}
     artifacts = [
@@ -413,7 +369,6 @@ def test_reviewer_visibility_includes_structured_tester_report_but_excludes_gate
         _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="self_check.md", phase_type=PATCH_MERGE, round_id=3, label="self"),
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=3, label="bug"),
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", phase_type=TESTING, round_id=3, label="result"),
-        _artifact(tmp_path, phases_by_id, role="judge", agent_id="judge-1", artifact_type="decision.json", phase_type=TEST_JUDGEMENT, round_id=3, label="judge"),
         _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="orchestrator", artifact_type="test_gate.md", phase_type="TEST_GATE", round_id=3, label="gate"),
     ]
 
@@ -534,7 +489,6 @@ def test_communicator_visibility_uses_only_plan_and_final_executor_artifacts(tmp
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=3, label="bug"),
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", phase_type=TESTING, round_id=3, label="result"),
         _artifact(tmp_path, phases_by_id, role="reviewer", agent_id="reviewer-1", artifact_type="review_result.json", phase_type=REVIEWING, round_id=1, label="review"),
-        _artifact(tmp_path, phases_by_id, role="judge", agent_id="judge-1", artifact_type="decision.json", phase_type=TEST_JUDGEMENT, round_id=3, label="judge"),
         _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="orchestrator", artifact_type="test_gate.md", phase_type="TEST_GATE", round_id=3, label="gate"),
     ]
 

@@ -52,15 +52,6 @@ CREATE TABLE IF NOT EXISTS artifacts (
     created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS judge_decisions (
-    decision_id TEXT PRIMARY KEY,
-    task_id TEXT NOT NULL,
-    phase_id TEXT,
-    decision_type TEXT NOT NULL,
-    decision_payload TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS events (
     event_id TEXT PRIMARY KEY,
     task_id TEXT,
@@ -98,8 +89,6 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_task_id ON artifacts(task_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_phase_id ON artifacts(phase_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_task_type ON artifacts(task_id, artifact_type);
 CREATE INDEX IF NOT EXISTS idx_artifacts_created_at ON artifacts(created_at);
-CREATE INDEX IF NOT EXISTS idx_judge_decisions_task_id ON judge_decisions(task_id);
-CREATE INDEX IF NOT EXISTS idx_judge_decisions_phase_id ON judge_decisions(phase_id);
 CREATE INDEX IF NOT EXISTS idx_events_task_id ON events(task_id);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);

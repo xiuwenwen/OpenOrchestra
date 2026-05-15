@@ -154,7 +154,7 @@ def main() -> int:
             config["testing"]["runtime"] = "native"
     backend = resolve_real_backend(args.backend or user_env.get("OO_BACKEND", "auto"))
     config["agent_backend"]["default"] = backend
-    for role in ("planner", "executor", "tester", "reviewer", "judge", "communicator"):
+    for role in ("planner", "executor", "tester", "reviewer", "communicator"):
         config["agent_backend"][role] = backend
     if args.serial_agents:
         for role in ("planner", "executor", "tester", "reviewer"):

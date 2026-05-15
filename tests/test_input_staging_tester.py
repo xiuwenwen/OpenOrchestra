@@ -19,21 +19,17 @@ from harness.core.state_machine import (
     DELIVERY,
     EXECUTION,
     FAILED,
-    FINAL_JUDGEMENT,
     FIXING,
     PATCH_MERGE,
     PLAN_REVIEW,
-    PLAN_JUDGEMENT,
     PLANNING_DRAFT,
     PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
     REGRESSION_TESTING,
     REVIEW_FIXING,
-    REVIEW_JUDGEMENT,
     REVIEWING,
     RUNNING,
     TESTING,
-    TEST_JUDGEMENT,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 from harness.patch.gate import materialized_repo_markdown, run_patch_gate

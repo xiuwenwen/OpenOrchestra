@@ -9,7 +9,7 @@ import pytest
 from harness.agents.result import ArtifactRef
 from harness.adapters.health import BackendHealthSnapshot
 from harness.state.db import StateDB
-from harness.state.records import AgentRunRecord, ArtifactRecord, EventRecord, JudgeDecisionRecord, PhaseRecord, TaskRecord
+from harness.state.records import AgentRunRecord, ArtifactRecord, EventRecord, PhaseRecord, TaskRecord
 from harness.state.repository import StateRepository
 
 
@@ -32,7 +32,6 @@ def test_state_store_creates_and_queries_records(tmp_path: Path) -> None:
         hash="abc",
     )
     repo.create_artifact(ref)
-    repo.create_judge_decision(task_id, phase_id, "PLAN_JUDGEMENT", {"decision": "approved"})
     repo.update_agent_run_status(run_id, "COMPLETED")
     repo.update_phase_status(phase_id, "COMPLETED")
 
@@ -40,7 +39,6 @@ def test_state_store_creates_and_queries_records(tmp_path: Path) -> None:
     assert repo.list_phases(task_id)[0]["phase_type"] == "PLANNING_DRAFT"
     assert repo.list_agent_runs(task_id)[0]["status"] == "COMPLETED"
     assert repo.list_artifacts(task_id)[0]["artifact_type"] == "plan.md"
-    assert repo.list_judge_decisions(task_id)[0]["decision_type"] == "PLAN_JUDGEMENT"
 
 
 def test_repository_returns_typed_records_with_mapping_compatibility(tmp_path: Path) -> None:
@@ -63,21 +61,18 @@ def test_repository_returns_typed_records_with_mapping_compatibility(tmp_path: P
             hash="abc",
         )
     )
-    repo.create_judge_decision(task_id, phase_id, "PLAN_JUDGEMENT", {"decision": "approved"})
     repo.record_event(event_type="phase_started", task_id=task_id, phase="PLANNING_DRAFT")
 
     task = repo.get_task(task_id)
     phase = repo.list_phases(task_id)[0]
     run = repo.list_agent_runs(task_id)[0]
     artifact = repo.list_artifacts(task_id)[0]
-    decision = repo.list_judge_decisions(task_id)[0]
     event = repo.list_events(task_id)[0]
 
     assert isinstance(task, TaskRecord)
     assert isinstance(phase, PhaseRecord)
     assert isinstance(run, AgentRunRecord)
     assert isinstance(artifact, ArtifactRecord)
-    assert isinstance(decision, JudgeDecisionRecord)
     assert isinstance(event, EventRecord)
     assert task["task_id"] == task_id
     assert task.get("status") == "CREATED"

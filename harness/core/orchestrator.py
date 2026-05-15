@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -31,14 +30,10 @@ from harness.core.state_machine import (
     PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
     REVIEW_FIXING,
-    REVIEW_JUDGEMENT,
     REVIEWING,
     RUNNING,
-    TEST_JUDGEMENT,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT, normalize_workflow_type
-from harness.testing.tester_result import TesterResultError, load_tester_result
-from harness.judge.decision_parser import parse_decision_file
 
 if TYPE_CHECKING:
     from harness.artifacts.manager import ArtifactManager
@@ -80,7 +75,6 @@ class Orchestrator:
         self.artifact_visibility = services.artifact_visibility
         self.validator = services.validator
         self.communicator = services.communicator
-        self.judge = services.judge
         self.backend_health = services.backend_health
         self.scheduler = services.scheduler
         self.prompt_builder = services.prompt_builder
@@ -335,200 +329,6 @@ class Orchestrator:
 
     def _run_adapter_with_heartbeat(self, adapter: AgentAdapter, context: AgentRunContext, attempt: int) -> AgentRunResult:
         return self.agent_runner.run_adapter_with_heartbeat(adapter, context, attempt)
-
-    def run_judge_phase(
-        self,
-        task_id: str,
-        phase: str,
-        round_id: int,
-        user_prompt: str,
-        phase_scope: dict[str, int | str | None] | None = None,
-    ) -> dict[str, Any]:
-        results = self.run_role_phase(
-            "judge",
-            phase,
-            round_id,
-            required_outputs_for("judge", phase),
-            user_prompt,
-            phase_scope=phase_scope,
-        )
-        phase_id = results[-1].phase_id
-
-        # Check if decision already recorded in state store
-        decisions = self.repository.list_judge_decisions(task_id)
-        existing = next((d for d in decisions if d["phase_id"] == phase_id and d["decision_type"] == phase), None)
-        if existing:
-            return json.loads(existing["decision_payload"])
-
-        decision_refs = [ref for result in results for ref in result.artifacts if ref.artifact_type == "decision.json"]
-        if not decision_refs:
-            raise TaskFailedError(f"Judge did not produce decision.json for {phase}")
-        payload = parse_decision_file(decision_refs[-1].path)
-        normalized = self.judge.normalize(phase, payload)
-        normalized = self._apply_objective_gates_to_judge_decision(task_id, phase, round_id, normalized)
-        self.repository.create_judge_decision(task_id, phase_id, phase, normalized)
-        return normalized
-
-    def _run_judge_phase(self, task_id: str, phase: str, round_id: int, user_prompt: str) -> dict[str, Any]:
-        return self.run_judge_phase(task_id, phase, round_id, user_prompt)
-
-    def _apply_objective_gates_to_judge_decision(
-        self,
-        task_id: str,
-        phase: str,
-        round_id: int,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        if phase != TEST_JUDGEMENT:
-            return payload
-        objective_evidence = self._objective_gate_evidence(task_id, round_id)
-        test_evidence = self._tester_result_evidence_for_round(task_id, round_id)
-        objective_failure = self._objective_evidence_failure_reason(objective_evidence)
-        if objective_failure:
-            return {
-                **payload,
-                "decision": "fail",
-                "tests_passed": False,
-                "objective_gate_status": objective_evidence.get("status", "missing"),
-                "evidence": {"objective_gate": objective_evidence, "tester_result": test_evidence},
-                "reason": f"{objective_failure} LLM judge cannot override objective patch gate evidence.",
-            }
-        test_failure = self._test_evidence_failure_reason(test_evidence)
-        if test_failure:
-            return {
-                **payload,
-                "decision": "fail",
-                "tests_passed": False,
-                "tester_result_status": test_evidence.get("status", "missing"),
-                "objective_gate_status": objective_evidence.get("status", "missing"),
-                "evidence": {"objective_gate": objective_evidence, "tester_result": test_evidence},
-                "reason": f"{test_failure} LLM judge cannot override tester_result.json.",
-            }
-        return {
-            **payload,
-            "evidence": {
-                **(payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}),
-                "objective_gate": objective_evidence,
-                "tester_result": test_evidence,
-            },
-        }
-
-    def _objective_evidence_failure_reason(self, evidence: dict[str, Any]) -> str | None:
-        if evidence.get("status") != "pass":
-            return f"Objective gate status is {evidence.get('status', 'missing')}."
-        checks = (
-            ("legal_unified_diff", "Patch is not a legal unified diff."),
-            ("patch_apply_check", "Patch apply check did not pass."),
-            ("diff_check", "Patch diff check did not pass."),
-            ("scope_ok", "Patch scope check did not pass."),
-            ("size_ok", "Patch size/delete check did not pass."),
-        )
-        for key, reason in checks:
-            if evidence.get(key) is not True:
-                return reason
-        if evidence.get("materialize_status") != "success":
-            return f"Patch materialization status is {evidence.get('materialize_status', 'missing')}."
-        return None
-
-    def _test_evidence_failure_reason(self, evidence: dict[str, Any]) -> str | None:
-        status = evidence.get("status")
-        if status == "tests_passed":
-            return None
-        if status == "missing":
-            return "tester_result.json is missing."
-        if status == "invalid":
-            return f"tester_result.json is invalid: {evidence.get('error', 'unknown error')}."
-        return f"tester_result.json status is {status}."
-
-    def _objective_gate_evidence(self, task_id: str, round_id: int) -> dict[str, Any]:
-        content = self._latest_round_artifact_content(task_id, "objective_gate.md", round_id)
-        if content is None:
-            return {"status": "missing"}
-        evidence = self._extract_evidence_json(content)
-        status = self._markdown_field(content, "status") or "missing"
-        if evidence:
-            return {"status": status.lower(), **evidence}
-        return {
-            "status": status.lower(),
-            "patch_apply_check": self._markdown_field(content, "patch_apply_status") == "pass",
-            "materialize_status": self._markdown_field(content, "materialize_status") or "missing",
-            "diff_check": self._markdown_field(content, "diff_check_status") == "pass",
-            "legal_unified_diff": self._markdown_field(content, "legal_unified_diff") != "false",
-            "scope_ok": self._markdown_field(content, "scope_status") == "pass",
-            "size_ok": self._markdown_field(content, "size_status") in {None, "pass"},
-        }
-
-    def _test_gate_evidence_for_round(self, task_id: str, round_id: int) -> dict[str, Any]:
-        content = self._latest_round_artifact_content(task_id, "test_gate.md", round_id)
-        if content is None:
-            return {"status": "missing"}
-        evidence = self._extract_evidence_json(content)
-        status = self._markdown_field(content, "status") or "missing"
-        if evidence:
-            return {"status": status.lower(), **evidence}
-        return {"status": status.lower()}
-
-    def _tester_result_evidence_for_round(self, task_id: str, round_id: int) -> dict[str, Any]:
-        phases_by_id = {phase["phase_id"]: phase for phase in self.repository.list_phases(task_id)}
-        for artifact in reversed(self.repository.list_artifacts(task_id, "tester_result.json")):
-            phase = phases_by_id.get(artifact["phase_id"] or "")
-            if not phase or phase.get("round_id") is None or int(phase["round_id"]) != round_id:
-                continue
-            path = Path(artifact["path"])
-            if not path.exists() or not path.is_file():
-                continue
-            try:
-                result = load_tester_result(path)
-            except TesterResultError as exc:
-                return {"status": "invalid", "error": str(exc), "artifact_path": str(path)}
-            return {
-                "status": result.status,
-                "next_action": result.next_action,
-                "failure_type": result.failure_type,
-                "environment_dependency_issue": result.environment_dependency_issue,
-                "oracle_results": list(result.oracle_results),
-                "summary": result.summary,
-                "artifact_path": str(path),
-            }
-        return {"status": "missing"}
-
-    def _latest_round_artifact_content(self, task_id: str, artifact_type: str, round_id: int) -> str | None:
-        for artifact in reversed(self.repository.list_artifacts(task_id, artifact_type)):
-            path = Path(artifact["path"])
-            if not path.exists() or not path.is_file():
-                continue
-            content = path.read_text(encoding="utf-8", errors="replace")
-            if self._markdown_field(content, "round_id") != str(round_id):
-                continue
-            return content
-        return None
-
-    def _extract_evidence_json(self, content: str) -> dict[str, Any]:
-        marker = "## Evidence JSON"
-        marker_index = content.find(marker)
-        if marker_index < 0:
-            return {}
-        block = content[marker_index + len(marker) :]
-        match = re.search(r"```json\s*(.*?)```", block, re.DOTALL)
-        if not match:
-            return {}
-        try:
-            payload = json.loads(match.group(1))
-        except json.JSONDecodeError:
-            return {}
-        return payload if isinstance(payload, dict) else {}
-
-    def _objective_gate_status(self, task_id: str, round_id: int) -> str | None:
-        for artifact in reversed(self.repository.list_artifacts(task_id, "objective_gate.md")):
-            path = Path(artifact["path"])
-            if not path.exists() or not path.is_file():
-                continue
-            content = path.read_text(encoding="utf-8", errors="replace")
-            if self._markdown_field(content, "round_id") != str(round_id):
-                continue
-            status = self._markdown_field(content, "status")
-            return status.lower() if status else None
-        return None
 
     def markdown_field(self, content: str, field_name: str) -> str | None:
         prefix = f"{field_name}:"
@@ -839,7 +639,7 @@ class Orchestrator:
                 "Use the repair workflow. Preserve existing behavior except where needed to fix the reported issue. "
                 "Start with two focused bugfix planners: one must localize the root cause and minimal repair, and "
                 "the other must define runnable validation, regression risks, and acceptance evidence. Keep the "
-                "change scope minimal, produce fix artifacts, and rely on tester and judge artifacts to decide "
+                "change scope minimal, produce fix artifacts, and rely on tester and reviewer artifacts to decide "
                 "whether the fix is complete."
             )
         elif workflow_type == FEATURE_CHANGE:

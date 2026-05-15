@@ -6,12 +6,6 @@ import time
 from harness.adapters.base import AgentAdapter
 from harness.agents.context import AgentRunContext
 from harness.agents.result import AgentRunResult
-from harness.core.state_machine import (
-    FINAL_JUDGEMENT,
-    PLAN_JUDGEMENT,
-    REVIEW_JUDGEMENT,
-    TEST_JUDGEMENT,
-)
 from harness.prompts.builder import PromptBuilder
 
 
@@ -263,8 +257,6 @@ class MockAgentAdapter(AgentAdapter):
                 "## Known Risks\n\n"
                 "- This is mock output and does not contain a real implementation.\n"
             )
-        if context.role == "judge" and name == "decision.json":
-            return json.dumps(self._decision_payload(context), ensure_ascii=False, indent=2) + "\n"
         if context.role == "executor" and name == "merged_patch_metadata.json":
             return self._merged_patch_metadata(context)
         if name.endswith(".diff"):
@@ -307,52 +299,3 @@ class MockAgentAdapter(AgentAdapter):
             ensure_ascii=False,
             indent=2,
         ) + "\n"
-
-    def _decision_payload(self, context: AgentRunContext) -> dict[str, object]:
-        if context.phase == PLAN_JUDGEMENT:
-            return {
-                "schema_version": 1,
-                "decision_code": 0,
-                "decision": "approved",
-                "summary": "Mock plan is acceptable.",
-                "evidence": [],
-                "reason": "Mock plan is acceptable.",
-            }
-        if context.phase == TEST_JUDGEMENT:
-            return {
-                "schema_version": 1,
-                "decision_code": 0,
-                "decision": "pass",
-                "tests_passed": True,
-                "summary": "Mock tests passed.",
-                "evidence": [],
-                "reason": "Mock tests passed.",
-            }
-        if context.phase == REVIEW_JUDGEMENT:
-            return {
-                "schema_version": 1,
-                "decision_code": 0,
-                "decision": "approved",
-                "changes_required": False,
-                "summary": "Mock review approved.",
-                "evidence": [],
-                "reason": "Mock review approved.",
-            }
-        if context.phase == FINAL_JUDGEMENT:
-            return {
-                "schema_version": 1,
-                "decision_code": 0,
-                "decision": "approved",
-                "final_approved": True,
-                "summary": "Mock final approval granted.",
-                "evidence": [],
-                "reason": "Mock final approval granted.",
-            }
-        return {
-            "schema_version": 1,
-            "decision_code": 0,
-            "decision": "approved",
-            "summary": "Mock judge approved.",
-            "evidence": [],
-            "reason": "Mock judge approved.",
-        }

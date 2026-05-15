@@ -5,7 +5,7 @@ from pathlib import Path
 
 from harness.agents.result import ArtifactRef
 from harness.core.orchestrator import Orchestrator
-from harness.core.state_machine import DELIVERY, PATCH_MERGE, PLAN_REVIEW, REVIEWING, TESTING, TEST_JUDGEMENT
+from harness.core.state_machine import DELIVERY, PATCH_MERGE, PLAN_REVIEW, REVIEWING, TESTING
 
 
 def _config(tmp_path: Path) -> dict:
@@ -22,7 +22,6 @@ def _config(tmp_path: Path) -> dict:
             "executor": {"count": 2},
             "tester": {"count": 1},
             "reviewer": {"count": 1},
-            "judge": {"count": 1},
             "communicator": {"count": 1},
         },
         "limits": {"max_agent_retry": 1},
@@ -31,7 +30,6 @@ def _config(tmp_path: Path) -> dict:
             "executor": 5,
             "tester": 5,
             "reviewer": 5,
-            "judge": 5,
             "communicator": 5,
         },
         "artifact_input": {"max_files": 50, "max_file_bytes": 262_144, "max_total_bytes": 1_048_576},
@@ -42,7 +40,6 @@ def test_role_phase_budget_defaults_are_used_before_global_caps(tmp_path: Path) 
     orchestrator = Orchestrator(_config(tmp_path))
 
     assert orchestrator._artifact_input_limits("tester", TESTING)["max_files"] == 8
-    assert orchestrator._artifact_input_limits("judge", TEST_JUDGEMENT)["max_files"] == 8
     assert orchestrator._artifact_input_limits("reviewer", REVIEWING)["max_files"] == 12
     assert orchestrator._artifact_input_limits("communicator", DELIVERY)["max_files"] == 8
 

@@ -10,14 +10,13 @@ from harness.config.user_env import USER_ENV_PATH, load_user_env, write_user_env
 from harness.state.repository import StateRepository
 
 
-CONFIGURABLE_ROLES = ("planner", "executor", "tester", "reviewer", "judge", "communicator")
+CONFIGURABLE_ROLES = ("planner", "executor", "tester", "reviewer", "communicator")
 CONFIGURABLE_BACKENDS = ("codex", "claude", "gemini", "qwen")
 ROLE_COUNT_ENV_KEYS = {
     "planner": "OO_PLANNER_COUNT",
     "executor": "OO_EXECUTOR_COUNT",
     "tester": "OO_TESTER_COUNT",
     "reviewer": "OO_REVIEWER_COUNT",
-    "judge": "OO_JUDGE_COUNT",
     "communicator": "OO_COMMUNICATOR_COUNT",
 }
 MAX_ROLE_COUNT = 10

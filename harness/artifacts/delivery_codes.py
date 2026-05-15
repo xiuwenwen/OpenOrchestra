@@ -77,7 +77,7 @@ def delivery_return_code_contract_lines() -> list[str]:
         "- Use JSON `return_code: 0` only when this role successfully returned all required output files for this phase.",
         "- Use a non-zero return code when the role output contract is not cleanly satisfied.",
         "- Do not use natural-language delivery status text such as `status: success`, `status: failed`, `pass`, `fail`, `approved`, `rejected`, `ok`, or `complete` as a replacement for JSON `return_code`.",
-        "- Business outcomes must use separate machine fields in the phase artifacts, never the `delivery.md` return code. Examples: `decision.json.decision: fail`, `tester_result.json.status: source_bug`, `review_result.json.review_decision_code: 1`, `peer_review_result.json.peer_review_code: 1`.",
+        "- Business outcomes must use separate machine fields in the phase artifacts, never the `delivery.md` return code. Examples: `tester_result.json.status: source_bug`, `review_result.json.review_decision_code: 1`, `peer_review_result.json.peer_review_code: 1`.",
         "- If you rendered a clear negative business verdict, such as tests failed or changes are required, still write JSON `return_code: 0` in `delivery.md` when the required role files are complete.",
         "- Harness validates `delivery.md`; any return code other than `0` prevents the run from advancing.",
     ]

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from harness.artifacts.hashing import sha256_file
-from harness.core.state_machine import FIXING, PLAN_REVIEW, PLAN_JUDGEMENT, REGRESSION_TESTING, REVIEW_FIXING, TESTING
+from harness.core.state_machine import FIXING, PLAN_REVIEW, REGRESSION_TESTING, REVIEW_FIXING, TESTING
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT, normalize_workflow_type
 from harness.state.repository import StateRepository
 from harness.workspace.manager import WorkspaceManager
@@ -111,8 +111,6 @@ class MaterializedRepoService:
             return phase in {TESTING, REGRESSION_TESTING}
         if role == "reviewer":
             return phase != PLAN_REVIEW
-        if role == "judge":
-            return phase != PLAN_JUDGEMENT
         if role == "communicator":
             return True
         return False

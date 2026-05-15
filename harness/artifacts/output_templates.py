@@ -54,8 +54,6 @@ def output_template_content(
 ) -> str:
     if relative_name == "delivery.md":
         return _delivery_template(required_outputs, role=role, phase=phase, agent_id=agent_id)
-    if relative_name == "decision.json":
-        return _decision_template(role=role, phase=phase, agent_id=agent_id)
     if relative_name == "tester_result.json":
         return _tester_result_template()
     if relative_name == "review_result.json":
@@ -105,28 +103,6 @@ def _delivery_template(required_outputs: list[str], *, role: str, phase: str, ag
                 "agent_id": agent_id,
                 "produced_files": list(required_outputs),
                 "known_risks": [],
-                TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n"
-    )
-
-
-def _decision_template(*, role: str, phase: str, agent_id: str) -> str:
-    return (
-        json.dumps(
-            {
-                "schema_version": 1,
-                "decision_code": TEMPLATE_PENDING_VALUE,
-                "decision": TEMPLATE_PENDING_VALUE,
-                "summary": "Replace this Harness output template with the judge decision summary.",
-                "reason": "Replace this Harness output template with the actual judge decision reason.",
-                "evidence": [],
-                "role": role,
-                "phase": phase,
-                "agent_id": agent_id,
                 TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
             },
             ensure_ascii=False,

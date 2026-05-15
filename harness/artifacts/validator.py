@@ -116,7 +116,6 @@ class ArtifactValidator:
             elif relative_name == PEER_REVIEW_RESULT_ARTIFACT:
                 issues.extend(self.validate_peer_review_result(path))
             elif relative_name in {
-                "decision.json",
                 "todo_breakdown.json",
                 "selected_plan.json",
                 "tester_result.json",
@@ -214,9 +213,7 @@ class ArtifactValidator:
                 )
             ]
         messages: list[str] = []
-        if artifact_name == "decision.json":
-            messages.extend(self.validate_decision_json(payload))
-        elif artifact_name == "todo_breakdown.json":
+        if artifact_name == "todo_breakdown.json":
             if not isinstance(payload.get("todos"), list):
                 messages.append("todo_breakdown.json.todos must be a list")
         elif artifact_name == "selected_plan.json":
@@ -381,28 +378,6 @@ class ArtifactValidator:
             )
         if "environment_ready" in payload and not isinstance(payload.get("environment_ready"), bool):
             messages.append("tester_result.json.environment_ready must be a boolean when present")
-        return messages
-
-    def validate_decision_json(self, payload: dict[str, object]) -> list[str]:
-        messages: list[str] = []
-        code = payload.get("decision_code")
-        if isinstance(code, bool):
-            code = None
-        elif isinstance(code, str):
-            try:
-                code = int(code.strip())
-            except ValueError:
-                code = None
-        if code not in {-1, 0, 1}:
-            messages.append("decision.json.decision_code must be one of -1, 0, or 1")
-        if not isinstance(payload.get("decision"), str) or not payload.get("decision", "").strip():
-            messages.append("decision.json.decision must be a non-empty string")
-        if not isinstance(payload.get("summary"), str) or not payload.get("summary", "").strip():
-            messages.append("decision.json.summary must be a non-empty string")
-        if not isinstance(payload.get("reason"), str) or not payload.get("reason", "").strip():
-            messages.append("decision.json.reason must be a non-empty string")
-        if "evidence" not in payload:
-            messages.append("decision.json.evidence is required")
         return messages
 
     def _normalized_string(self, value: object) -> str:

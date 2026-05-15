@@ -367,7 +367,7 @@ class InteractiveCLI:
 
     def _apply_backend(self, backend: str) -> None:
         self.config["agent_backend"]["default"] = backend
-        for role in ("planner", "executor", "tester", "reviewer", "judge", "communicator"):
+        for role in ("planner", "executor", "tester", "reviewer", "communicator"):
             self.config["agent_backend"][role] = backend
 
     def _print_history(self, limit: int) -> None:
@@ -663,13 +663,6 @@ class InteractiveCLI:
         if final_delivery:
             lines.extend(["", f"Historical final_delivery.json path: {final_delivery}"])
             lines.extend(["Historical final delivery excerpt:", self._read_excerpt(final_delivery)])
-        decisions = self.orchestrator.repository.list_judge_decisions(task_id)[-3:]
-        if decisions:
-            lines.append("")
-            lines.append("Recent historical judge decisions:")
-            for decision in decisions:
-                payload = self._compact_json(decision["decision_payload"])
-                lines.append(f"- {decision['decision_type']}: {payload}")
         return "\n".join(lines)
 
     def _latest_artifact_path(self, task_id: str, artifact_type: str) -> Path | None:

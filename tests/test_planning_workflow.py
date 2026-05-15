@@ -19,21 +19,17 @@ from harness.core.state_machine import (
     DELIVERY,
     EXECUTION,
     FAILED,
-    FINAL_JUDGEMENT,
     FIXING,
     PATCH_MERGE,
     PLAN_REVIEW,
-    PLAN_JUDGEMENT,
     PLANNING_DRAFT,
     PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
     REGRESSION_TESTING,
     REVIEW_FIXING,
-    REVIEW_JUDGEMENT,
     REVIEWING,
     RUNNING,
     TESTING,
-    TEST_JUDGEMENT,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 from harness.patch.gate import materialized_repo_markdown, run_patch_gate
@@ -92,7 +88,6 @@ def test_planning_block_retries_until_plan_review_approves(monkeypatch, tmp_path
             _write_review_result(review_report, decision_code)
         return results
 
-    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("planning should not run judge")))
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
 
     orchestrator._run_planning_block(task_id, "add a feature")
@@ -164,8 +159,6 @@ def test_planning_block_runs_peer_review_loop_then_plan_review(monkeypatch, tmp_
     orchestrator = Orchestrator(config)
     task_id = orchestrator.create_task("build peer reviewed plan")
 
-    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("planning should not run judge")))
-
     orchestrator._run_planning_block(task_id, "build peer reviewed plan")
 
     phases = [(phase["phase_type"], phase["role"], phase["round_id"]) for phase in orchestrator.repository.list_phases(task_id)]
@@ -174,7 +167,6 @@ def test_planning_block_runs_peer_review_loop_then_plan_review(monkeypatch, tmp_
     assert ("PLANNING_REVISION", "planner", 1) in phases
     assert ("PLANNING_PEER_REVIEW", "planner", 1) in phases
     assert ("PLAN_REVIEW", "reviewer", 1) in phases
-    assert ("PLAN_JUDGEMENT", "judge", 1) not in phases
     assert orchestrator.repository.list_artifacts(task_id, "peer_review_result.json")
     assert orchestrator.repository.list_artifacts(task_id, "review_result.json")
     assert orchestrator.repository.list_artifacts(task_id, "selected_plan.json")
@@ -205,7 +197,6 @@ def test_plan_review_rejection_enters_planner_fix_review_loop_without_peer_revie
             _write_review_result(review_report, decision_code)
         return results
 
-    monkeypatch.setattr(orchestrator, "run_judge_phase", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("planning should not run judge")))
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
 
     orchestrator._run_planning_block(task_id, "fix merged planning feedback")
@@ -423,23 +414,19 @@ def test_planning_revision_only_receives_previous_round_artifacts(tmp_path: Path
 
     round0_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_DRAFT, "planner", 0)
     round0_peer_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_PEER_REVIEW, "planner", 0)
-    round0_judge_phase_id = orchestrator.repository.create_phase(task_id, PLAN_JUDGEMENT, "judge", 0)
     round1_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_REVISION, "planner", 1)
     round1_peer_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_PEER_REVIEW, "planner", 1)
-    round1_judge_phase_id = orchestrator.repository.create_phase(task_id, PLAN_JUDGEMENT, "judge", 1)
     current_phase_id = orchestrator.repository.create_phase(task_id, PLANNING_REVISION, "planner", 2)
 
     artifact_rows = [
         (round0_phase_id, "planner", "planner-1", "plan.md", "round0-plan.md"),
         (round0_phase_id, "planner", "planner-1", "risk.md", "round0-risk.md"),
         (round0_peer_phase_id, "planner", "planner-2", "peer_review_result.json", "round0-peer-review.json"),
-        (round0_judge_phase_id, "judge", "judge-1", "decision.json", "round0-decision.json"),
         (round1_phase_id, "planner", "planner-1", "plan.md", "round1-plan.md"),
         (round1_phase_id, "planner", "planner-1", "risk.md", "round1-risk.md"),
         (round1_phase_id, "planner", "planner-1", "todo_breakdown.json", "round1-todo.json"),
         (round1_phase_id, "planner", "planner-1", "assumptions.md", "round1-assumptions.md"),
         (round1_peer_phase_id, "planner", "planner-2", "peer_review_result.json", "round1-peer-review.json"),
-        (round1_judge_phase_id, "judge", "judge-1", "decision.json", "round1-decision.json"),
     ]
     for phase_id, role, agent_id, artifact_type, filename in artifact_rows:
         path = tmp_path / filename
@@ -474,12 +461,10 @@ def test_planning_revision_only_receives_previous_round_artifacts(tmp_path: Path
     assert "round1-todo.json" in manifest
     assert "round1-assumptions.md" in manifest
     assert "round1-peer-review.json" in manifest
-    assert "round1-decision.json" in manifest
 
     assert "round0-plan.md" not in manifest
     assert "round0-risk.md" not in manifest
     assert "round0-peer-review.json" not in manifest
-    assert "round0-decision.json" not in manifest
 
 def test_execution_staging_uses_selected_plan_not_raw_planner_outputs(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))

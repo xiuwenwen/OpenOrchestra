@@ -15,7 +15,6 @@ from harness.core.scheduler import BackendBulkheadScheduler
 from harness.gates.patch_gate import PatchGateService
 from harness.gates.runtime_readiness import RuntimeReadinessGateService
 from harness.gates.test_gate import TestGateService
-from harness.judge.judge_runner import MockJudge
 from harness.logs.logger import get_logger
 from harness.materialization.service import MaterializedRepoService
 from harness.prompts.builder import PromptBuilder
@@ -35,7 +34,6 @@ class ApplicationServices:
     artifact_visibility: ArtifactVisibilityPolicy
     validator: ArtifactValidator
     communicator: Communicator
-    judge: MockJudge
     backend_health: BackendHealthMonitor
     scheduler: BackendBulkheadScheduler
     prompt_builder: PromptBuilder
@@ -66,7 +64,6 @@ def build_orchestrator_services(
     artifact_visibility = ArtifactVisibilityPolicy()
     validator = ArtifactValidator()
     communicator = Communicator(repository)
-    judge = MockJudge()
     backend_health = BackendHealthMonitor.from_config(
         config,
         persisted_states=repository.load_backend_health_states(),
@@ -109,7 +106,6 @@ def build_orchestrator_services(
         config=config,
         repository=repository,
         visibility=artifact_visibility,
-        judge=judge,
         repo_context_metadata=materialized_repo_service.repo_context_metadata,
         positive_int=orchestrator.positive_int,
     )
@@ -130,7 +126,6 @@ def build_orchestrator_services(
         artifact_visibility=artifact_visibility,
         validator=validator,
         communicator=communicator,
-        judge=judge,
         backend_health=backend_health,
         scheduler=scheduler,
         prompt_builder=prompt_builder,

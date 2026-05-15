@@ -19,21 +19,17 @@ from harness.core.state_machine import (
     DELIVERY,
     EXECUTION,
     FAILED,
-    FINAL_JUDGEMENT,
     FIXING,
     PATCH_MERGE,
     PLAN_REVIEW,
-    PLAN_JUDGEMENT,
     PLANNING_DRAFT,
     PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
     REGRESSION_TESTING,
     REVIEW_FIXING,
-    REVIEW_JUDGEMENT,
     REVIEWING,
     RUNNING,
     TESTING,
-    TEST_JUDGEMENT,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 from harness.patch.gate import materialized_repo_markdown, run_patch_gate
@@ -105,8 +101,6 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
     latest_test_phase_id = orchestrator.repository.create_phase(task_id, REGRESSION_TESTING, "tester", 2)
     old_review_phase_id = orchestrator.repository.create_phase(task_id, REVIEWING, "reviewer", 0)
     latest_review_phase_id = orchestrator.repository.create_phase(task_id, REVIEWING, "reviewer", 1)
-    old_judge_phase_id = orchestrator.repository.create_phase(task_id, TEST_JUDGEMENT, "judge", 1)
-    latest_judge_phase_id = orchestrator.repository.create_phase(task_id, REVIEW_JUDGEMENT, "judge", 2)
 
     artifact_rows = [
         ("plan.md", old_plan_phase_id, "planner", "old-plan.md", "planner-1"),
@@ -125,8 +119,6 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
         ("selected_plan.json", selected_plan_phase_id, "reviewer", "latest-selected-plan.json", "reviewer-1"),
         ("review_result.json", old_review_phase_id, "reviewer", "old-review-result.json", "reviewer-1"),
         ("review_result.json", latest_review_phase_id, "reviewer", "latest-review-result.json", "reviewer-1"),
-        ("decision.json", old_judge_phase_id, "judge", "old-decision.json", "judge-1"),
-        ("decision.json", latest_judge_phase_id, "judge", "latest-decision.json", "judge-1"),
     ]
     for artifact_type, phase_id, role, filename, agent_id in artifact_rows:
         path = tmp_path / filename
@@ -188,8 +180,6 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
     assert "old-bug-report.md" not in manifest
     assert "latest-review-report.md" not in manifest
     assert "old-review-report.md" not in manifest
-    assert "latest-decision.json" not in manifest
-    assert "old-decision.json" not in manifest
     assert "final-round-2-test_gate.md" not in manifest
     assert "final-round-1-test_gate.md" not in manifest
 

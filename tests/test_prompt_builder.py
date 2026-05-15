@@ -343,28 +343,6 @@ def test_prompt_builder_planner_revision_handles_fix_tester_plan_recheck(tmp_pat
     assert "no plan change is needed" in prompt
 
 
-def test_prompt_builder_hides_generic_error_code_tables_from_judge(tmp_path: Path) -> None:
-    context = make_context(tmp_path, role="judge", agent_id="judge-1", role_count=1)
-    context = AgentRunContext(
-        **{
-            **context.__dict__,
-            "phase": "TEST_JUDGEMENT",
-            "required_outputs": ["decision.json", "delivery.md"],
-        }
-    )
-
-    prompt = PromptBuilder().build(context)
-
-    assert "`delivery.md` is the JSON role return envelope, not the task/business verdict." in prompt
-    assert "`delivery.md` must be exactly one JSON object" in prompt
-    assert "Return code meanings:" not in prompt
-    assert "Markdown artifact result code meanings:" not in prompt
-    assert "Set `decision.json.decision_code` to `0` for pass or `-1` for fail" in prompt
-    assert "Put the phase verdict only in `decision.json.decision`" in prompt
-    assert "Do not copy `decision_code` or `decision.json.decision` into `artifact_result_code` or `return_code`" in prompt
-    assert "If you choose `decision: fail` because tests failed, write JSON `return_code: 0` in `delivery.md`" in prompt
-
-
 def test_prompt_builder_has_plan_review_merge_contract(tmp_path: Path) -> None:
     context = make_context(tmp_path, role="reviewer", agent_id="reviewer-1", role_count=1)
     context = AgentRunContext(

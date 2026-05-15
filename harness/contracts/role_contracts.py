@@ -20,9 +20,7 @@ from harness.core.state_machine import (
     PLANNING_REVISION,
     REGRESSION_TESTING,
     REVIEW_FIXING,
-    REVIEW_JUDGEMENT,
     REVIEWING,
-    TEST_JUDGEMENT,
     TESTING,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT, normalize_workflow_type
@@ -50,8 +48,6 @@ ROLE_PHASE_INPUT_BUDGETS: dict[tuple[str, str], ArtifactInputBudget] = {
     ("tester", REGRESSION_TESTING): ArtifactInputBudget(max_files=8, max_file_bytes=131_072, max_total_bytes=524_288, large_artifact_mode="path_only"),
     ("reviewer", PLAN_REVIEW): ArtifactInputBudget(max_files=32, max_file_bytes=131_072, max_total_bytes=786_432),
     ("reviewer", REVIEWING): ArtifactInputBudget(max_files=12, max_file_bytes=131_072, max_total_bytes=524_288, large_artifact_mode="truncated"),
-    ("judge", TEST_JUDGEMENT): ArtifactInputBudget(max_files=8, max_file_bytes=65_536, max_total_bytes=262_144),
-    ("judge", REVIEW_JUDGEMENT): ArtifactInputBudget(max_files=8, max_file_bytes=65_536, max_total_bytes=262_144),
     ("communicator", DELIVERY): ArtifactInputBudget(max_files=8, max_file_bytes=131_072, max_total_bytes=524_288, large_artifact_mode="path_only"),
 }
 
@@ -104,13 +100,6 @@ DEFAULT_ROLE_INSTRUCTIONS = {
         "delivery.md is a JSON role return envelope. "
         "It must be exactly one JSON object with `return_code` set to `0` if you completed the review, regardless of whether "
         "the review verdict is `review_decision_code: 0`, `review_decision_code: 1`, or `review_decision_code: 2`."
-    ),
-    "judge": (
-        "Make the phase decision from collected artifacts only. Produce a strict machine-readable decision "
-        "and a concise rationale. Do not create implementation changes. delivery.md is a JSON role return envelope, "
-        "not the phase verdict. It must be exactly one JSON object with `return_code` set to `0` if you rendered a "
-        "clear decision, even when `decision.json` contains `decision: fail` or `decision: changes_required`. "
-        "`decision.json` must include `decision_code`, `summary`, `reason`, and `evidence`; do not create a separate decision summary artifact."
     ),
     "communicator": (
         "Create customer-facing delivery artifacts only. Use the accepted plan, final executor implementation, "

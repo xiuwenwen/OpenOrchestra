@@ -90,25 +90,6 @@ def test_delivery_template_marker_is_delivery_contract_issue(tmp_path: Path) -> 
     assert delivery_issue_is_contract_only(result)
 
 
-def test_json_template_pending_decision_remains_invalid_after_marker_key_removed(tmp_path: Path) -> None:
-    seed_output_templates(
-        tmp_path,
-        ["decision.json"],
-        role="judge",
-        phase="TEST_JUDGEMENT",
-        agent_id="judge-1",
-    )
-    decision_path = tmp_path / "decision.json"
-    payload = json.loads(decision_path.read_text(encoding="utf-8"))
-    payload.pop("harness_template_status")
-    decision_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    result = ArtifactValidator().validate_required_outputs_result(tmp_path, ["decision.json"])
-
-    assert not result.ok
-    assert result.errors == ["decision.json still contains Harness output template marker"]
-
-
 def test_review_result_template_is_strict_json_and_schema_validated(tmp_path: Path) -> None:
     seed_output_templates(tmp_path, ["review_result.json"], role="reviewer", phase="REVIEWING", agent_id="reviewer-1")
     review_result_path = tmp_path / "review_result.json"

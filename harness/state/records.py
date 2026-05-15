@@ -89,16 +89,6 @@ class ArtifactRecord(RecordMapping):
 
 
 @dataclass(frozen=True)
-class JudgeDecisionRecord(RecordMapping):
-    decision_id: str
-    task_id: str
-    phase_id: str | None
-    decision_type: str
-    decision_payload: str
-    created_at: str
-
-
-@dataclass(frozen=True)
 class EventRecord(RecordMapping):
     event_id: str
     task_id: str | None

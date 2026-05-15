@@ -10,13 +10,11 @@ from harness.artifacts.schemas import (
     ARTIFACT_VISIBILITY_RULES,
     CONDITION_HAS_REJECTED_PLAN_REVIEW,
     CONDITION_NO_REJECTED_PLAN_REVIEW,
-    JUDGE_DECISION_ARTIFACTS,
     ROUND_ANY,
     ROUND_BEFORE_CURRENT,
     ROUND_CURRENT,
     ROUND_LATEST_COMPLETE_TEST,
     ROUND_LATEST_BEFORE_CURRENT_PER_TYPE,
-    ROUND_LATEST_COMPLETE_JUDGE_BEFORE_CURRENT,
     ROUND_LATEST_COMPLETE_TEST_BEFORE_CURRENT,
     ROUND_LATEST_PER_TYPE,
     ROUND_LATEST_PLANNING,
@@ -34,8 +32,6 @@ from harness.core.state_machine import (
     PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
     REGRESSION_TESTING,
-    REVIEW_JUDGEMENT,
-    TEST_JUDGEMENT,
     TESTING,
 )
 
@@ -82,15 +78,6 @@ class ArtifactVisibilityPolicy:
             artifact_types=TEST_REPORT_ARTIFACTS,
             source_phases=_phases(TESTING, REGRESSION_TESTING),
         )
-        latest_complete_judge_round = self._latest_complete_artifact_round_before(
-            artifacts,
-            phases_by_id,
-            round_id,
-            source_role="judge",
-            artifact_types=JUDGE_DECISION_ARTIFACTS,
-            source_phases=_phases(TEST_JUDGEMENT, REVIEW_JUDGEMENT),
-        )
-
         def append_once(artifact: dict[str, Any]) -> None:
             artifact_id = str(artifact.get("artifact_id") or artifact.get("path") or id(artifact))
             if artifact_id in filtered_ids:
@@ -116,7 +103,6 @@ class ArtifactVisibilityPolicy:
                     rejected_plan_review_round=rejected_plan_review_round,
                     latest_complete_test_round=latest_complete_test_round,
                     latest_complete_test_round_any=latest_complete_test_round_any,
-                    latest_complete_judge_round=latest_complete_judge_round,
                 ):
                     continue
                 if rule.round_policy in {ROUND_LATEST_PER_TYPE, ROUND_LATEST_BEFORE_CURRENT_PER_TYPE}:
@@ -187,7 +173,6 @@ class ArtifactVisibilityPolicy:
         rejected_plan_review_round: int | None,
         latest_complete_test_round: int | None,
         latest_complete_test_round_any: int | None,
-        latest_complete_judge_round: int | None,
     ) -> bool:
         artifact_type = artifact["artifact_type"]
         artifact_role = artifact.get("role")
@@ -214,7 +199,6 @@ class ArtifactVisibilityPolicy:
             rejected_plan_review_round=rejected_plan_review_round,
             latest_complete_test_round=latest_complete_test_round,
             latest_complete_test_round_any=latest_complete_test_round_any,
-            latest_complete_judge_round=latest_complete_judge_round,
         )
 
     def _artifact_round_matches_visibility_rule(
@@ -227,7 +211,6 @@ class ArtifactVisibilityPolicy:
         rejected_plan_review_round: int | None,
         latest_complete_test_round: int | None,
         latest_complete_test_round_any: int | None,
-        latest_complete_judge_round: int | None,
     ) -> bool:
         if rule.round_policy == ROUND_ANY:
             return True
@@ -241,8 +224,6 @@ class ArtifactVisibilityPolicy:
             return latest_complete_test_round_any is not None and effective_round == latest_complete_test_round_any
         if rule.round_policy == ROUND_LATEST_COMPLETE_TEST_BEFORE_CURRENT:
             return latest_complete_test_round is not None and effective_round == latest_complete_test_round
-        if rule.round_policy == ROUND_LATEST_COMPLETE_JUDGE_BEFORE_CURRENT:
-            return latest_complete_judge_round is not None and effective_round == latest_complete_judge_round
         if rule.round_policy == ROUND_BEFORE_CURRENT and target_round is None:
             return True
         if target_round is None:

@@ -11,7 +11,7 @@ from typing import Any
 from harness.agents.result import ArtifactRef
 from harness.core.state_machine import COMPLETED, CREATED, FAILED, RUNNING
 from harness.state.db import StateDB
-from harness.state.records import AgentRunRecord, ArtifactRecord, EventRecord, JudgeDecisionRecord, PhaseRecord, TaskRecord
+from harness.state.records import AgentRunRecord, ArtifactRecord, EventRecord, PhaseRecord, TaskRecord
 from harness.state.transitions import AGENT_RUN_TRANSITIONS, PHASE_TRANSITIONS, TASK_TRANSITIONS
 
 
@@ -343,26 +343,6 @@ class StateRepository:
                 utc_now_iso(),
             ),
         )
-
-    def create_judge_decision(self, task_id: str, phase_id: str | None, decision_type: str, payload: dict[str, Any]) -> str:
-        decision_id = str(uuid.uuid4())
-        with self._lock, self.db.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO judge_decisions(decision_id, task_id, phase_id, decision_type, decision_payload, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (decision_id, task_id, phase_id, decision_type, json.dumps(payload, ensure_ascii=False), utc_now_iso()),
-            )
-        return decision_id
-
-    def list_judge_decisions(self, task_id: str) -> list[JudgeDecisionRecord]:
-        with self.db.connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM judge_decisions WHERE task_id = ? ORDER BY created_at",
-                (task_id,),
-            ).fetchall()
-        return [JudgeDecisionRecord.from_row(row) for row in rows]
 
     def record_event(
         self,

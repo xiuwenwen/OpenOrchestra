@@ -19,21 +19,17 @@ from harness.core.state_machine import (
     DELIVERY,
     EXECUTION,
     FAILED,
-    FINAL_JUDGEMENT,
     FIXING,
     PATCH_MERGE,
     PLAN_REVIEW,
-    PLAN_JUDGEMENT,
     PLANNING_DRAFT,
     PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
     REGRESSION_TESTING,
     REVIEW_FIXING,
-    REVIEW_JUDGEMENT,
     REVIEWING,
     RUNNING,
     TESTING,
-    TEST_JUDGEMENT,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 from harness.patch.gate import materialized_repo_markdown, run_patch_gate
@@ -292,40 +288,3 @@ def test_checkpoint_resume_rejects_invalid_recovered_contract(tmp_path: Path) ->
     )
 
     assert [result.phase_id for result in results] != [phase_id]
-
-def test_judge_checkpoint_resume_parses_existing_decision(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    orchestrator = Orchestrator(config)
-    task_id = orchestrator.create_task("resume judge")
-    orchestrator._active_task_id = task_id
-    try:
-        phase_id = orchestrator.repository.create_phase(task_id, PLAN_JUDGEMENT, "judge", 0)
-        run_id = orchestrator.repository.create_agent_run(task_id, phase_id, "judge", "judge-1", 0)
-        artifacts = {
-            "decision.json": '{"decision_code":0,"decision":"approved","changes_required":false,"summary":"approved","reason":"ok","evidence":[]}\n',
-            "delivery.md": "return_code: 0\n",
-        }
-        for artifact_type, content in artifacts.items():
-            path = tmp_path / artifact_type
-            path.write_text(content, encoding="utf-8")
-            orchestrator.repository.create_artifact(
-                ArtifactRef(
-                    artifact_id=str(uuid.uuid4()),
-                    task_id=task_id,
-                    phase_id=phase_id,
-                    role="judge",
-                    agent_id="judge-1",
-                    artifact_type=artifact_type,
-                    path=path,
-                    version=1,
-                    hash="hash",
-                )
-            )
-        orchestrator.repository.update_agent_run_status(run_id, "COMPLETED")
-        orchestrator.repository.update_phase_status(phase_id, "COMPLETED")
-
-        decision = orchestrator._run_judge_phase(task_id, PLAN_JUDGEMENT, 0, "resume judge")
-    finally:
-        orchestrator._active_task_id = None
-
-    assert decision["decision"] == "approved"

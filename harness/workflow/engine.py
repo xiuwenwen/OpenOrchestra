@@ -35,7 +35,6 @@ from harness.core.state_machine import (
     REGRESSION_TESTING,
     REVIEW_FIXING,
     REVIEWING,
-    TEST_JUDGEMENT,
     TESTING,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT
@@ -76,16 +75,6 @@ class GateRunner(Protocol):
     def run_patch_merge(self, task_id: str, round_id: int, user_prompt: str) -> bool:
         ...
 
-    def run_judge_phase(
-        self,
-        task_id: str,
-        phase: str,
-        round_id: int,
-        user_prompt: str,
-        phase_scope: dict[str, int | str | None] | None = None,
-    ) -> dict[str, Any]:
-        ...
-
 
 class DeliveryService(Protocol):
     def latest_final_delivery(self, task_id: str) -> Path | None:
@@ -99,7 +88,6 @@ class WorkflowRuntime(PhaseRunner, GateRunner, DeliveryService, Protocol):
     config: dict[str, Any]
     repository: Any
     logger: Any
-    judge: Any
     fix_round_limit_callback: Any
 
     def is_failed_resume(self, task_id: str) -> bool:
@@ -191,7 +179,7 @@ class WorkflowEngine:
         rounds = [
             int(phase["round_id"])
             for phase in self.current_prompt_turn_phases(task_id)
-            if phase["phase_type"] in {FIXING, PATCH_MERGE, TESTING, TEST_JUDGEMENT}
+            if phase["phase_type"] in {FIXING, PATCH_MERGE, TESTING}
             and phase["round_id"] is not None
         ]
         return max(rounds) if rounds else None
@@ -481,7 +469,7 @@ class WorkflowEngine:
         rounds = [
             int(phase["round_id"])
             for phase in self.current_prompt_turn_phases(task_id)
-            if phase["phase_type"] in {EXECUTION, FIXING, PATCH_MERGE, TESTING, TEST_JUDGEMENT}
+            if phase["phase_type"] in {EXECUTION, FIXING, PATCH_MERGE, TESTING}
             and phase["round_id"] is not None
         ]
         return max(rounds) if rounds else None

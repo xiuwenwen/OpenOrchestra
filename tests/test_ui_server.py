@@ -38,7 +38,6 @@ def _config(tmp_path: Path) -> dict:
             "executor": "codex",
             "tester": "codex",
             "reviewer": "codex",
-            "judge": "codex",
             "communicator": "codex",
         },
         "roles": {
@@ -46,7 +45,6 @@ def _config(tmp_path: Path) -> dict:
             "executor": {"count": 2},
             "tester": {"count": 1},
             "reviewer": {"count": 1},
-            "judge": {"count": 1},
             "communicator": {"count": 1},
         },
     }

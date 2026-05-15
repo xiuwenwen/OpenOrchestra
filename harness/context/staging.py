@@ -9,8 +9,7 @@ from typing import Any, Callable
 from harness.artifacts.schemas import TEST_REPORT_ARTIFACTS
 from harness.artifacts.visibility import ArtifactVisibilityPolicy
 from harness.contracts.role_contracts import DEFAULT_ARTIFACT_INPUT_BUDGET, artifact_input_budget_for
-from harness.core.state_machine import FAILED, FIXING, REGRESSION_TESTING, REVIEW_FIXING, TEST_JUDGEMENT, TESTING
-from harness.judge.judge_runner import MockJudge
+from harness.core.state_machine import FAILED, FIXING, REGRESSION_TESTING, REVIEW_FIXING, TESTING
 from harness.state.repository import StateRepository
 from harness.workspace.manager import WorkspaceManager
 
@@ -26,14 +25,12 @@ class InputStagingService:
         config: dict[str, Any],
         repository: StateRepository,
         visibility: ArtifactVisibilityPolicy,
-        judge: MockJudge,
         repo_context_metadata: RepoContextMetadata,
         positive_int: PositiveInt,
     ):
         self.config = config
         self.repository = repository
         self.visibility = visibility
-        self.judge = judge
         self.repo_context_metadata = repo_context_metadata
         self.positive_int = positive_int
 
@@ -346,22 +343,6 @@ class InputStagingService:
                 continue
             if phase_row.get("status") == FAILED:
                 failed_rounds.add(int(phase_row["round_id"]))
-        for decision in self.repository.list_judge_decisions(task_id):
-            if decision.get("decision_type") != TEST_JUDGEMENT:
-                continue
-            phase_row = phases_by_id.get(decision.get("phase_id") or "")
-            if not phase_row or phase_row.get("round_id") is None:
-                continue
-            decision_round = int(phase_row["round_id"])
-            if decision_round >= round_id:
-                continue
-            try:
-                payload = json.loads(decision["decision_payload"])
-            except Exception:
-                failed_rounds.add(decision_round)
-                continue
-            if not self.judge.is_test_pass(payload):
-                failed_rounds.add(decision_round)
         return sorted(failed_rounds)
 
     def artifact_input_limits(self, role: str | None = None, phase: str | None = None) -> dict[str, Any]:
@@ -571,7 +552,7 @@ class InputStagingService:
             return "copy"
         if large_artifact_mode != "auto":
             return large_artifact_mode
-        if role in {"tester", "judge", "communicator"}:
+        if role in {"tester", "communicator"}:
             return "path_only"
         if role == "reviewer":
             return "truncated"

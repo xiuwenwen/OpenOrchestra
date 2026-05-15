@@ -364,7 +364,7 @@ class HarnessStateView:
         for phase in phases:
             phase_by_role[str(phase["role"])] = phase
         summary: dict[str, dict[str, Any]] = {}
-        for role in ("planner", "executor", "tester", "reviewer", "judge", "communicator", "orchestrator"):
+        for role in ("planner", "executor", "tester", "reviewer", "communicator", "orchestrator"):
             role_runs = [run for run in agent_runs if run["role"] == role]
             latest_run = role_runs[-1] if role_runs else None
             phase = phase_by_role.get(role)

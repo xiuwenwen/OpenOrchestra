@@ -45,14 +45,12 @@ class DiagnosticsService:
         phase_by_id = {str(phase["phase_id"]): phase for phase in phases}
         runs = [dict(row) for row in self.repository.list_agent_runs(task_id)]
         artifacts = [dict(row) for row in self.repository.list_artifacts(task_id)]
-        decisions = [dict(row) for row in self.repository.list_judge_decisions(task_id)]
         events = [dict(row) for row in reversed(self.repository.list_events(task_id, limit=1000))]
 
         self._write_json(bundle_dir / "state" / "task.json", dict(task))
         self._write_json(bundle_dir / "state" / "phases.json", phases)
         self._write_json(bundle_dir / "state" / "agent_runs.json", runs)
         self._write_json(bundle_dir / "state" / "artifacts.json", artifacts)
-        self._write_json(bundle_dir / "state" / "judge_decisions.json", decisions)
         self._write_json(bundle_dir / "state" / "events.json", events)
         self._write_timeline(bundle_dir / "timeline.md", events)
 
@@ -63,7 +61,7 @@ class DiagnosticsService:
         for run in runs:
             copied_files += self._copy_run_evidence(bundle_dir / "runs", task_id, run, phase_by_id)
 
-        self._write_summary(bundle_dir / "summary.md", dict(task), phases, runs, artifacts, decisions, events, copied_files)
+        self._write_summary(bundle_dir / "summary.md", dict(task), phases, runs, artifacts, events, copied_files)
         return DiagnosticsBundle(task_id=task_id, path=bundle_dir, copied_files=copied_files)
 
     def _bundle_dir(self, task_id: str, output_root: Path | None) -> Path:
@@ -129,7 +127,6 @@ class DiagnosticsService:
         phases: list[dict[str, Any]],
         runs: list[dict[str, Any]],
         artifacts: list[dict[str, Any]],
-        decisions: list[dict[str, Any]],
         events: list[dict[str, Any]],
         copied_files: int,
     ) -> None:
@@ -144,13 +141,12 @@ class DiagnosticsService:
             f"- phases: `{len(phases)}`",
             f"- agent_runs: `{len(runs)}`",
             f"- artifacts: `{len(artifacts)}`",
-            f"- judge_decisions: `{len(decisions)}`",
             f"- events: `{len(events)}`",
             f"- copied_evidence_files: `{copied_files}`",
             "",
             "## Contents",
             "",
-            "- `state/*.json`: task, phase, run, artifact, decision, and event records",
+            "- `state/*.json`: task, phase, run, artifact, and event records",
             "- `timeline.md`: chronological event timeline",
             "- `artifacts/`: registered artifacts copied with text redaction",
             "- `runs/`: prompt, stdout, stderr, request diagnostics, and input manifest per agent run",

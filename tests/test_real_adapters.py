@@ -400,7 +400,7 @@ def test_claude_adapter_uses_role_specific_max_output_tokens(tmp_path: Path) -> 
         _context(
             tmp_path,
             role="executor",
-            config={"claude": {"max_output_tokens": {"planner": 24000, "executor": 48000, "judge": 12000}}},
+            config={"claude": {"max_output_tokens": {"planner": 24000, "executor": 48000, "reviewer": 12000}}},
         )
     )
 
@@ -416,7 +416,7 @@ def test_claude_adapter_uses_role_specific_default_when_mapping_omits_role(tmp_p
     runner = FakeRunner()
 
     ClaudeCodeAdapter(command=["claude", "-p"], runner=runner).run(
-        _context(tmp_path, role="communicator", config={"claude": {"max_output_tokens": {"judge": 12000}}})
+        _context(tmp_path, role="communicator", config={"claude": {"max_output_tokens": {"reviewer": 12000}}})
     )
 
     assert runner.env == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"}

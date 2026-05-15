@@ -3,16 +3,16 @@ let currentTask=new URLSearchParams(location.search).get("task"),latestData=null
 let selectedPhaseIdx=-1,selectedRole=null,selectedRoundKey=null,currentFile=null,translationSeq=0,lastScrolledKey=null;
 let eventSource=null,eventSourceTask=null,lastEventId=0,refreshTimer=null,logOpen=false,fileRefreshTimer=null;
 const translationCache=new Map();
-const rl={planner:"规划者",executor:"执行者",tester:"测试者",reviewer:"审阅者",judge:"裁决者",communicator:"交付者",orchestrator:"编排器"};
-const rlEn={planner:"Planner",executor:"Executor",tester:"Tester",reviewer:"Reviewer",judge:"Judge",communicator:"Communicator",orchestrator:"Orchestrator"};
-const pl={PLANNING_DRAFT:"规划草案",PLANNING_PEER_REVIEW:"规划互审",PLANNING_REVISION:"规划修订",PLAN_REVIEW:"方案审阅",PLAN_JUDGEMENT:"计划裁决",EXECUTION:"执行实现",PATCH_MERGE:"合并补丁",TESTING:"测试",TEST_JUDGEMENT:"测试裁决",FIXING:"修复",REVIEWING:"审阅",REVIEW_JUDGEMENT:"审阅裁决",REVIEW_FIXING:"审阅修复",REGRESSION_TESTING:"回归测试",FINAL_JUDGEMENT:"最终裁决",DELIVERY:"交付",MISC_RESPONSE:"直接回答",COMPLETED:"完成"};
-const plEn={PLANNING_DRAFT:"Planning",PLANNING_PEER_REVIEW:"Peer Review",PLANNING_REVISION:"Revision",PLAN_REVIEW:"Plan Review",PLAN_JUDGEMENT:"Plan Judge",EXECUTION:"Execution",PATCH_MERGE:"Patch Merge",TESTING:"Testing",TEST_JUDGEMENT:"Test Judge",FIXING:"Fixing",REVIEWING:"Review",REVIEW_JUDGEMENT:"Review Judge",REVIEW_FIXING:"Review Fix",REGRESSION_TESTING:"Regression",FINAL_JUDGEMENT:"Final Judge",DELIVERY:"Delivery",MISC_RESPONSE:"Response",COMPLETED:"Done"};
+const rl={planner:"规划者",executor:"执行者",tester:"测试者",reviewer:"审阅者",communicator:"交付者",orchestrator:"编排器"};
+const rlEn={planner:"Planner",executor:"Executor",tester:"Tester",reviewer:"Reviewer",communicator:"Communicator",orchestrator:"Orchestrator"};
+const pl={PLANNING_DRAFT:"规划草案",PLANNING_PEER_REVIEW:"规划互审",PLANNING_REVISION:"规划修订",PLAN_REVIEW:"方案审阅",EXECUTION:"执行实现",PATCH_MERGE:"合并补丁",TESTING:"测试",FIXING:"修复",REVIEWING:"审阅",REVIEW_FIXING:"审阅修复",REGRESSION_TESTING:"回归测试",DELIVERY:"交付",MISC_RESPONSE:"直接回答",COMPLETED:"完成"};
+const plEn={PLANNING_DRAFT:"Planning",PLANNING_PEER_REVIEW:"Peer Review",PLANNING_REVISION:"Revision",PLAN_REVIEW:"Plan Review",EXECUTION:"Execution",PATCH_MERGE:"Patch Merge",TESTING:"Testing",FIXING:"Fixing",REVIEWING:"Review",REVIEW_FIXING:"Review Fix",REGRESSION_TESTING:"Regression",DELIVERY:"Delivery",MISC_RESPONSE:"Response",COMPLETED:"Done"};
 const i18n={
   zh:{taskHistory:"任务历史",activityLog:"活动日志",selectFile:"点击文件按钮查看内容",clear:"清空",noTasks:"暂无任务",noPhases:"任务启动后显示流程",noRole:"选择角色查看详情",translating:"翻译中…",translatedByModel:"已翻译(模型)",translatedFallback:"已翻译(词表)",original:"原文"},
   en:{taskHistory:"Task History",activityLog:"Activity Log",selectFile:"Click a file button to view",clear:"Clear",noTasks:"No tasks yet",noPhases:"Pipeline appears after task starts",noRole:"Select a role to view details",translating:"Translating…",translatedByModel:"Translated (model)",translatedFallback:"Translated (glossary)",original:"Original"}
 };
-const phaseIcons={PLANNING_DRAFT:"📋",PLANNING_PEER_REVIEW:"👁",PLANNING_REVISION:"✏️",PLAN_REVIEW:"🔍",PLAN_JUDGEMENT:"⚖️",EXECUTION:"⚡",PATCH_MERGE:"🔀",TESTING:"🧪",TEST_JUDGEMENT:"⚖️",FIXING:"🔧",REVIEWING:"🔍",REVIEW_JUDGEMENT:"⚖️",REVIEW_FIXING:"🔧",REGRESSION_TESTING:"🧪",FINAL_JUDGEMENT:"⚖️",DELIVERY:"📦",MISC_RESPONSE:"💬",COMPLETED:"✅"};
-const roleOrder=["orchestrator","planner","executor","tester","reviewer","judge","communicator"];
+const phaseIcons={PLANNING_DRAFT:"📋",PLANNING_PEER_REVIEW:"👁",PLANNING_REVISION:"✏️",PLAN_REVIEW:"🔍",EXECUTION:"⚡",PATCH_MERGE:"🔀",TESTING:"🧪",FIXING:"🔧",REVIEWING:"🔍",REVIEW_FIXING:"🔧",REGRESSION_TESTING:"🧪",DELIVERY:"📦",MISC_RESPONSE:"💬",COMPLETED:"✅"};
+const roleOrder=["orchestrator","planner","executor","tester","reviewer","communicator"];
 const dateFmt=new Intl.DateTimeFormat(navigator.language||"zh-CN",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
 
 function t(k){return(i18n[uiLanguage]&&i18n[uiLanguage][k])||i18n.zh[k]||k}
@@ -199,7 +199,7 @@ function scrollCurrentPipelineNode(root){
 }
 
 function buildTimeline(phases,curPhase){
-  const wfOrder=["PLANNING_DRAFT","PLANNING_PEER_REVIEW","PLANNING_REVISION","PLAN_REVIEW","EXECUTION","PATCH_MERGE","TESTING","TEST_JUDGEMENT","FIXING","REVIEWING","REVIEW_FIXING","REGRESSION_TESTING","DELIVERY"];
+  const wfOrder=["PLANNING_DRAFT","PLANNING_PEER_REVIEW","PLANNING_REVISION","PLAN_REVIEW","EXECUTION","PATCH_MERGE","TESTING","FIXING","REVIEWING","REVIEW_FIXING","REGRESSION_TESTING","DELIVERY"];
   const existing=(phases||[]).map((p,i)=>({...p,phase_type:p.phase_type||p,timeline_index:p.timeline_index??i}));
   if(existing.length)return existing;
   const ci=wfOrder.indexOf(curPhase||"");
@@ -284,7 +284,7 @@ function renderAgentCards(runs){
   if(!runs.length)return`<div class="empty-msg">${esc(t("noRole"))}</div>`;
   return runs.map(r=>{
     const arts=(r.artifacts||[]).filter(a=>a.exists);
-  const deliveryTypes=["delivery.md","final_delivery.json","usage_guide.md","response.md","plan.md","decision.json","review_result.json","bug_report.md","tester_result.json","self_check.md","merged_patch_metadata.json"];
+  const deliveryTypes=["delivery.md","final_delivery.json","usage_guide.md","response.md","plan.md","review_result.json","bug_report.md","tester_result.json","self_check.md","merged_patch_metadata.json"];
     const priArts=arts.filter(a=>deliveryTypes.includes(a.artifact_type));
     const otherArts=arts.filter(a=>!deliveryTypes.includes(a.artifact_type));
     return`<div class="ag-card">
@@ -397,8 +397,8 @@ function failureKind(e){
   return "";
 }
 function flowLabel(et){
-  const zh={task_created:"任务创建",task_started:"任务启动",task_completed:"任务完成",task_failed:"任务失败",phase_started:"阶段开始",phase_completed:"阶段完成",phase_skipped:"阶段跳过",agent_started:"Agent启动",agent_heartbeat:"Agent运行",agent_completed:"Agent完成",agent_failed:"Agent失败",agent_retryable_failure:"Agent重试",backend_health_changed:"后端健康",backend_circuit_open:"后端熔断",patch_validated:"补丁门禁",test_gate:"测试门禁",runtime_readiness:"运行环境验证",delivery_published:"交付发布",judge_decision:"裁决"};
-  const en={task_created:"Task Created",task_started:"Task Started",task_completed:"Task Done",task_failed:"Task Failed",phase_started:"Phase Start",phase_completed:"Phase Done",phase_skipped:"Phase Skip",agent_started:"Agent Start",agent_heartbeat:"Agent Run",agent_completed:"Agent Done",agent_failed:"Agent Fail",agent_retryable_failure:"Agent Retry",backend_health_changed:"Backend Health",backend_circuit_open:"Backend Open",patch_validated:"Patch Gate",test_gate:"Test Gate",runtime_readiness:"Runtime Ready",delivery_published:"Delivery",judge_decision:"Judge"};
+  const zh={task_created:"任务创建",task_started:"任务启动",task_completed:"任务完成",task_failed:"任务失败",phase_started:"阶段开始",phase_completed:"阶段完成",phase_skipped:"阶段跳过",agent_started:"Agent启动",agent_heartbeat:"Agent运行",agent_completed:"Agent完成",agent_failed:"Agent失败",agent_retryable_failure:"Agent重试",backend_health_changed:"后端健康",backend_circuit_open:"后端熔断",patch_validated:"补丁门禁",test_gate:"测试门禁",runtime_readiness:"运行环境验证",delivery_published:"交付发布"};
+  const en={task_created:"Task Created",task_started:"Task Started",task_completed:"Task Done",task_failed:"Task Failed",phase_started:"Phase Start",phase_completed:"Phase Done",phase_skipped:"Phase Skip",agent_started:"Agent Start",agent_heartbeat:"Agent Run",agent_completed:"Agent Done",agent_failed:"Agent Fail",agent_retryable_failure:"Agent Retry",backend_health_changed:"Backend Health",backend_circuit_open:"Backend Open",patch_validated:"Patch Gate",test_gate:"Test Gate",runtime_readiness:"Runtime Ready",delivery_published:"Delivery"};
   return(uiLanguage==="en"?en[et]:zh[et])||et||"-";
 }
 

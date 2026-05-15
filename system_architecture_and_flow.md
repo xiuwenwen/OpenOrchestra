@@ -25,7 +25,6 @@ graph TD
         MAT[Materialized Repo Service]
         STAGE[Input Staging Service]
         WC
-        JUDGE[Judge Runner]
     end
 
     ORCH --> WF
@@ -34,7 +33,6 @@ graph TD
     ORCH --> PG
     ORCH --> MAT
     ORCH --> STAGE
-    ORCH --> JUDGE
     
     %% Resource Managers
     subgraph "Artifacts, State, and Contracts"
@@ -111,7 +109,7 @@ graph TD
     classDef core fill:#f9f,stroke:#333,stroke-width:2px;
     classDef manager fill:#bbf,stroke:#333,stroke-width:1px;
     classDef storage fill:#ddd,stroke:#333,stroke-width:1px;
-    class ORCH,WF,RUN,WC,VAL,JUDGE core;
+    class ORCH,WF,RUN,WC,VAL core;
     class WM,AM,SR,SCHEMA,VIS manager;
     class DB,FS_WS,FS_ART,FS_DEL storage;
 ```
@@ -163,17 +161,15 @@ stateDiagram-v2
     }
     
     state "Review Loop" as RL {
-        TEST_JUDGEMENT --> REVIEWING: Passed (Tests OK)
+        TESTING --> REVIEWING: tester_result.json status=tests_passed
         REVIEWING --> DELIVERY: Reviewer approves with runtime-ready verdict
 
         REVIEWING --> REVIEW_FIXING: Reviewer requests code or runtime fixes
         REVIEW_FIXING --> PATCH_MERGE_2: Update implementation
         PATCH_MERGE_2 --> REGRESSION_TESTING
-        REGRESSION_TESTING --> HARNESS_REGRESSION_GATE
-        HARNESS_REGRESSION_GATE --> REGRESSION_TESTING: Environment or test command repair needed
-        HARNESS_REGRESSION_GATE --> TEST_JUDGEMENT_2
-        TEST_JUDGEMENT_2 --> REVIEW_FIXING: Regression Failed
-        TEST_JUDGEMENT_2 --> REVIEWING: Regression Passed
+        REGRESSION_TESTING --> REGRESSION_TESTING: tester_result.json environment_dependency_issue=true
+        REGRESSION_TESTING --> REVIEW_FIXING: status=source_bug and environment_dependency_issue=false
+        REGRESSION_TESTING --> REVIEWING: status=tests_passed
     }
     
     state "Delivery Block" as DB {

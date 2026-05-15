@@ -11,7 +11,6 @@ ROLE_COUNT_ENV_KEYS = {
     "OO_EXECUTOR_COUNT": "executor",
     "OO_TESTER_COUNT": "tester",
     "OO_REVIEWER_COUNT": "reviewer",
-    "OO_JUDGE_COUNT": "judge",
     "OO_COMMUNICATOR_COUNT": "communicator",
 }
 ENV_CONFIG_SPECS: dict[str, tuple[tuple[str, ...], type]] = {
@@ -25,7 +24,6 @@ ENV_CONFIG_SPECS: dict[str, tuple[tuple[str, ...], type]] = {
     "OO_EXECUTOR_COUNT": (("roles", "executor", "count"), int),
     "OO_TESTER_COUNT": (("roles", "tester", "count"), int),
     "OO_REVIEWER_COUNT": (("roles", "reviewer", "count"), int),
-    "OO_JUDGE_COUNT": (("roles", "judge", "count"), int),
     "OO_COMMUNICATOR_COUNT": (("roles", "communicator", "count"), int),
     "OO_MAX_PLANNING_ROUNDS": (("limits", "max_planning_rounds"), int),
     "OO_PLANNING_PEER_REVIEW_LOOPS": (("limits", "planning_peer_review_loops"), int),
@@ -38,7 +36,6 @@ ENV_CONFIG_SPECS: dict[str, tuple[tuple[str, ...], type]] = {
     "OO_TIMEOUT_EXECUTOR": (("timeouts", "executor"), int),
     "OO_TIMEOUT_TESTER": (("timeouts", "tester"), int),
     "OO_TIMEOUT_REVIEWER": (("timeouts", "reviewer"), int),
-    "OO_TIMEOUT_JUDGE": (("timeouts", "judge"), int),
     "OO_TIMEOUT_COMMUNICATOR": (("timeouts", "communicator"), int),
     "OO_HEARTBEAT_INTERVAL_SECONDS": (("heartbeat", "interval_seconds"), int),
     "OO_UI_HOST": (("visualization", "host"), str),
@@ -49,7 +46,6 @@ ENV_CONFIG_SPECS: dict[str, tuple[tuple[str, ...], type]] = {
     "OO_CLAUDE_MAX_TOKENS_EXECUTOR": (("claude", "max_output_tokens", "executor"), int),
     "OO_CLAUDE_MAX_TOKENS_TESTER": (("claude", "max_output_tokens", "tester"), int),
     "OO_CLAUDE_MAX_TOKENS_REVIEWER": (("claude", "max_output_tokens", "reviewer"), int),
-    "OO_CLAUDE_MAX_TOKENS_JUDGE": (("claude", "max_output_tokens", "judge"), int),
     "OO_CLAUDE_MAX_TOKENS_COMMUNICATOR": (("claude", "max_output_tokens", "communicator"), int),
     "OO_CLAUDE_CONTEXT_WINDOW_TOKENS": (("claude", "context_window_tokens"), int),
     "OO_CLAUDE_CONTEXT_WINDOW_BUFFER_TOKENS": (("claude", "context_window_buffer_tokens"), int),

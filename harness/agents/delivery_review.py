@@ -76,7 +76,7 @@ class DeliveryContractReviewer:
 
         stdout_path = run_dir / "stdout.log"
         stderr_path = run_dir / "stderr.log"
-        env = claude_env_for_role(context.config, "judge", prompt) if backend == "claude" else None
+        env = claude_env_for_role(context.config, "reviewer", prompt) if backend == "claude" else None
         settings_path = write_claude_invocation_settings(run_dir, env or {}) if backend == "claude" else None
         command = self._command(backend, run_dir, settings_path)
         (run_dir / "command.txt").write_text(" ".join(command), encoding="utf-8")
@@ -173,7 +173,7 @@ class DeliveryContractReviewer:
                 "provided delivery.md failure is only an instruction-following/format issue.",
                 "- Use `retry` when any required non-delivery output is missing or empty, when delivery.md says the "
                 "role truly failed, or when the task prompt required work that the output clearly did not complete.",
-                "- A negative business result such as failed tests, blocking bugs, changes required, or judge fail "
+                "- A negative business result such as failed tests, blocking bugs, or changes required "
                 "is not by itself a role delivery failure.",
                 "- If you choose `accept`, set `delivery_return_code` to 0, `instruction_following_issue` to true, "
                 "and `actual_role_success` to true.",

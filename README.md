@@ -2,57 +2,23 @@
 
 [![CI](https://github.com/xiuwenwen/OpenOrchestra/actions/workflows/ci.yml/badge.svg)](https://github.com/xiuwenwen/OpenOrchestra/actions/workflows/ci.yml)
 
-OpenOrchestra 是一个面向成熟编码 Agent 的本地编排器。它协调 Codex CLI、Claude Code、Gemini CLI、Qwen CLI 等 Agent 完成规划、执行、测试、审查、裁决和交付。
-
-OpenOrchestra is a local orchestration harness for mature coding agents such as Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. It coordinates planning, execution, testing, review, judgement, and delivery.
-
-OpenOrchestra 是一个基于 artifact 的 Coding Agent 协作编排内核。Agent 不直接聊天，而是通过版本化产物、客观门禁和结构化裁决协作。
-
 OpenOrchestra is an artifact-mediated orchestration kernel for coding agents. Agents collaborate through versioned artifacts, objective gates, and structured decisions rather than direct free-form chat.
 
-OpenOrchestra 不内置文件编辑、Shell、测试等工具。Agent 在隔离工作区里使用自己的工具完成读写和命令执行；OpenOrchestra 负责阶段流转、重试、超时、日志、artifact 校验、patch gate、judge gate 和最终交付。
-
-OpenOrchestra does not implement internal file, shell, edit, or test tools. Agents work inside isolated workspaces with their own tools; OpenOrchestra handles phase control, retries, timeouts, logs, artifact validation, patch gates, judge gates, and final delivery.
-
-## Features / 功能
-
-- 任务、阶段、Agent run、artifact 和 judge decision 使用 SQLite 记录。
-- Isolated `workspaces/`, versioned `artifacts/`, and published `deliver/` outputs.
-- 支持 `codex`、`claude`、`gemini`、`qwen` 和测试用 `mock` backend。
-- Web UI 默认启动，展示实时任务流、流程循环、角色状态、stdout/stderr 和交付文件。
-- PATCH_MERGE 产物经过 hard gate：unified diff 格式、scope、`git apply --check`、`git diff --check`、敏感路径和异常大小检查。
-- Judge 使用结构化证据，不直接相信自然语言测试结论。
-- 所有角色交付使用统一 numeric return code。
+OpenOrchestra 是一个基于 artifact 的 Coding Agent 协作编排内核。
 
 ## Quick Start / 快速开始
 
-### 1. Clone / 克隆
+### 1. Install / 安装
 
 ```bash
 git clone git@github.com:xiuwenwen/OpenOrchestra.git
 cd OpenOrchestra
-```
-
-HTTPS:
-
-```bash
-git clone https://github.com/xiuwenwen/OpenOrchestra.git
-cd OpenOrchestra
-```
-
-### 2. Install / 安装
-
-OpenOrchestra requires Python 3.11 or newer.
-
-OpenOrchestra 需要 Python 3.11 或更高版本。
-
-```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.lock
 .venv/bin/python -m pip install -e .
 ```
 
-Make sure at least one real backend is installed and authenticated:
+OpenOrchestra requires Python 3.11 or newer.
 
 确保至少安装并登录一个真实 backend：
 
@@ -61,35 +27,25 @@ Make sure at least one real backend is installed and authenticated:
 - Gemini CLI: `gemini` must be available in `PATH`.
 - Qwen CLI: `qwen` must be available in `PATH`; non-interactive runs may require `qwen.auth_type`.
 
-### 3. Run / 运行
-
-默认命令会启动交互模式、Web UI 和实时输出。
-
-The default command starts interactive mode, the Web UI, and live progress output.
+### 2. Start Interactive Mode / 启动交互模式
 
 ```bash
 ./orchestra
 ```
 
-The UI usually listens on:
-
-UI 通常监听：
+The default command starts interactive mode, the Web UI, and live progress output. The UI usually listens on:
 
 ```text
 http://127.0.0.1:8765
 ```
 
-Then type a task:
-
-然后输入任务：
+然后直接输入任务：
 
 ```text
 harness[claude]> 做一个根据 IP 查询天气的小工具
 ```
 
-Run a one-shot task:
-
-一次性执行任务：
+### 3. Run One-Shot Tasks / 一次性执行任务
 
 ```bash
 ./orchestra --backend claude "做一个根据 IP 查询天气的小工具"
@@ -98,9 +54,7 @@ Run a one-shot task:
 ./orchestra --backend qwen "review this repository"
 ```
 
-Choose a workflow explicitly:
-
-显式指定工作流：
+### 4. Choose A Workflow / 指定工作流
 
 ```bash
 ./orchestra --workflow new_project "做一个待办事项 CLI"
@@ -109,11 +63,7 @@ Choose a workflow explicitly:
 ./orchestra --workflow misc "解释一下这个项目怎么运行"
 ```
 
-### 4. Read Results / 查看结果
-
-Project workflows print these user-facing fields:
-
-项目类工作流会打印这些面向用户的字段：
+### 5. Read Results / 查看结果
 
 - `project_dir`: delivered project directory / 交付工程目录
 - `run_command`: command to run or verify the project / 运行或验证命令
@@ -141,11 +91,29 @@ source/
 artifacts/
 ```
 
-### 5. Test / 测试
+### 6. Test OpenOrchestra / 测试工程自身
 
 ```bash
 .venv/bin/python -m pytest
 ```
+
+## Project Highlights / 工程特色
+
+OpenOrchestra coordinates mature coding agents such as Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Agents do not collaborate through direct free-form chat; they collaborate through versioned artifacts, objective gates, and structured decisions.
+
+OpenOrchestra 面向成熟编码 Agent，例如 Codex CLI、Claude Code、Gemini CLI、Qwen CLI。Agent 不直接聊天，而是通过版本化产物、客观门禁和结构化裁决协作。
+
+OpenOrchestra does not implement internal file, shell, edit, or test tools. Agents work inside isolated workspaces with their own tools; OpenOrchestra handles phase control, retries, timeouts, logs, artifact validation, patch gates, structured routing, and final delivery.
+
+OpenOrchestra 不内置文件编辑、Shell、测试等工具。Agent 在隔离工作区里使用自己的工具完成读写和命令执行；OpenOrchestra 负责阶段流转、重试、超时、日志、artifact 校验、patch gate、结构化路由和最终交付。
+
+- 任务、阶段、Agent run 和 artifact 使用 SQLite 记录。
+- Isolated `workspaces/`, versioned `artifacts/`, and published `deliver/` outputs.
+- 支持 `codex`、`claude`、`gemini`、`qwen` 和测试用 `mock` backend。
+- Web UI 默认启动，展示实时任务流、流程循环、角色状态、stdout/stderr 和交付文件。
+- PATCH_MERGE 产物经过 hard gate：unified diff 格式、scope、`git apply --check`、`git diff --check`、敏感路径和异常大小检查。
+- Tester/reviewer 使用结构化证据和路由码，不直接相信自然语言测试结论。
+- 所有角色交付使用统一 numeric return code。
 
 ## Interactive Commands / 交互命令
 
@@ -190,7 +158,6 @@ OO_PLANNER_COUNT=2
 OO_EXECUTOR_COUNT=2
 OO_TESTER_COUNT=1
 OO_REVIEWER_COUNT=1
-OO_JUDGE_COUNT=1
 OO_COMMUNICATOR_COUNT=1
 OO_TIMEOUT_EXECUTOR=3600
 OO_UI_HOST=127.0.0.1
@@ -222,7 +189,13 @@ Set a role timeout to `0` to disable timeout enforcement for that role. Use posi
 
 `OO_MAX_TEST_FIX_ROUNDS=10` 是测试/修复循环的默认保护上限。达到上限后，交互模式会询问额外给 10 轮、退出，或一直修复直到通过。只有明确需要无界循环时才设置 `OO_MAX_TEST_FIX_ROUNDS=unlimited`。
 
-## Test Runtime Boundary / 测试运行边界
+## Internal Flow / 内部流程
+
+OpenOrchestra separates user intent, workflow routing, agent execution, testing, review, patch validation, and final delivery. The workflow engine decides the phase sequence; role contracts define each agent's required artifacts; gates consume structured JSON results instead of free-form claims.
+
+OpenOrchestra 将用户意图、流程路由、Agent 执行、测试、审查、patch 校验和最终交付拆开处理。Workflow engine 决定阶段顺序；role contract 定义每个 Agent 必须交付哪些产物；gate 消费结构化 JSON 结果，而不是自然语言判断。
+
+### Test Runtime Boundary / 测试运行边界
 
 OpenOrchestra itself runs on the host: orchestration, UI, state, artifacts, backend CLIs, and Docker daemon probing stay on the local machine. Project setup and test commands run in the selected test runtime.
 
@@ -241,13 +214,13 @@ Host Python paths such as `/Users/.../.venv/bin/python` are invalid inside Docke
 
 宿主机 Python 路径，例如 `/Users/.../.venv/bin/python`，不能进入 Docker 命令。如果 tester 提供的 Docker setup/test command 泄漏宿主机路径，Harness 会把它记录为环境/测试命令门禁失败，并回到 tester 修复环境，而不是继续让 Agent 修改源码。
 
-## Workflows / 工作流
+### Workflows / 工作流
 
 OpenOrchestra supports four workflow types.
 
 OpenOrchestra 支持四类工作流。
 
-### `new_project`
+#### `new_project`
 
 用于从零创建项目。流程包含规划互审、方案合并审阅、执行、patch merge、测试、审查、必要的审查修复/回归测试和交付。
 
@@ -265,11 +238,11 @@ REVIEWING / REVIEW_FIXING / REGRESSION_TESTING loop when tester_result.json repo
 DELIVERY
 ```
 
-### `bugfix`
+#### `bugfix`
 
-用于修复已有项目。它跳过完整规划，先在修复、patch merge、测试和测试裁决之间循环，通过后进入审查、必要的审查修复/回归测试和交付。
+用于修复已有项目。它跳过完整规划，先在修复、patch merge 和测试之间循环，通过后进入审查、必要的审查修复/回归测试和交付。
 
-Used to repair an existing project. It skips full planning, loops over fixing, patch merge, testing, and test judgement, then runs reviewer verdict handling before delivery.
+Used to repair an existing project. It skips full planning, loops over fixing, patch merge, and testing, then runs reviewer verdict handling before delivery.
 
 ```text
 FIXING
@@ -284,19 +257,19 @@ Tester owns test-environment repair and command execution. It must write `tester
 
 tester 负责测试环境修复和命令执行，必须写入 `tester_result.json`，其中 `environment_dependency_issue` 表示环境依赖是否仍有问题，状态只能是 `tests_passed | source_bug | environment_blocked`；Harness 先消费 `environment_dependency_issue`，环境问题留在 tester 修复 loop，不再在 tester 后单独跑 test gate。
 
-### `feature_change`
+#### `feature_change`
 
 用于修改已有项目或增加功能。它先做规划和兼容性检查，再进入执行、测试、审查和回归验证。
 
 Used to modify an existing project or add a feature. It plans compatibility and blast radius first, then executes, tests, reviews, and runs regression checks.
 
-### `misc`
+#### `misc`
 
 用于解释、分析、建议等不需要创建或修改项目文件的请求。它直接调用选中的 backend，不创建 Harness 阶段和 artifact。
 
 Used for explanations, analysis, and advice that do not create or modify project files. It calls the selected backend directly and does not create Harness phases or artifacts.
 
-## Artifact Contract / 交付契约
+### Artifact Contract / 交付契约
 
 Every role must write `delivery.md`. It is a JSON role return envelope, not the business verdict:
 
@@ -334,15 +307,15 @@ Every required Markdown artifact must also contain:
 artifact_result_code: 0
 ```
 
-Business verdicts must use structured machine fields such as `tester_result.json.status`, `review_result.json.review_decision_code`, `peer_review_code`, `decision.json.decision`, and `final_delivery_code`. Do not copy those verdict codes into `return_code` or `artifact_result_code`.
+Business verdicts must use structured machine fields such as `tester_result.json.status`, `review_result.json.review_decision_code`, `peer_review_code`, and `final_delivery_code`. Do not copy those verdict codes into `return_code` or `artifact_result_code`.
 
-业务判断必须使用结构化机器字段，例如 `tester_result.json.status`、`review_result.json.review_decision_code`、`peer_review_code`、`decision.json.decision` 和 `final_delivery_code`。不要把这些业务判断码复制到 `return_code` 或 `artifact_result_code`。
+业务判断必须使用结构化机器字段，例如 `tester_result.json.status`、`review_result.json.review_decision_code`、`peer_review_code` 和 `final_delivery_code`。不要把这些业务判断码复制到 `return_code` 或 `artifact_result_code`。
 
-## Patch Gate / 补丁门禁
+### Patch Gate / 补丁门禁
 
-`PATCH_MERGE` produces the authoritative `merged_patch.diff`. Harness validates it before tester, reviewer, judge, or communicator can trust it.
+`PATCH_MERGE` produces the authoritative `merged_patch.diff`. Harness validates it before tester, reviewer, or communicator can trust it.
 
-`PATCH_MERGE` 产出权威 `merged_patch.diff`。Harness 会先验证它，再交给 tester、reviewer、judge 和 communicator。
+`PATCH_MERGE` 产出权威 `merged_patch.diff`。Harness 会先验证它，再交给 tester、reviewer 和 communicator。
 
 The gate checks:
 

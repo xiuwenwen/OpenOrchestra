@@ -11,7 +11,6 @@ agent_backend:
   executor: "codex"
   tester: "codex"
   reviewer: "codex"
-  judge: "codex"
   communicator: "codex"
 
 roles:
@@ -22,8 +21,6 @@ roles:
   tester:
     count: 1
   reviewer:
-    count: 1
-  judge:
     count: 1
   communicator:
     count: 1
@@ -43,7 +40,6 @@ timeouts:
   executor: 3600
   tester: 1800
   reviewer: 1800
-  judge: 1200
   communicator: 1200
 
 heartbeat:
@@ -68,7 +64,6 @@ claude:
     executor: 64000
     tester: 64000
     reviewer: 64000
-    judge: 64000
     communicator: 64000
 
 artifact_input:

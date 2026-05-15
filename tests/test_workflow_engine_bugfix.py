@@ -19,21 +19,17 @@ from harness.core.state_machine import (
     DELIVERY,
     EXECUTION,
     FAILED,
-    FINAL_JUDGEMENT,
     FIXING,
     PATCH_MERGE,
     PLAN_REVIEW,
-    PLAN_JUDGEMENT,
     PLANNING_DRAFT,
     PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
     REGRESSION_TESTING,
     REVIEW_FIXING,
-    REVIEW_JUDGEMENT,
     REVIEWING,
     RUNNING,
     TESTING,
-    TEST_JUDGEMENT,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 from harness.patch.gate import materialized_repo_markdown, run_patch_gate
@@ -433,8 +429,6 @@ def test_orchestrator_feature_change_flow_completes(tmp_path: Path) -> None:
     assert phases[0] == "PLANNING_DRAFT"
     assert "EXECUTION" in phases
     assert "REVIEWING" in phases
-    assert "REVIEW_JUDGEMENT" not in phases
-    assert FINAL_JUDGEMENT not in phases
     assert final_delivery.exists()
 
 

@@ -85,7 +85,7 @@ class DashboardState:
 
 
 class DashboardProgressReporter(ConsoleProgressReporter):
-    ROLES = ("planner", "executor", "tester", "reviewer", "judge", "communicator", "orchestrator")
+    ROLES = ("planner", "executor", "tester", "reviewer", "communicator", "orchestrator")
 
     def __init__(self) -> None:
         super().__init__()
@@ -133,9 +133,7 @@ class DashboardProgressReporter(ConsoleProgressReporter):
                 "PLANNING_PEER_REVIEW",
                 "PLANNING_REVISION",
                 "PLAN_REVIEW",
-                "PLAN_JUDGEMENT",
                 "TESTING",
-                "TEST_JUDGEMENT",
                 "FIXING",
                 "PATCH_MERGE",
                 "EXECUTION",
@@ -145,7 +143,7 @@ class DashboardProgressReporter(ConsoleProgressReporter):
             and event.round_id is not None
         ):
             self.state.test_round = event.round_id
-        if event.phase in {"REVIEWING", "REVIEW_JUDGEMENT", "REVIEW_FIXING", "REGRESSION_TESTING"} and event.round_id is not None:
+        if event.phase in {"REVIEWING", "REVIEW_FIXING", "REGRESSION_TESTING"} and event.round_id is not None:
             self.state.review_round = event.round_id
         if "result_path" in event.data:
             self.state.result_path = str(event.data["result_path"])

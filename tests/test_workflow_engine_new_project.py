@@ -19,21 +19,17 @@ from harness.core.state_machine import (
     DELIVERY,
     EXECUTION,
     FAILED,
-    FINAL_JUDGEMENT,
     FIXING,
     PATCH_MERGE,
     PLAN_REVIEW,
-    PLAN_JUDGEMENT,
     PLANNING_DRAFT,
     PLANNING_PEER_REVIEW,
     PLANNING_REVISION,
     REGRESSION_TESTING,
     REVIEW_FIXING,
-    REVIEW_JUDGEMENT,
     REVIEWING,
     RUNNING,
     TESTING,
-    TEST_JUDGEMENT,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, NEW_PROJECT
 from harness.patch.gate import materialized_repo_markdown, run_patch_gate
@@ -90,7 +86,6 @@ def test_orchestrator_mock_flow_completes_and_generates_delivery(tmp_path: Path)
     assert final_delivery.name == "final_delivery.json"
     assert "completed" in final_delivery.read_text(encoding="utf-8")
     phases = [phase["phase_type"] for phase in orchestrator.repository.list_phases(task_id)]
-    assert FINAL_JUDGEMENT not in phases
     assert orchestrator.repository.list_artifacts(task_id, "final_delivery.json")
     usage_guides = orchestrator.repository.list_artifacts(task_id, "usage_guide.md")
     assert usage_guides
@@ -178,8 +173,7 @@ def test_failed_exhausted_new_project_continue_appends_new_fix_window(monkeypatc
         orchestrator.repository.create_phase(task_id, phase_type, "executor", round_id, status="COMPLETED")
         orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", round_id, status="COMPLETED")
         orchestrator.repository.create_phase(task_id, TESTING, "tester", round_id, status="COMPLETED")
-        orchestrator.repository.create_phase(task_id, TEST_JUDGEMENT, "judge", round_id, status="COMPLETED")
-    orchestrator.repository.update_task(task_id, status=FAILED, current_phase=TEST_JUDGEMENT, current_role="judge")
+    orchestrator.repository.update_task(task_id, status=FAILED, current_phase=TESTING, current_role="tester")
     called: list[tuple[str, int]] = []
     validation_rounds: list[int] = []
     orchestrator._active_task_id = task_id
@@ -273,7 +267,6 @@ def test_unlimited_failed_new_project_resume_starts_after_highest_round(monkeypa
         orchestrator.repository.create_phase(task_id, phase_type, "executor", round_id, status="COMPLETED")
         orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", round_id, status="COMPLETED")
         orchestrator.repository.create_phase(task_id, TESTING, "tester", round_id, status="COMPLETED")
-        orchestrator.repository.create_phase(task_id, TEST_JUDGEMENT, "judge", round_id, status="COMPLETED")
     orchestrator._active_task_id = task_id
     orchestrator._active_task_resume_status = FAILED
     called: list[tuple[str, int]] = []

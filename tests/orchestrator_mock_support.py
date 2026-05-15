@@ -17,7 +17,6 @@ def _config(tmp_path: Path) -> dict:
             "executor": "mock",
             "tester": "mock",
             "reviewer": "mock",
-            "judge": "mock",
             "communicator": "mock",
         },
         "roles": {
@@ -25,7 +24,6 @@ def _config(tmp_path: Path) -> dict:
             "executor": {"count": 2},
             "tester": {"count": 2},
             "reviewer": {"count": 2},
-            "judge": {"count": 1},
             "communicator": {"count": 1},
         },
         "limits": {
@@ -39,7 +37,6 @@ def _config(tmp_path: Path) -> dict:
             "executor": 5,
             "tester": 5,
             "reviewer": 5,
-            "judge": 5,
             "communicator": 5,
         },
         "testing": {

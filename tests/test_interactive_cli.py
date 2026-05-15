@@ -34,7 +34,6 @@ def _config(tmp_path: Path) -> dict:
             "executor": "mock",
             "tester": "mock",
             "reviewer": "mock",
-            "judge": "mock",
             "communicator": "mock",
         },
         "roles": {
@@ -42,7 +41,6 @@ def _config(tmp_path: Path) -> dict:
             "executor": {"count": 1},
             "tester": {"count": 1},
             "reviewer": {"count": 1},
-            "judge": {"count": 1},
             "communicator": {"count": 1},
         },
         "limits": {
@@ -56,7 +54,6 @@ def _config(tmp_path: Path) -> dict:
             "executor": 5,
             "tester": 5,
             "reviewer": 5,
-            "judge": 5,
             "communicator": 5,
         },
         "policy": {
@@ -77,7 +74,6 @@ def _config(tmp_path: Path) -> dict:
                 "executor": 64000,
                 "tester": 64000,
                 "reviewer": 64000,
-                "judge": 64000,
                 "communicator": 64000,
             }
         },
@@ -1056,7 +1052,6 @@ def test_ensure_user_env_defaults_adds_missing_config_values(tmp_path: Path) -> 
     assert values["OO_EXECUTOR_COUNT"] == "2"
     assert values["OO_TESTER_COUNT"] == "3"
     assert values["OO_REVIEWER_COUNT"] == "1"
-    assert values["OO_JUDGE_COUNT"] == "1"
     assert values["OO_COMMUNICATOR_COUNT"] == "1"
     assert values["OO_WORKSPACE_ROOT"] == str(tmp_path / "workspaces")
     assert values["OO_UI_PORT"] == "8765"

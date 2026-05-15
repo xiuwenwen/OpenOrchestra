@@ -280,7 +280,7 @@ BUGFIX_PLANNER_SPECIALIZATIONS: dict[int, list[tuple[str, str, list[str]]]] = {
                 "List regression-sensitive behavior, compatibility expectations, and edge cases the fix must not break.",
                 "State that runnable tests or smoke checks must be run when the repository provides them and the environment allows it.",
                 "If automated tests may be blocked, define the smallest executable reproduction script or command Tester should try first.",
-                "Call out validation blind spots that should cause Tester or Judge to reject static-only approval.",
+                "Call out validation blind spots that should cause Tester or Reviewer to reject static-only approval.",
             ],
         ),
     ],

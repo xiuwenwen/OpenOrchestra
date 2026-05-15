@@ -72,9 +72,9 @@ class PromptBuilder:
                 "- Every `merged_patch.diff` artifact must have sibling `merged_patch_metadata.json`.",
                 "- Merged patch metadata must declare `patch_artifact`, `base_source_type`, `base_source_path`, `base_round`, `base_task_id`, `apply_target`, `patch_scope`, `changed_files`, `expected_apply_command`, and `compatibility_notes`.",
                 "- Valid merged `patch_scope` value is `merged_authoritative`.",
-                "- `patch.diff` and `fix_patch.diff` are candidate inputs for PATCH_MERGE only; tester, reviewer, judge, and communicator roles must not treat them as final deliverables.",
+                "- `patch.diff` and `fix_patch.diff` are candidate inputs for PATCH_MERGE only; tester, reviewer, and communicator roles must not treat them as final deliverables.",
                 "- Tester roles must evaluate the runnable repository directory directly; do not depend on executor narrative reports.",
-                "- Reviewer and judge roles must use only the repository directory and artifacts explicitly listed in this prompt; do not search for hidden historical artifacts.",
+                "- Reviewer roles must use only the repository directory and artifacts explicitly listed in this prompt; do not search for hidden historical artifacts.",
                 "",
                 "## Required Output Files",
                 required_outputs,
@@ -118,41 +118,6 @@ class PromptBuilder:
         return output_contract_lines_for(context.role, context.phase, context.required_outputs)
 
     def _phase_specific_rules(self, context: AgentRunContext) -> list[str]:
-        if context.role == "judge":
-            if context.phase == "TEST_JUDGEMENT":
-                return [
-                    "- For TEST_JUDGEMENT, `decision.json` must contain a top-level `decision` string with value `pass` or `fail`; this JSON enum is state-machine data and is the only exception to the Markdown numeric-code rule.",
-                    "- `decision.json` must include `decision_code`, `summary`, `reason`, and `evidence` summarizing objective gate facts, tester_result.json, changed files, and any blocking findings you relied on.",
-                    "- `decision.json.decision` is the test verdict. It must not be copied into the `delivery.md` return code.",
-                    "- If you choose `decision: fail` because tests failed, write JSON `return_code: 0` in `delivery.md` as long as `decision.json` and `delivery.md` are complete.",
-                    "- Set `decision.json.decision_code` to `0` for pass or `-1` for fail.",
-                    "- Do not decide objective facts from natural-language reports. Use structured Harness evidence in `objective_gate.md` and `tester_result.json`.",
-                    "- Treat `selected_plan.json.acceptance_oracles` and `tester_result.json.oracle_results` as the structured acceptance evidence; do not infer a different acceptance baseline from prose.",
-                    "- Use `pass` only when objective patch evidence passed and tester_result.json reports `tests_passed`.",
-                    "- Use `fail` when objective evidence is missing/failed, tester_result.json is missing/invalid, or the tester report shows blocking bugs.",
-                ]
-            if context.phase in {"REVIEW_JUDGEMENT", "FINAL_JUDGEMENT", "PLAN_JUDGEMENT"}:
-                rules = [
-                    f"- For {context.phase}, `decision.json` must contain a top-level `decision` string with value `approved` or `changes_required`; this JSON enum is state-machine data and is the only exception to the Markdown numeric-code rule.",
-                    "- Use `approved` only when the artifact set satisfies the current phase contract.",
-                    "- Use `changes_required` when required artifacts are missing, evidence is weak, or unresolved risks block progression.",
-                    "- `decision.json.decision` is the phase verdict. It must not be copied into the `delivery.md` return code.",
-                    "- If you choose `changes_required`, write JSON `return_code: 0` in `delivery.md` as long as `decision.json` and `delivery.md` are complete.",
-                    "- Set `decision.json.decision_code` to `0` for approved or `1` for changes_required.",
-                    "- `decision.json` must include `summary`, `reason`, and `evidence` with the structured facts used for the decision; keep semantic judgement separate from objective gate facts.",
-                ]
-                if context.phase in {"REVIEW_JUDGEMENT", "FINAL_JUDGEMENT"}:
-                    rules.extend(
-                        [
-                            "- Treat `merged_patch.diff` as the authoritative implementation artifact.",
-                            "- Treat `merged_patch_metadata.json` as required baseline evidence for the authoritative implementation artifact.",
-                            "- Treat `patch_validation.md` as Harness evidence for whether the authoritative patch applies cleanly.",
-                            "- Treat `patch_gate_result.json` as structured Harness evidence for patch-gate failure type and command output.",
-                            "- Treat `objective_gate.md` and `tester_result.json` as hard Harness evidence; do not approve when either reports fail.",
-                            "- Do not approve based on raw `patch.diff` or `fix_patch.diff` when `merged_patch.diff` is absent, metadata is absent, or metadata is inconsistent.",
-                        ]
-                    )
-                return rules
         if context.role == "executor" and context.phase == "MISC_RESPONSE":
             return [
                 "- This is an informational response workflow, not an implementation workflow.",
@@ -173,7 +138,7 @@ class PromptBuilder:
                 "- Do not select a patch based only on filename, artifact version, model wording, or previous role confidence.",
                 "- Prior `merged_patch.diff` artifacts are historical evidence, not candidates to reuse, unless `merged_patch_metadata.json` proves they target the same baseline and apply target as the current repository.",
                 "- Reject or omit candidates that conflict with the current repository baseline or cannot be reconciled into one coherent merged patch.",
-                "- Produce exactly one authoritative `merged_patch.diff` that represents the implementation candidate downstream roles must test, review, judge, and deliver.",
+                "- Produce exactly one authoritative `merged_patch.diff` that represents the implementation candidate downstream roles must test, review, and deliver.",
                 "- Produce `merged_patch_metadata.json` next to `merged_patch.diff`; it must declare `patch_artifact`, selected candidate patch artifacts, baseline compatibility decision, current `apply_target`, and `patch_scope: merged_authoritative`.",
                 "- Do not concatenate blindly. Resolve overlaps, choose compatible changes, and explain any omitted or adjusted candidate patch in `merged_patch_metadata.json.merge_report`.",
                 "- `merged_patch.diff` must be a valid git-style unified diff with `diff --git` file headers and must apply with `git apply --check --whitespace=nowarn`.",
@@ -372,7 +337,7 @@ class PromptBuilder:
                 "- `final_delivery.json` must include handoff fields for `project_dir`, `run_command`, and `dependency_install` when they are known.",
                 "- `project_dir` must point to the delivered source/project directory when available, not merely to Harness internal artifact files.",
                 "- `run_command` must be the exact command the user should execute from the project directory.",
-                "- Use `selected_plan.json`, final executor artifacts, final `bug_report.md`, and final `tester_result.json` as your primary sources of truth. Do not pad the customer handoff with judge chatter, gate reports, or internal retry history.",
+                "- Use `selected_plan.json`, final executor artifacts, final `bug_report.md`, and final `tester_result.json` as your primary sources of truth. Do not pad the customer handoff with gate reports or internal retry history.",
                 "- Before deciding dependency instructions, inspect the delivered project files, final `tester_result.json`, and referenced run/test commands for third-party runtime or test dependencies that may be missing from the user's current Python/Node/system environment.",
                 "- `dependency_install` must be an exact one-command dependency installer when dependencies exist; prefer `bash install_dependencies.sh` or a command that creates an isolated environment and installs from `requirements.txt`/lock files. Use `none` only when no dependency installation is required.",
                 "- The expected success path is precomputed before publishing; Harness will create/copy the final files there after this communicator phase succeeds.",

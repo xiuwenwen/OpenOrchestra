@@ -29,7 +29,6 @@ def _config(tmp_path: Path) -> dict:
             "executor": "claude",
             "tester": "claude",
             "reviewer": "claude",
-            "judge": "claude",
             "communicator": "claude",
         },
         "roles": {
@@ -37,7 +36,6 @@ def _config(tmp_path: Path) -> dict:
             "executor": {"count": 1},
             "tester": {"count": 1},
             "reviewer": {"count": 1},
-            "judge": {"count": 1},
             "communicator": {"count": 1},
         },
         "limits": {"max_agent_retry": 2},

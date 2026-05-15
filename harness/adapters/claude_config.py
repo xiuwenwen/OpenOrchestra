@@ -16,7 +16,6 @@ DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE = {
     "executor": 64000,
     "tester": 64000,
     "reviewer": 64000,
-    "judge": 64000,
     "communicator": 64000,
 }
 DEFAULT_MAX_OUTPUT_TOKENS = 16000

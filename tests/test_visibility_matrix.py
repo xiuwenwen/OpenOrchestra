@@ -8,7 +8,7 @@ def test_visibility_matrix_renders_contract_table() -> None:
 
     assert "# Generated Role/Phase Visibility Matrix" in text
     assert "| Target role | Target phase | Required outputs | Input budget | Source role |" in text
-    assert "| judge | TEST_JUDGEMENT | `decision.json`, `delivery.md`" in text
+    assert "| reviewer | REVIEWING | `review_result.json`, `delivery.md`" in text
 
 
 def test_generated_visibility_matrix_documents_tester_repair_inputs() -> None:
