@@ -39,6 +39,7 @@ class TesterResult:
     payload: dict[str, Any]
     environment_dependency_issue: bool = False
     oracle_results: tuple[dict[str, Any], ...] = ()
+    environment_ready: bool | None = None
 
     @property
     def tests_passed(self) -> bool:
@@ -78,6 +79,7 @@ def load_tester_result(path: Path) -> TesterResult:
         )
 
     environment_dependency_issue = _required_bool_field(payload, "environment_dependency_issue", path)
+    environment_ready = _optional_bool_field(payload, "environment_ready", path)
     if status == TESTS_PASSED and environment_dependency_issue:
         raise TesterResultError(f"{path} cannot report tests_passed while environment_dependency_issue is true")
     if status == ENVIRONMENT_BLOCKED and not environment_dependency_issue:
@@ -96,6 +98,7 @@ def load_tester_result(path: Path) -> TesterResult:
         summary=summary,
         artifact_path=path,
         payload=payload,
+        environment_ready=environment_ready,
         environment_dependency_issue=environment_dependency_issue,
         oracle_results=tuple(item for item in oracle_results if isinstance(item, dict)),
     )
@@ -123,3 +126,18 @@ def _required_bool_field(payload: dict[str, Any], field: str, path: Path) -> boo
         if normalized == "false":
             return False
     raise TesterResultError(f"{path} field {field!r} must be a boolean")
+
+
+def _optional_bool_field(payload: dict[str, Any], field: str, path: Path) -> bool | None:
+    if field not in payload:
+        return None
+    value = payload[field]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+    raise TesterResultError(f"{path} field {field!r} must be a boolean when present")

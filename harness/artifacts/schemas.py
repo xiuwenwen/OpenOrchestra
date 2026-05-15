@@ -76,7 +76,9 @@ def _phases(*phases: str) -> frozenset[str]:
     return frozenset(phases)
 
 
-PLANNING_ARTIFACTS = _types("plan.md", "assumptions.md", "risk.md", "todo_breakdown.json")
+CONTRACT_DRAFT_ARTIFACTS = _types("environment_contract_draft.json", "validation_contract_draft.json")
+CONTRACT_FINAL_ARTIFACTS = _types("environment_contract.json", "validation_contract.json")
+PLANNING_ARTIFACTS = _types("plan.md", "assumptions.md", "risk.md", "todo_breakdown.json") | CONTRACT_DRAFT_ARTIFACTS
 PROJECT_CONTEXT_ARTIFACTS = _types("project_context.md")
 TEST_REPORT_ARTIFACTS = _types("bug_report.md", "tester_result.json")
 JUDGE_DECISION_ARTIFACTS = _types("decision.json")
@@ -150,7 +152,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "planner",
         PLANNING_REVISION,
         "reviewer",
-        _types("selected_plan.json"),
+        _types("selected_plan.json") | CONTRACT_FINAL_ARTIFACTS,
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
@@ -182,7 +184,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "executor",
         EXECUTION,
         "reviewer",
-        _types("selected_plan.json"),
+        _types("selected_plan.json") | CONTRACT_FINAL_ARTIFACTS,
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PLANNING,
     ),
@@ -190,7 +192,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "executor",
         FIXING,
         "reviewer",
-        _types("selected_plan.json"),
+        _types("selected_plan.json") | CONTRACT_FINAL_ARTIFACTS,
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
@@ -198,7 +200,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "executor",
         REVIEW_FIXING,
         "reviewer",
-        _types("selected_plan.json"),
+        _types("selected_plan.json") | CONTRACT_FINAL_ARTIFACTS,
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
@@ -272,7 +274,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "tester",
         TESTING,
         "reviewer",
-        _types("selected_plan.json"),
+        _types("selected_plan.json") | CONTRACT_FINAL_ARTIFACTS,
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
@@ -280,7 +282,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "tester",
         REGRESSION_TESTING,
         "reviewer",
-        _types("selected_plan.json"),
+        _types("selected_plan.json") | CONTRACT_FINAL_ARTIFACTS,
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
@@ -304,7 +306,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "reviewer",
         REVIEWING,
         "reviewer",
-        _types("selected_plan.json"),
+        _types("selected_plan.json") | CONTRACT_FINAL_ARTIFACTS,
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
@@ -323,7 +325,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "judge",
         TEST_JUDGEMENT,
         "reviewer",
-        _types("selected_plan.json"),
+        _types("selected_plan.json") | CONTRACT_FINAL_ARTIFACTS,
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
@@ -339,7 +341,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "judge",
         REVIEW_JUDGEMENT,
         "reviewer",
-        _types("selected_plan.json"),
+        _types("selected_plan.json") | CONTRACT_FINAL_ARTIFACTS,
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
@@ -363,7 +365,7 @@ ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
         "communicator",
         DELIVERY,
         "reviewer",
-        _types("selected_plan.json"),
+        _types("selected_plan.json") | CONTRACT_FINAL_ARTIFACTS,
         source_phases=_phases(PLAN_REVIEW),
         round_policy=ROUND_LATEST_PER_TYPE,
     ),
@@ -395,9 +397,31 @@ def _contract(role: str, phase: str, outputs: tuple[str, ...]) -> RolePhaseContr
     return contract
 
 
-_contract("planner", PLANNING_DRAFT, ("plan.md", "assumptions.md", "risk.md", "todo_breakdown.json"))
+_contract(
+    "planner",
+    PLANNING_DRAFT,
+    (
+        "plan.md",
+        "assumptions.md",
+        "risk.md",
+        "todo_breakdown.json",
+        "environment_contract_draft.json",
+        "validation_contract_draft.json",
+    ),
+)
 _contract("planner", PLANNING_PEER_REVIEW, ("peer_review_result.json",))
-_contract("planner", PLANNING_REVISION, ("plan.md", "assumptions.md", "risk.md", "todo_breakdown.json"))
+_contract(
+    "planner",
+    PLANNING_REVISION,
+    (
+        "plan.md",
+        "assumptions.md",
+        "risk.md",
+        "todo_breakdown.json",
+        "environment_contract_draft.json",
+        "validation_contract_draft.json",
+    ),
+)
 _contract("executor", EXECUTION, ("implementation_plan.md", "changed_files.md", "patch.diff", "self_check.md"))
 _contract("executor", PATCH_MERGE, ("merged_patch.diff", "merged_patch_metadata.json"))
 _contract("executor", MISC_RESPONSE, ("response.md", "notes.md"))
@@ -405,7 +429,7 @@ _contract("executor", FIXING, ("fix_schedule.md", "fix_patch.diff", "fix_notes.m
 _contract("executor", REVIEW_FIXING, ("fix_schedule.md", "fix_patch.diff", "fix_notes.md", "self_check.md"))
 _contract("tester", TESTING, ("bug_report.md", "tester_result.json"))
 _contract("tester", REGRESSION_TESTING, ("bug_report.md", "tester_result.json"))
-_contract("reviewer", PLAN_REVIEW, ("review_result.json", "selected_plan.json"))
+_contract("reviewer", PLAN_REVIEW, ("review_result.json", "selected_plan.json", "environment_contract.json", "validation_contract.json"))
 _contract("reviewer", REVIEWING, ("review_result.json",))
 _contract("judge", TEST_JUDGEMENT, ("decision.json",))
 _contract("judge", REVIEW_JUDGEMENT, ("decision.json",))
@@ -479,9 +503,12 @@ def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]
             "- Write `tester_result.json` as one strict JSON object; it is the workflow decision contract, not Markdown.",
             '- `tester_result.json.status` must be exactly one of `"tests_passed"`, `"source_bug"`, or `"environment_blocked"`.',
             '- `tester_result.json.environment_dependency_issue` must be a boolean and must be `true` whenever setup/build/test execution is blocked by dependency, interpreter, package, import, toolchain, or runtime environment issues.',
+            "- `tester_result.json.environment_ready` must be a boolean when present; use `false` whenever setup/build/test execution is blocked by environment or command issues.",
             '- `tester_result.json.next_action` must match the status: `"continue"`, `"fix_code"`, or `"block_task"`.',
+            '- `tester_result.json.failure_type` must use the shared taxonomy: `"none"`, `"source_bug"`, `"environment_bug"`, `"env_setup"`, `"test_command_bug"`, `"test_command"`, `"contract_bug"`, `"process_bug"`, `"test"`, or `"inconclusive"`.',
             "- `tester_result.json.oracle_results` must be a list of per-acceptance-oracle verdict objects with `oracle_id`, `status`, `evidence`, and `commands_run`.",
             "- Tester owns environment setup and command execution before writing `tester_result.json`; do not rely on a later Harness test gate.",
+            "- Tester must use `environment_contract.json` and `validation_contract.json` when present; contract JSON parse/schema failures are `failure_type: contract_bug`, not a reason to run default pytest.",
             "- Use `environment_blocked` only after safe project-declared or minimal test-tooling setup/repair was attempted and the environment still cannot run.",
             "- Harness checks `environment_dependency_issue` before `status`; when it is true Harness reruns the tester environment repair loop instead of sending the report to executor.",
             "- Harness validates `delivery.md` and report headers; any non-zero `return_code` or non-zero `artifact_result_code` prevents the run from advancing.",
@@ -491,9 +518,11 @@ def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]
             *base,
             "- Put review outcome only in `review_result.json.review_decision_code` as `0`, `1`, or `-1`.",
             "- Do not copy `review_decision_code` into `artifact_result_code` or `return_code`.",
+            "- Keep source-change verdicts separate from environment verdicts: use `review_decision_code: 1` only for executor source changes, and use `environment_check.status: changes_required` only for tester-owned environment follow-up.",
             "- `review_result.json` must be exactly one JSON object with no Markdown, prose, YAML, or code fence.",
             '- Required JSON keys: `review_decision_code`, `review_status`, `summary`, `findings`, `required_changes`, `environment_check.attempted`, `environment_check.status`, `environment_check.commands_run`, `environment_check.fixable`, and `environment_check.blocking_reason`.',
             "- During PLAN_REVIEW, `selected_plan.json.acceptance_oracles` must be the authoritative structured acceptance contract.",
+            "- During PLAN_REVIEW, `environment_contract.json` and `validation_contract.json` must be the authoritative environment and validation contracts for all downstream executor/tester/reviewer/judge phases.",
             "- Use `environment_check.status: blocked` only for irreconcilable runtime or system conflicts that should stop Harness immediately.",
         ]
     if role == "judge":
@@ -510,6 +539,8 @@ def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]
             "- For peer review, write exactly one JSON object to `peer_review_result.json`.",
             "- Put peer-review outcome only in `peer_review_result.json.peer_review_code` as `0`, `1`, or `-1`.",
             "- Do not copy `peer_review_code` into `artifact_result_code` or `return_code`.",
+            "- For planning draft/revision phases, fill the Harness-created `environment_contract_draft.json` and `validation_contract_draft.json` templates. If information is missing, use `mode: \"unknown\"` and list the missing facts in `unknowns`; do not invent default test commands.",
+            "- Contract command sections must use `mode` to express intent. Do not rely on bare empty `commands: []` or `setup_commands: []` to mean anything.",
         ]
     if role == "communicator":
         return [

@@ -21,7 +21,7 @@ from harness.agents.delivery_review import DeliveryContractReviewer
 from harness.agents.output_policy import AgentOutputPolicy
 from harness.agents.result import AgentRunResult, ArtifactRef
 from harness.artifacts.output_templates import seed_output_templates
-from harness.artifacts.validator import ValidationResult, delivery_issue_is_contract_only
+from harness.artifacts.validator import ValidationResult, delivery_issue_is_contract_only, required_output_may_be_empty
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressEvent
 
@@ -283,7 +283,12 @@ class AgentPhaseRunner:
             output_dir: Path | None = None
             for output_name in required_outputs:
                 path = artifacts_by_type.get(output_name)
-                if not path or not path.exists() or not path.is_file() or path.stat().st_size == 0:
+                if (
+                    not path
+                    or not path.exists()
+                    or not path.is_file()
+                    or (path.stat().st_size == 0 and not required_output_may_be_empty(output_name))
+                ):
                     result.validation_ok = False
                     result.validation_errors = [f"Missing required output: {output_name}"]
                     return False

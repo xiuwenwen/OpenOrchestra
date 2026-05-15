@@ -81,6 +81,7 @@ class MockAgentAdapter(AgentAdapter):
                     "status": "tests_passed",
                     "next_action": "continue",
                     "failure_type": "none",
+                    "environment_ready": True,
                     "environment_dependency_issue": False,
                     "summary": "Mock tester completed environment setup and verification.",
                     "setup_commands_run": [],
@@ -135,6 +136,8 @@ class MockAgentAdapter(AgentAdapter):
                     "schema_version": 1,
                     "selected_plan_id": "mock-plan",
                     "summary": "Use the merged mock planner proposal as the single execution plan.",
+                    "environment_contract_id": "mock-environment",
+                    "validation_contract_id": "mock-validation",
                     "source_artifacts": ["plan.md", "todo_breakdown.json"],
                     "execution_order": ["implement mock change", "run mock verification"],
                     "acceptance_criteria": ["mock verification passes"],
@@ -153,6 +156,49 @@ class MockAgentAdapter(AgentAdapter):
                             "evidence_hint": "Record command exit code and relevant output excerpt.",
                         }
                     ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
+        if name in {"environment_contract_draft.json", "environment_contract.json"}:
+            return json.dumps(
+                {
+                    "schema_version": "environment_contract.v1",
+                    "contract_id": "mock-environment-draft" if name.endswith("_draft.json") else "mock-environment",
+                    "contract_status": "draft" if name.endswith("_draft.json") else "final",
+                    "source": "mock_adapter",
+                    "confidence": "medium",
+                    "runtime": {"type": "local", "language": "python", "version": "", "base_commit": "", "environment_setup_commit": ""},
+                    "setup": {"mode": "none", "commands": [], "discovery_allowed": True, "notes": "Mock flow has no setup."},
+                    "dependencies": {"mode": "none", "commands": [], "files": [], "notes": ""},
+                    "constraints": {"forbidden_validation_methods": []},
+                    "unknowns": [],
+                    "evidence_sources": ["mock_adapter"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
+        if name in {"validation_contract_draft.json", "validation_contract.json"}:
+            return json.dumps(
+                {
+                    "schema_version": "validation_contract.v1",
+                    "contract_id": "mock-validation-draft" if name.endswith("_draft.json") else "mock-validation",
+                    "contract_status": "draft" if name.endswith("_draft.json") else "final",
+                    "source": "mock_adapter",
+                    "confidence": "medium",
+                    "runtime": "local",
+                    "tests": {
+                        "mode": "explicit",
+                        "commands": ["python -m compileall -q ."],
+                        "discovery_allowed": True,
+                        "fail_to_pass": [],
+                        "pass_to_pass": [],
+                        "notes": "Mock validation command.",
+                    },
+                    "pass_criteria": {"type": "commands_exit_zero", "conditions": ["python -m compileall -q . exits 0"], "resolved": None},
+                    "acceptance_oracle_ids": ["A1"],
+                    "unknowns": [],
+                    "evidence_sources": ["mock_adapter"],
                 },
                 ensure_ascii=False,
                 indent=2,

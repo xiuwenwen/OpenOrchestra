@@ -16,6 +16,6 @@ def test_generated_visibility_matrix_documents_tester_repair_inputs() -> None:
 
     assert "| tester | TESTING | `bug_report.md`, `tester_result.json`, `delivery.md`" in text
     assert "| tester | REGRESSION_TESTING | `bug_report.md`, `tester_result.json`, `delivery.md`" in text
-    assert "large_artifact_mode=path_only | reviewer | PLAN_REVIEW | `selected_plan.json` | latest_per_type" in text
+    assert "large_artifact_mode=path_only | reviewer | PLAN_REVIEW | `environment_contract.json`, `selected_plan.json`, `validation_contract.json` | latest_per_type" in text
     assert "large_artifact_mode=path_only | tester | TESTING | `bug_report.md`, `tester_result.json` | current" in text
     assert "large_artifact_mode=path_only | tester | REGRESSION_TESTING | `bug_report.md`, `tester_result.json` | current" in text

@@ -260,6 +260,215 @@ def test_review_loop_fails_immediately_on_blocked_environment_json(monkeypatch, 
     with pytest.raises(orchestrator_module.TaskFailedError, match="requires Linux-only system package"):
         orchestrator._run_review_loop(task_id, "deliver runtime-sensitive project")
 
+
+def test_review_environment_changes_required_routes_to_tester_not_executor(monkeypatch, tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("review with fixable environment issue")
+    calls: list[tuple[str, str]] = []
+
+    def result_for(role: str, phase: str, artifact_type: str, path: Path) -> list[AgentRunResult]:
+        ref = ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=f"{phase}-phase",
+            role=role,
+            agent_id=f"{role}-1",
+            artifact_type=artifact_type,
+            path=path,
+            version=1,
+            hash="hash",
+        )
+        return [AgentRunResult(task_id, f"{phase}-phase", role, f"{role}-1", "COMPLETED", artifacts=[ref])]
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append((role, phase))
+        if phase == REVIEWING:
+            review_result = tmp_path / "review_result.json"
+            review_result.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "review_decision_code": 0,
+                        "review_status": "approved",
+                        "summary": "source is approved; local runtime needs environment follow-up",
+                        "findings": [],
+                        "required_changes": [],
+                        "environment_check": {
+                            "attempted": True,
+                            "status": "changes_required",
+                            "commands_run": ["python -m pytest"],
+                            "fixable": True,
+                            "blocking_reason": "install test dependencies in tester environment",
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return result_for("reviewer", phase, "review_result.json", review_result)
+        if phase == REGRESSION_TESTING:
+            tester_result = tmp_path / "tester_result.json"
+            tester_result.write_text(
+                json.dumps(
+                    {
+                        "status": "tests_passed",
+                        "next_action": "continue",
+                        "failure_type": "none",
+                        "summary": "environment repaired and regression checks passed",
+                        "environment_dependency_issue": False,
+                        "oracle_results": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return result_for("tester", phase, "tester_result.json", tester_result)
+        if phase == REVIEW_FIXING:
+            raise AssertionError("environment follow-up must not be routed to executor source fixing")
+        raise AssertionError(f"unexpected phase: {role} {phase}")
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+
+    orchestrator._run_review_loop(task_id, "review with fixable environment issue")
+
+    assert ("tester", REGRESSION_TESTING) in calls
+    assert ("executor", REVIEW_FIXING) not in calls
+
+
+def test_review_environment_changes_required_reuses_passing_tester_result(monkeypatch, tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("review with prior tester pass")
+    testing_phase_id = orchestrator.repository.create_phase(task_id, TESTING, "tester", 0)
+    tester_result = tmp_path / "prior_tester_result.json"
+    tester_result.write_text(
+        json.dumps(
+            {
+                "status": "tests_passed",
+                "next_action": "continue",
+                "failure_type": "none",
+                "summary": "prior tester pass",
+                "environment_dependency_issue": False,
+                "oracle_results": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    orchestrator.repository.create_artifact(
+        ArtifactRef(
+            artifact_id=str(uuid.uuid4()),
+            task_id=task_id,
+            phase_id=testing_phase_id,
+            role="tester",
+            agent_id="tester-1",
+            artifact_type="tester_result.json",
+            path=tester_result,
+            version=1,
+            hash="hash",
+        )
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append((role, phase))
+        if phase == REVIEWING:
+            review_result = tmp_path / "review_result.json"
+            review_result.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "review_decision_code": 0,
+                        "review_status": "approved",
+                        "summary": "source approved; reviewer local env is incomplete",
+                        "findings": [],
+                        "required_changes": [],
+                        "environment_check": {
+                            "attempted": True,
+                            "status": "changes_required",
+                            "commands_run": ["python -m pytest"],
+                            "fixable": True,
+                            "blocking_reason": "reviewer local env cannot build old dependency",
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            ref = ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id="review-phase",
+                role="reviewer",
+                agent_id="reviewer-1",
+                artifact_type="review_result.json",
+                path=review_result,
+                version=1,
+                hash="hash",
+            )
+            return [AgentRunResult(task_id, "review-phase", "reviewer", "reviewer-1", "COMPLETED", artifacts=[ref])]
+        raise AssertionError(f"unexpected route to {role} {phase}")
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+
+    orchestrator._run_review_loop(task_id, "review with prior tester pass")
+
+    assert calls == [("reviewer", REVIEWING)]
+
+
+def test_unrouteable_review_result_does_not_fall_through_to_executor(monkeypatch, tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("review invalid route")
+    calls: list[tuple[str, str]] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append((role, phase))
+        if phase == REVIEWING:
+            review_result = tmp_path / "review_result.json"
+            review_result.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "review_decision_code": 0,
+                        "review_status": "approved",
+                        "summary": "invalid env status",
+                        "findings": [],
+                        "required_changes": [],
+                        "environment_check": {
+                            "attempted": True,
+                            "status": "unknown",
+                            "commands_run": [],
+                            "fixable": True,
+                            "blocking_reason": "",
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            ref = ArtifactRef(
+                artifact_id=str(uuid.uuid4()),
+                task_id=task_id,
+                phase_id="review-phase",
+                role="reviewer",
+                agent_id="reviewer-1",
+                artifact_type="review_result.json",
+                path=review_result,
+                version=1,
+                hash="hash",
+            )
+            return [AgentRunResult(task_id, "review-phase", "reviewer", "reviewer-1", "COMPLETED", artifacts=[ref])]
+        if phase == REVIEW_FIXING:
+            raise AssertionError("unrouteable review artifacts must not be treated as source fixes")
+        raise AssertionError(f"unexpected route to {role} {phase}")
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+
+    with pytest.raises(orchestrator_module.TaskFailedError, match="unrouteable review_result"):
+        orchestrator._run_review_loop(task_id, "review invalid route")
+
+    assert calls == [("reviewer", REVIEWING)]
+
+
 def test_review_approval_requires_review_result_environment_check(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("review strict environment verdict")
@@ -347,6 +556,7 @@ def test_review_approval_reads_review_result_json(tmp_path: Path) -> None:
     [
         (0, "approved", {"status": "ready", "attempted": True, "commands_run": ["pytest"]}, True),
         (0, "approved", {"status": "not_applicable", "attempted": False, "commands_run": []}, True),
+        (0, "approved", {"status": "changes_required", "attempted": True, "commands_run": ["pytest"]}, False),
         (0, "approved", {"status": "blocked", "attempted": True, "commands_run": ["python app.py"]}, False),
         (0, "changes_requested", {"status": "ready", "attempted": True, "commands_run": ["pytest"]}, False),
         (0, "approved", None, False),

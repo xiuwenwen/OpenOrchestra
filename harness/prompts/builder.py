@@ -185,11 +185,11 @@ class PromptBuilder:
                 "- If the repository is empty, still produce implementation artifacts and a complete unified diff representing the proposed files.",
                 "- All Markdown deliverables you produce, such as `implementation_plan.md`, `changed_files.md`, `fix_schedule.md`, `fix_notes.md`, and `self_check.md`, must contain `artifact_result_code: 0` when complete.",
                 "- If the repository already contains materialized source from a previous PATCH_MERGE, make fix changes against that repository state.",
-                "- `patch.diff` or `fix_patch.diff` must be a valid git-style unified diff with `diff --git` file headers and must apply with `git apply --check --whitespace=nowarn`.",
+                "- `patch.diff` or `fix_patch.diff` must be a valid git-style unified diff with `diff --git` file headers and must apply with `git apply --check --whitespace=nowarn`, except that `fix_patch.diff` may be empty only for a documented no-op fix.",
                 "- For FIXING and REVIEW_FIXING, target the current materialized/source repository; do not describe a historical empty project baseline unless the current repository is actually empty.",
                 "- Create or update implementation files under the repository directory first, then generate `patch.diff` or `fix_patch.diff` mechanically from repository changes.",
                 f"- Prefer command-generated diffs written directly to the output directory. For git repositories, use `git add -N . && git diff --no-ext-diff -- . > {context.output_dir / 'patch.diff'}` or the corresponding `fix_patch.diff` path.",
-                "- If staged tester/reviewer artifacts show the current materialized repository already satisfies the requested fix and no source bug remains, treat that as a valid no-op fix: leave source files unchanged, generate the required diff mechanically from the current repository state, and record `no_op_fix: true` plus the exact evidence in `fix_notes.md` and `self_check.md`.",
+                "- If staged tester/reviewer artifacts show the current materialized repository already satisfies the requested fix and no source bug remains, treat that as a valid no-op fix: leave source files unchanged, write an empty `fix_patch.diff` generated mechanically from the current repository state, and record `no_op_fix: true` plus the exact evidence in `fix_notes.md` and `self_check.md`.",
                 "- In a no-op fix, do not recreate or paste a historical patch against the original base; the required patch file must represent only changes still needed from the current repository baseline.",
                 "- If the repository is not a git worktree, initialize a temporary git baseline or use a script/diff command that writes unified diff output directly to the required patch file.",
                 "- Do not paste a large patch into a Write-tool payload, and do not `cat` or print the full patch to stdout. Verify large patches with `wc -c`, file counts, and diff stats.",
@@ -205,10 +205,14 @@ class PromptBuilder:
                 "- Treat the repository directory as the runnable implementation produced by Harness.",
                 "- Compare observable behavior against the original user request in `## User Request` and the `## Harness Test Target` section of the input manifest.",
                 "- If `selected_plan.json` is present, treat `selected_plan.json.acceptance_oracles` as the authoritative acceptance contract and verify those oracle IDs directly.",
+                "- If `environment_contract.json` is present, treat it as the authoritative environment/setup contract.",
+                "- If `validation_contract.json` is present, treat it as the authoritative test/validation contract.",
+                "- Do not silently fall back to `python -m pytest -q` when a present contract is missing required fields, invalid JSON, or uses `mode: unknown`; report the contract/discovery issue in `tester_result.json` instead.",
                 "- Read the input manifest for repository source metadata, but do not require executor planning notes or patch narrative artifacts to decide the test verdict.",
                 "",
                 "## Required Test Work",
-                "- Inspect project structure and identify the likely build, install, startup, and test commands from files in the repository.",
+                "- First read `environment_contract.json` and `validation_contract.json` when they are listed in input artifacts; then inspect project structure only as allowed by their `mode` and `discovery_allowed` fields.",
+                "- For `mode: explicit`, run the listed commands exactly unless they are unsafe. For `mode: benchmark_spec`, use the benchmark adapter/runtime described by the contract. For `mode: repo_discovery` or `mode: agent_discovery`, discover commands from repository files and record the evidence. For `mode: unknown`, do not invent a fixed default; discover only when `discovery_allowed` is true, otherwise report `failure_type: contract_bug`.",
                 "- Tester owns the full environment loop: run safe project-declared setup/install commands in the configured test runtime or an isolated local environment, then run the test/smoke commands you will use for the verdict.",
                 "- Dependency setup is restricted: only execute project-declared dependency commands, local editable installs, lockfile/requirements installs, or reasonable minimal test tooling such as pytest, pytest-cov, coverage, tox, nox, build, pip, setuptools, and wheel.",
                 "- Do not install arbitrary third-party packages merely to make tests run. If a missing package is not declared by the project and is not minimal test tooling, treat it as an environment blocker, not a source bug.",
@@ -228,9 +232,10 @@ class PromptBuilder:
                 "- `bug_report.md` must contain `artifact_result_code: 0` when complete.",
                 "- `bug_report.md` is the single tester report. Include build, test, bug, evidence, and reproduction sections in this one file.",
                 "- `tester_result.json` must be exactly one JSON object with no Markdown, prose, YAML, or code fence.",
-                '- Required JSON shape: `{"schema_version":1,"status":"tests_passed|source_bug|environment_blocked","next_action":"continue|fix_code|block_task","failure_type":"none|source_bug|env_setup|test_command|test","environment_dependency_issue":false,"summary":"...","setup_commands_run":[],"test_commands_run":[],"oracle_results":[{"oracle_id":"A1","status":"passed|failed|blocked|not_run","evidence":"...","commands_run":[],"output_excerpt":""}],"remaining_blockers":[]}`.',
+                '- Required JSON shape: `{"schema_version":1,"status":"tests_passed|source_bug|environment_blocked","next_action":"continue|fix_code|block_task","failure_type":"none|source_bug|environment_bug|env_setup|test_command_bug|test_command|contract_bug|process_bug|test|inconclusive","environment_ready":true,"environment_dependency_issue":false,"summary":"...","setup_commands_run":[],"test_commands_run":[],"oracle_results":[{"oracle_id":"A1","status":"passed|failed|blocked|not_run","evidence":"...","commands_run":[],"output_excerpt":""}],"remaining_blockers":[]}`.',
                 '- When `selected_plan.json.acceptance_oracles` is present, `oracle_results` must include every required oracle ID from `selected_plan.json`.',
                 '- Set `environment_dependency_issue: true` whenever dependency, interpreter, package, import, build-tool, or runtime environment problems still block setup/build/test execution; Harness checks this before `status` and reruns the tester environment repair loop instead of entering executor fixing.',
+                '- Set `failure_type: "contract_bug"` when present contracts are invalid or insufficient and no permitted discovery path can resolve them.',
                 '- Use `status: "tests_passed"` and `next_action: "continue"` only when the relevant setup/build/test/smoke evidence passed and every required acceptance oracle passed.',
                 '- Use `status: "source_bug"` and `next_action: "fix_code"` only when commands ran in a working environment and at least one required acceptance oracle failed because of source or behavior.',
                 '- Use `status: "environment_blocked"` and `next_action: "block_task"` only after you attempted safe environment repair and still cannot run the needed verification.',
@@ -277,8 +282,10 @@ class PromptBuilder:
                     "- When revising from PLAN_REVIEW feedback, do not re-litigate old planner proposals or peer reviews unless the reviewer explicitly references them.",
                     "- Read all available `peer_review_result.json` artifacts, especially comments directed at your previous plan.",
                     "- Revise `plan.md`, `assumptions.md`, `risk.md`, and `todo_breakdown.json` based on feedback you accept.",
+                    "- Revise `environment_contract_draft.json` and `validation_contract_draft.json` as part of the same planning update. Use `mode: \"unknown\"` with explicit `unknowns` when the current evidence is insufficient.",
                     "- When you reject feedback, state the rejected feedback and rationale in `plan.md` or `risk.md` instead of silently ignoring it.",
                     *self._todo_breakdown_schema_rules(),
+                    *self._contract_schema_rules(draft=True),
                 ]
             return [
                 *protocol_prompt_lines(STEP_PROPOSE),
@@ -286,7 +293,10 @@ class PromptBuilder:
                 "- `plan.md`, `assumptions.md`, and `risk.md` must each contain `artifact_result_code: 0` when complete; `todo_breakdown.json` must be strict JSON.",
                 "- `assumptions.md` must separate verified facts from assumptions.",
                 "- `risk.md` must identify technical, integration, testing, and delivery risks.",
+                "- Fill `environment_contract_draft.json` and `validation_contract_draft.json` from the user request, staged context, and repository evidence. If information is not available, use `mode: \"unknown\"` and list missing facts in `unknowns`.",
+                "- Do not invent default test commands. Empty `commands: []` is allowed only when paired with an explicit `mode` such as `unknown`, `none`, `repo_discovery`, `agent_discovery`, or `benchmark_spec`.",
                 *self._todo_breakdown_schema_rules(),
+                *self._contract_schema_rules(draft=True),
             ]
         if context.role == "reviewer":
             if context.phase == "PLAN_REVIEW":
@@ -296,7 +306,9 @@ class PromptBuilder:
                     f"- Treat approved `peer_review_result.json` artifacts as {STEP_VOTE} evidence when selecting or merging the final plan.",
                     "- Fill the Harness-created `review_result.json` template with the plan review verdict; do not create `review_report.md`.",
                     "- Fill the Harness-created `selected_plan.json` template with the authoritative executor plan; do not create a selected-plan Markdown artifact.",
+                    "- Fill the Harness-created `environment_contract.json` and `validation_contract.json` templates with the authoritative final contracts; do not leave environment or validation meaning only in prose.",
                     "- Merge the current-round planner `plan.md`, `assumptions.md`, `risk.md`, `todo_breakdown.json`, and `peer_review_result.json` artifacts into one authoritative executor plan.",
+                    "- Merge every compatible `environment_contract_draft.json` and `validation_contract_draft.json` into the final contracts. If drafts conflict or information is insufficient, record `mode: \"unknown\"`, add `unknowns`, and request planning revision when that would block execution.",
                     "- Before selecting or merging implementation work, first extract acceptance semantics from every available proposal, review artifact, and candidate report.",
                     "- Do not merely pick one planner proposal when other proposals contain useful compatible details; preserve the strongest compatible requirements, risks, acceptance criteria, and test commands.",
                     "- Do not equate plan selection with acceptance selection. Preserve every compatible acceptance requirement from any proposal, even when the implementation strategy that introduced it is not selected.",
@@ -307,8 +319,10 @@ class PromptBuilder:
                     "- For every non-selected or rejected proposal, explicitly state which acceptance semantics were kept and which were dropped, with reasons.",
                     "- If planner proposals conflict materially or peer review still contains blocking objections, set `review_result.json.review_decision_code` to `1` and explain the required planning revision in `summary` and `required_changes`.",
                     "- `selected_plan.json` is the single authoritative plan for executor agents.",
+                    "- `selected_plan.json`, `environment_contract.json`, and `validation_contract.json` are the authoritative downstream contract set for executor and tester agents.",
                     "- `selected_plan.json` must include files, steps, acceptance criteria, acceptance_oracles, test commands, dependencies, and risks using the planner todo schema.",
                     '- Each `acceptance_oracles` entry must include `id`, `description`, `kind`, `required`, `commands`, `expected_exception`, `must_contain`, `must_not_contain`, `semantic_assertions`, `failure_signal`, and `evidence_hint`.',
+                    *self._contract_schema_rules(draft=False),
                     "- In `review_result.json`, use `review_decision_code: 0` when the merged plan is actionable enough for execution, `1` when changes are required, or `-1` for blocking rejection.",
                     "- For PLAN_REVIEW, set `environment_check.attempted` to `false`, `environment_check.status` to `not_applicable`, `environment_check.commands_run` to `[]`, and `environment_check.fixable` to `false`.",
                     "- `review_decision_code` is the merge-review verdict. It must not be copied into the `delivery.md` return code.",
@@ -316,6 +330,7 @@ class PromptBuilder:
             return [
                 "- Fill the Harness-created `review_result.json` template with the implementation review verdict; do not create `review_report.md`.",
                 "- Treat `selected_plan.json` as the authoritative customer requirement and acceptance baseline for this review phase.",
+                "- Treat `environment_contract.json` and `validation_contract.json` as the authoritative environment and validation baseline for this review phase.",
                 "- Review implementation behavior against `selected_plan.json.acceptance_oracles`; do not let reviewer expectations drift from those oracle IDs.",
                 "- Review `merged_patch.diff` as the authoritative implementation artifact whenever it exists.",
                 "- Review `merged_patch_metadata.json` as required baseline/apply-target evidence for the authoritative patch.",
@@ -333,6 +348,7 @@ class PromptBuilder:
                 "- Record every command you used for environment setup and runtime verification inside `review_result.json.environment_check.commands_run`.",
                 '- `review_result.json` must include: `{"review_decision_code":0,"review_status":"approved|changes_required|blocked","environment_check":{"attempted":true,"status":"ready|changes_required|blocked|not_applicable","commands_run":["..."],"fixable":true,"blocking_reason":""}}`.',
                 "- Use `environment_check.status: changes_required` for fixable setup/runtime issues and include concrete remediation steps in `summary` and `required_changes`.",
+                "- `environment_check.status: changes_required` routes to tester-owned environment repair; do not use it for source changes. Use `review_decision_code: 1` and `review_status: changes_required` only when executor source changes are required.",
                 "- Use `environment_check.status: blocked` only for irreconcilable runtime or system conflicts. When you use it, set `review_status: blocked`, set `review_decision_code: -1`, and write the exact blocking reason.",
                 "- When changes are required, include concrete fix instructions and affected artifacts.",
             ]
@@ -368,6 +384,18 @@ class PromptBuilder:
             '- Required JSON shape: `{"schema_version":1,"todos":[{"id":"T1","title":"...","files":[],"steps":[],"acceptance_criteria":[],"test_commands":[],"dependencies":[],"risk_notes":[]}],"risks":[]}`.',
             '- Use `acceptance_criteria` for human-readable planning notes; PLAN_REVIEW will convert the final expected behavior into `selected_plan.json.acceptance_oracles`.',
             "- Keep each task scoped so an executor can implement it without inferring missing files, commands, or acceptance criteria.",
+        ]
+
+    def _contract_schema_rules(self, *, draft: bool) -> list[str]:
+        suffix = "_draft" if draft else ""
+        status = "draft" if draft else "final"
+        return [
+            f"- `environment_contract{suffix}.json` must be exactly one JSON object with `schema_version: \"environment_contract.v1\"` and `contract_status: \"{status}\"`.",
+            f"- `validation_contract{suffix}.json` must be exactly one JSON object with `schema_version: \"validation_contract.v1\"` and `contract_status: \"{status}\"`.",
+            '- Allowed command section modes are `"explicit"`, `"benchmark_spec"`, `"repo_discovery"`, `"agent_discovery"`, `"none"`, and `"unknown"`.',
+            '- Use `"explicit"` only when `commands` is non-empty and comes from the prompt, adapter metadata, or repository evidence.',
+            '- Use `"benchmark_spec"` when an adapter or benchmark metadata defines the environment/test runtime but the concrete command is owned by that adapter.',
+            '- Use `"unknown"` with concrete `unknowns` when the information is not available; do not encode uncertainty as bare `commands: []`.',
         ]
 
     def _metadata_lines(self, context: AgentRunContext) -> list[str]:

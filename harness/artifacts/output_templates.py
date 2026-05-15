@@ -66,6 +66,10 @@ def output_template_content(
         return _todo_breakdown_template()
     if relative_name == "selected_plan.json":
         return _selected_plan_template()
+    if relative_name in {"environment_contract_draft.json", "environment_contract.json"}:
+        return _environment_contract_template(relative_name)
+    if relative_name in {"validation_contract_draft.json", "validation_contract.json"}:
+        return _validation_contract_template(relative_name)
     if relative_name == "merged_patch_metadata.json":
         return _merged_patch_metadata_template()
     if relative_name == "final_delivery.json":
@@ -240,6 +244,8 @@ def _selected_plan_template() -> str:
                 "schema_version": 1,
                 "selected_plan_id": TEMPLATE_PENDING_VALUE,
                 "summary": "Replace this Harness output template with the selected plan summary.",
+                "environment_contract_id": "",
+                "validation_contract_id": "",
                 "source_artifacts": [],
                 "execution_order": [],
                 "acceptance_criteria": [],
@@ -258,6 +264,87 @@ def _selected_plan_template() -> str:
                         "evidence_hint": "Replace with the exact evidence tester should capture.",
                     }
                 ],
+                TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def _environment_contract_template(relative_name: str) -> str:
+    is_draft = relative_name.endswith("_draft.json")
+    return (
+        json.dumps(
+            {
+                "schema_version": "environment_contract.v1",
+                "contract_id": "environment-draft" if is_draft else "environment-final",
+                "contract_status": "draft" if is_draft else "final",
+                "source": "planner" if is_draft else "plan_review",
+                "confidence": TEMPLATE_PENDING_VALUE,
+                "runtime": {
+                    "type": TEMPLATE_PENDING_VALUE,
+                    "language": "",
+                    "version": "",
+                    "base_commit": "",
+                    "environment_setup_commit": "",
+                },
+                "setup": {
+                    # `mode` carries the meaning; an empty command list alone is not a decision.
+                    "mode": TEMPLATE_PENDING_VALUE,
+                    "commands": [],
+                    "discovery_allowed": True,
+                    "notes": "",
+                },
+                "dependencies": {
+                    "mode": TEMPLATE_PENDING_VALUE,
+                    "commands": [],
+                    "files": [],
+                    "notes": "",
+                },
+                "constraints": {
+                    "forbidden_validation_methods": [],
+                },
+                "unknowns": [],
+                "evidence_sources": [],
+                TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def _validation_contract_template(relative_name: str) -> str:
+    is_draft = relative_name.endswith("_draft.json")
+    return (
+        json.dumps(
+            {
+                "schema_version": "validation_contract.v1",
+                "contract_id": "validation-draft" if is_draft else "validation-final",
+                "contract_status": "draft" if is_draft else "final",
+                "source": "planner" if is_draft else "plan_review",
+                "confidence": TEMPLATE_PENDING_VALUE,
+                "runtime": TEMPLATE_PENDING_VALUE,
+                "tests": {
+                    # `mode` carries the meaning; an empty command list alone is not a decision.
+                    "mode": TEMPLATE_PENDING_VALUE,
+                    "commands": [],
+                    "discovery_allowed": True,
+                    "fail_to_pass": [],
+                    "pass_to_pass": [],
+                    "notes": "",
+                },
+                "pass_criteria": {
+                    "type": TEMPLATE_PENDING_VALUE,
+                    "conditions": [],
+                    "resolved": None,
+                },
+                "acceptance_oracle_ids": [],
+                "unknowns": [],
+                "evidence_sources": [],
                 TEMPLATE_STATUS_FIELD: TEMPLATE_PENDING_VALUE,
             },
             ensure_ascii=False,

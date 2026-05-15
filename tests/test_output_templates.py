@@ -160,6 +160,24 @@ def test_tester_result_template_contains_oracle_results(tmp_path: Path) -> None:
     assert "commands_run" in payload["oracle_results"][0]
 
 
+def test_contract_templates_use_mode_not_bare_empty_commands(tmp_path: Path) -> None:
+    seed_output_templates(
+        tmp_path,
+        ["environment_contract_draft.json", "validation_contract_draft.json"],
+        role="planner",
+        phase="PLANNING_DRAFT",
+        agent_id="planner-1",
+    )
+
+    environment = json.loads((tmp_path / "environment_contract_draft.json").read_text(encoding="utf-8"))
+    validation = json.loads((tmp_path / "validation_contract_draft.json").read_text(encoding="utf-8"))
+
+    assert environment["setup"]["mode"] == TEMPLATE_PENDING_VALUE
+    assert environment["setup"]["commands"] == []
+    assert validation["tests"]["mode"] == TEMPLATE_PENDING_VALUE
+    assert validation["tests"]["commands"] == []
+
+
 def test_runner_seeds_output_templates_before_adapter_invocation(tmp_path: Path, monkeypatch) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("plan with seeded templates")
@@ -190,6 +208,45 @@ def test_runner_seeds_output_templates_before_adapter_invocation(tmp_path: Path,
                 elif name == "todo_breakdown.json":
                     path.write_text(
                         json.dumps({"schema_version": 1, "todos": [], "risks": []}) + "\n",
+                        encoding="utf-8",
+                    )
+                elif name == "environment_contract_draft.json":
+                    path.write_text(
+                        json.dumps(
+                            {
+                                "schema_version": "environment_contract.v1",
+                                "contract_id": "env-draft",
+                                "contract_status": "draft",
+                                "source": "test",
+                                "confidence": "unknown",
+                                "runtime": {"type": "unknown"},
+                                "setup": {"mode": "unknown", "commands": [], "discovery_allowed": True},
+                                "dependencies": {"mode": "unknown", "commands": [], "files": []},
+                                "unknowns": ["test fixture"],
+                                "evidence_sources": [],
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                elif name == "validation_contract_draft.json":
+                    path.write_text(
+                        json.dumps(
+                            {
+                                "schema_version": "validation_contract.v1",
+                                "contract_id": "validation-draft",
+                                "contract_status": "draft",
+                                "source": "test",
+                                "confidence": "unknown",
+                                "runtime": "unknown",
+                                "tests": {"mode": "unknown", "commands": [], "discovery_allowed": True},
+                                "pass_criteria": {"type": "unknown", "conditions": []},
+                                "acceptance_oracle_ids": [],
+                                "unknowns": ["test fixture"],
+                                "evidence_sources": [],
+                            }
+                        )
+                        + "\n",
                         encoding="utf-8",
                     )
                 else:

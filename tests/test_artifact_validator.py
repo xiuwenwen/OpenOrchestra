@@ -101,6 +101,22 @@ def test_artifact_validator_rejects_empty_required_output(tmp_path: Path) -> Non
     assert errors == ["Required output is empty: merged_patch.diff"]
 
 
+def test_artifact_validator_allows_empty_fix_patch_for_noop_fix(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    (tmp_path / "fix_patch.diff").write_text("", encoding="utf-8")
+    (tmp_path / "fix_schedule.md").write_text(md_ok("no-op schedule"), encoding="utf-8")
+    (tmp_path / "fix_notes.md").write_text(md_ok("no_op_fix: true"), encoding="utf-8")
+    (tmp_path / "self_check.md").write_text(md_ok("tester_result passed"), encoding="utf-8")
+    (tmp_path / "delivery.md").write_text("return_code: 0\n", encoding="utf-8")
+
+    ok, errors = validator.validate_required_outputs(
+        tmp_path, ["fix_schedule.md", "fix_patch.diff", "fix_notes.md", "self_check.md", "delivery.md"]
+    )
+
+    assert ok
+    assert errors == []
+
+
 def test_artifact_validator_accepts_delivery_return_code_anywhere(tmp_path: Path) -> None:
     validator = ArtifactValidator()
     (tmp_path / "plan.md").write_text(md_ok(), encoding="utf-8")
@@ -301,6 +317,85 @@ def test_validator_rejects_tester_result_without_oracle_results(tmp_path: Path) 
 
     assert not ok
     assert errors == ["tester_result.json.oracle_results must be a list"]
+
+
+def test_validator_rejects_contract_command_section_without_mode(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    (tmp_path / "environment_contract.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "environment_contract.v1",
+                "contract_id": "env",
+                "contract_status": "final",
+                "source": "test",
+                "confidence": "high",
+                "runtime": {"type": "local"},
+                "setup": {"commands": []},
+                "unknowns": [],
+                "evidence_sources": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ok, errors = validator.validate_required_outputs(tmp_path, ["environment_contract.json"])
+
+    assert not ok
+    assert any(error.startswith("environment_contract.json.setup.mode must be one of:") for error in errors)
+
+
+def test_validator_rejects_explicit_validation_contract_with_empty_commands(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    (tmp_path / "validation_contract.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "validation_contract.v1",
+                "contract_id": "validation",
+                "contract_status": "final",
+                "source": "test",
+                "confidence": "high",
+                "runtime": "local",
+                "tests": {"mode": "explicit", "commands": [], "discovery_allowed": True},
+                "pass_criteria": {"type": "commands_exit_zero", "conditions": []},
+                "acceptance_oracle_ids": [],
+                "unknowns": [],
+                "evidence_sources": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ok, errors = validator.validate_required_outputs(tmp_path, ["validation_contract.json"])
+
+    assert not ok
+    assert errors == ["validation_contract.json.tests.commands must be non-empty when mode is explicit"]
+
+
+def test_validator_accepts_unknown_contract_mode_with_empty_commands(tmp_path: Path) -> None:
+    validator = ArtifactValidator()
+    (tmp_path / "validation_contract.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "validation_contract.v1",
+                "contract_id": "validation",
+                "contract_status": "final",
+                "source": "test",
+                "confidence": "unknown",
+                "runtime": "unknown",
+                "tests": {"mode": "unknown", "commands": [], "discovery_allowed": True},
+                "pass_criteria": {"type": "unknown", "conditions": []},
+                "acceptance_oracle_ids": [],
+                "unknowns": ["test command not specified"],
+                "evidence_sources": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ok, errors = validator.validate_required_outputs(tmp_path, ["validation_contract.json"])
+
+    assert ok
+    assert errors == []
 
 
 def test_delivery_return_codes_have_canonical_meanings() -> None:

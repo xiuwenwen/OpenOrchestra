@@ -202,6 +202,9 @@ def test_prompt_builder_uses_balanced_planner_when_count_is_one(tmp_path: Path) 
     assert "Balanced planning, covering MVP feasibility" in prompt
     assert "Define clear validation criteria for Tester." in prompt
     assert "`todo_breakdown.json` must be exactly one JSON object" in prompt
+    assert "environment_contract_draft.json" in prompt
+    assert "validation_contract_draft.json" in prompt
+    assert 'mode: "unknown"' in prompt
     assert '"todos":[{"id":"T1"' in prompt
     assert '"acceptance_criteria":[]' in prompt
     assert '"test_commands":[]' in prompt
@@ -378,6 +381,9 @@ def test_prompt_builder_has_plan_review_merge_contract(tmp_path: Path) -> None:
     assert "Current collaboration step: MERGE" in prompt
     assert "Merge the current-round planner" in prompt
     assert "`selected_plan.json` is the single authoritative plan" in prompt
+    assert "environment_contract.json" in prompt
+    assert "validation_contract.json" in prompt
+    assert "authoritative downstream contract set" in prompt
     assert "selected_plan.json.acceptance_oracles" in prompt
     assert "Do not equate plan selection with acceptance selection" in prompt
     assert "any proposal" in prompt
@@ -385,6 +391,17 @@ def test_prompt_builder_has_plan_review_merge_contract(tmp_path: Path) -> None:
     assert "proposal B" not in prompt
     assert "Do not merely pick one planner proposal" in prompt
     assert "do not create `review_report.md`" in prompt
+
+
+def test_tester_prompt_uses_environment_and_validation_contracts(tmp_path: Path) -> None:
+    context = make_context(tmp_path, role="tester", agent_id="tester-1", role_count=1)
+
+    prompt = PromptBuilder().build(context)
+
+    assert "environment_contract.json" in prompt
+    assert "validation_contract.json" in prompt
+    assert "Do not silently fall back to `python -m pytest -q`" in prompt
+    assert 'failure_type: "contract_bug"' in prompt
 
 
 def test_prompt_builder_reviewer_requires_runtime_verdict_json(tmp_path: Path) -> None:
@@ -405,6 +422,7 @@ def test_prompt_builder_reviewer_requires_runtime_verdict_json(tmp_path: Path) -
     assert "do not request source changes solely because `runtime_readiness.md` ran a generic/default command" in prompt
     assert '"review_status":"approved|changes_required|blocked"' in prompt
     assert "environment_check.status: blocked" in prompt
+    assert "routes to tester-owned environment repair" in prompt
 
 
 def test_prompt_builder_executor_allows_recorded_noop_fix(tmp_path: Path) -> None:
@@ -421,6 +439,7 @@ def test_prompt_builder_executor_allows_recorded_noop_fix(tmp_path: Path) -> Non
 
     assert "valid no-op fix" in prompt
     assert "no_op_fix: true" in prompt
+    assert "empty `fix_patch.diff`" in prompt
     assert "do not recreate or paste a historical patch" in prompt
 
 

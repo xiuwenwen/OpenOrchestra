@@ -84,18 +84,111 @@ def test_tester_visibility_includes_selected_plan_acceptance_contract(tmp_path: 
         _artifact(
             tmp_path,
             phases_by_id,
+            role="planner",
+            agent_id="planner-1",
+            artifact_type="plan.md",
+            phase_type=PLANNING_DRAFT,
+            round_id=1,
+            label="planner",
+        ),
+        *[
+        _artifact(
+            tmp_path,
+            phases_by_id,
             role="reviewer",
             agent_id="reviewer-1",
-            artifact_type="selected_plan.json",
+            artifact_type=artifact_type,
             phase_type=PLAN_REVIEW,
             round_id=1,
-            label="selected",
+            label=label,
         )
+        for artifact_type, label in (
+            ("selected_plan.json", "selected"),
+            ("environment_contract.json", "environment"),
+            ("validation_contract.json", "validation"),
+        )
+        ],
     ]
 
     visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "tester", TESTING, 2)
 
-    assert _names(visible) == {"selected-selected_plan.json"}
+    assert _names(visible) == {
+        "selected-selected_plan.json",
+        "environment-environment_contract.json",
+        "validation-validation_contract.json",
+    }
+
+
+def test_plan_review_visibility_includes_planner_contract_drafts(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    artifacts = [
+        _artifact(
+            tmp_path,
+            phases_by_id,
+            role="planner",
+            agent_id="planner-1",
+            artifact_type=artifact_type,
+            phase_type=PLANNING_DRAFT,
+            round_id=0,
+            label=label,
+        )
+        for artifact_type, label in (
+            ("plan.md", "plan"),
+            ("todo_breakdown.json", "todo"),
+            ("environment_contract_draft.json", "environment-draft"),
+            ("validation_contract_draft.json", "validation-draft"),
+        )
+    ]
+
+    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "reviewer", PLAN_REVIEW, 0)
+
+    assert _names(visible) == {
+        "plan-plan.md",
+        "todo-todo_breakdown.json",
+        "environment-draft-environment_contract_draft.json",
+        "validation-draft-validation_contract_draft.json",
+    }
+
+
+def test_executor_visibility_includes_final_environment_and_validation_contracts(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    artifacts = [
+        _artifact(
+            tmp_path,
+            phases_by_id,
+            role="planner",
+            agent_id="planner-1",
+            artifact_type="plan.md",
+            phase_type=PLANNING_DRAFT,
+            round_id=1,
+            label="planner",
+        ),
+        *[
+        _artifact(
+            tmp_path,
+            phases_by_id,
+            role="reviewer",
+            agent_id="reviewer-1",
+            artifact_type=artifact_type,
+            phase_type=PLAN_REVIEW,
+            round_id=1,
+            label=label,
+        )
+        for artifact_type, label in (
+            ("selected_plan.json", "selected"),
+            ("environment_contract.json", "environment"),
+            ("validation_contract.json", "validation"),
+        )
+        ],
+    ]
+
+    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "executor", EXECUTION, 1)
+
+    assert _names(visible) == {
+        "selected-selected_plan.json",
+        "environment-environment_contract.json",
+        "validation-validation_contract.json",
+    }
 
 
 def test_project_context_visibility_is_role_scoped(tmp_path: Path) -> None:

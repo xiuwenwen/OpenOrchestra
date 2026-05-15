@@ -18,6 +18,28 @@ from harness.artifacts.review_decision import REVIEW_RESULT_ARTIFACT, parse_revi
 
 RETURN_CODE_FIELD_PATTERN = re.compile(r"^\s*[\-\*\s]*\**return_code\**\s*:\s*\**(-?\d+)\**\s*$")
 ARTIFACT_RESULT_CODE_FIELD_PATTERN = re.compile(r"^\s*[\-\*\s]*\**artifact_result_code\**\s*:\s*\**(-?\d+)\**\s*$")
+EMPTY_ALLOWED_REQUIRED_OUTPUTS = {"fix_patch.diff"}
+CONTRACT_ARTIFACTS = {
+    "environment_contract_draft.json",
+    "environment_contract.json",
+    "validation_contract_draft.json",
+    "validation_contract.json",
+}
+CONTRACT_MODES = {"explicit", "benchmark_spec", "repo_discovery", "agent_discovery", "none", "unknown"}
+CONTRACT_CONFIDENCE_VALUES = {"high", "medium", "low", "unknown"}
+CONTRACT_STATUSES = {"draft", "final"}
+TESTER_FAILURE_TYPES = {
+    "none",
+    "source_bug",
+    "environment_bug",
+    "env_setup",
+    "test_command_bug",
+    "test_command",
+    "contract_bug",
+    "process_bug",
+    "test",
+    "inconclusive",
+}
 
 
 @dataclass(frozen=True)
@@ -59,7 +81,7 @@ class ArtifactValidator:
                 issues.append(
                     ValidationIssue(relative_name, "required_output_not_file", f"Required output is not a file: {relative_name}")
                 )
-            elif path.stat().st_size == 0:
+            elif path.stat().st_size == 0 and not required_output_may_be_empty(relative_name):
                 issues.append(
                     ValidationIssue(relative_name, "required_output_empty", f"Required output is empty: {relative_name}")
                 )
@@ -82,6 +104,7 @@ class ArtifactValidator:
                 "tester_result.json",
                 "merged_patch_metadata.json",
                 "final_delivery.json",
+                *CONTRACT_ARTIFACTS,
             }:
                 issues.extend(self.validate_json_artifact(path, relative_name))
         delivery_path = output_dir / "delivery.md"
@@ -181,7 +204,10 @@ class ArtifactValidator:
                 messages.append("selected_plan.json.summary must be a non-empty string")
             messages.extend(validate_acceptance_oracles(payload))
         elif artifact_name == "tester_result.json":
+            messages.extend(self.validate_tester_result_json(payload))
             messages.extend(validate_tester_oracle_results(payload))
+        elif artifact_name in CONTRACT_ARTIFACTS:
+            messages.extend(self.validate_contract_json(payload, artifact_name))
         elif artifact_name == "merged_patch_metadata.json":
             if payload.get("patch_artifact") != "merged_patch.diff":
                 messages.append('merged_patch_metadata.json.patch_artifact must be "merged_patch.diff"')
@@ -204,6 +230,100 @@ class ArtifactValidator:
                 messages.append("final_delivery.json.summary must be a non-empty string")
         return [ValidationIssue(artifact_name, "invalid_json_artifact_schema", message) for message in messages]
 
+    def validate_contract_json(self, payload: dict[str, object], artifact_name: str) -> list[str]:
+        messages: list[str] = []
+        is_environment = artifact_name.startswith("environment_contract")
+        is_draft = artifact_name.endswith("_draft.json")
+        expected_schema = "environment_contract.v1" if is_environment else "validation_contract.v1"
+        expected_status = "draft" if is_draft else "final"
+
+        if payload.get("schema_version") != expected_schema:
+            messages.append(f"{artifact_name}.schema_version must be {expected_schema!r}")
+        if not self._non_empty_string(payload.get("contract_id")):
+            messages.append(f"{artifact_name}.contract_id must be a non-empty string")
+        status = self._normalized_string(payload.get("contract_status"))
+        if status not in CONTRACT_STATUSES:
+            messages.append(f"{artifact_name}.contract_status must be one of: draft, final")
+        elif status != expected_status:
+            messages.append(f"{artifact_name}.contract_status must be {expected_status!r}")
+        confidence = self._normalized_string(payload.get("confidence"))
+        if confidence not in CONTRACT_CONFIDENCE_VALUES:
+            messages.append(f"{artifact_name}.confidence must be one of: high, medium, low, unknown")
+        for field in ("unknowns", "evidence_sources"):
+            if not isinstance(payload.get(field), list):
+                messages.append(f"{artifact_name}.{field} must be a list")
+
+        if is_environment:
+            runtime = payload.get("runtime")
+            if not isinstance(runtime, dict):
+                messages.append(f"{artifact_name}.runtime must be an object")
+            elif not self._non_empty_string(runtime.get("type")):
+                messages.append(f"{artifact_name}.runtime.type must be a non-empty string")
+            setup = payload.get("setup")
+            if not isinstance(setup, dict):
+                messages.append(f"{artifact_name}.setup must be an object")
+            else:
+                messages.extend(self.validate_command_section(setup, f"{artifact_name}.setup"))
+            dependencies = payload.get("dependencies")
+            if dependencies is not None:
+                if not isinstance(dependencies, dict):
+                    messages.append(f"{artifact_name}.dependencies must be an object")
+                else:
+                    messages.extend(self.validate_command_section(dependencies, f"{artifact_name}.dependencies"))
+            constraints = payload.get("constraints")
+            if constraints is not None:
+                if not isinstance(constraints, dict):
+                    messages.append(f"{artifact_name}.constraints must be an object")
+                elif not isinstance(constraints.get("forbidden_validation_methods", []), list):
+                    messages.append(f"{artifact_name}.constraints.forbidden_validation_methods must be a list")
+        else:
+            tests = payload.get("tests")
+            if not isinstance(tests, dict):
+                messages.append(f"{artifact_name}.tests must be an object")
+            else:
+                messages.extend(self.validate_command_section(tests, f"{artifact_name}.tests"))
+                for field in ("fail_to_pass", "pass_to_pass"):
+                    if field in tests and not isinstance(tests.get(field), list):
+                        messages.append(f"{artifact_name}.tests.{field} must be a list")
+            pass_criteria = payload.get("pass_criteria")
+            if not isinstance(pass_criteria, dict):
+                messages.append(f"{artifact_name}.pass_criteria must be an object")
+            elif not self._non_empty_string(pass_criteria.get("type")):
+                messages.append(f"{artifact_name}.pass_criteria.type must be a non-empty string")
+            if not isinstance(payload.get("acceptance_oracle_ids", []), list):
+                messages.append(f"{artifact_name}.acceptance_oracle_ids must be a list")
+
+        return messages
+
+    def validate_command_section(self, section: dict[str, object], prefix: str) -> list[str]:
+        messages: list[str] = []
+        mode = self._normalized_string(section.get("mode"))
+        if mode not in CONTRACT_MODES:
+            messages.append(f"{prefix}.mode must be one of: {', '.join(sorted(CONTRACT_MODES))}")
+        commands = section.get("commands")
+        if not isinstance(commands, list):
+            messages.append(f"{prefix}.commands must be a list")
+        elif not all(isinstance(command, str) for command in commands):
+            messages.append(f"{prefix}.commands must contain only strings")
+        elif mode == "explicit" and not any(command.strip() for command in commands):
+            messages.append(f"{prefix}.commands must be non-empty when mode is explicit")
+        discovery_allowed = section.get("discovery_allowed")
+        if discovery_allowed is not None and not isinstance(discovery_allowed, bool):
+            messages.append(f"{prefix}.discovery_allowed must be a boolean when present")
+        return messages
+
+    def validate_tester_result_json(self, payload: dict[str, object]) -> list[str]:
+        messages: list[str] = []
+        failure_type = self._normalized_string(payload.get("failure_type"))
+        if failure_type and failure_type not in TESTER_FAILURE_TYPES:
+            messages.append(
+                "tester_result.json.failure_type must be one of: "
+                + ", ".join(sorted(TESTER_FAILURE_TYPES))
+            )
+        if "environment_ready" in payload and not isinstance(payload.get("environment_ready"), bool):
+            messages.append("tester_result.json.environment_ready must be a boolean when present")
+        return messages
+
     def validate_decision_json(self, payload: dict[str, object]) -> list[str]:
         messages: list[str] = []
         code = payload.get("decision_code")
@@ -225,6 +345,12 @@ class ArtifactValidator:
         if "evidence" not in payload:
             messages.append("decision.json.evidence is required")
         return messages
+
+    def _normalized_string(self, value: object) -> str:
+        return value.strip().lower() if isinstance(value, str) else ""
+
+    def _non_empty_string(self, value: object) -> bool:
+        return isinstance(value, str) and bool(value.strip())
 
     def load_json_object(self, path: Path) -> dict[str, object] | None:
         try:
@@ -307,3 +433,7 @@ def delivery_issue_is_contract_only(result: ValidationResult) -> bool:
         return False
     delivery_contract_codes = {"missing_return_code", "nonzero_return_code", "template_not_completed"}
     return all(issue.artifact == "delivery.md" and issue.code in delivery_contract_codes for issue in errors)
+
+
+def required_output_may_be_empty(relative_name: str) -> bool:
+    return relative_name in EMPTY_ALLOWED_REQUIRED_OUTPUTS

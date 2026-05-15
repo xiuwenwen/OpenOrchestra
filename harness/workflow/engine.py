@@ -47,6 +47,14 @@ from harness.testing.tester_result import (
     TesterResultError,
     load_tester_result,
 )
+from harness.workflow.routing import (
+    WorkflowErrorType,
+    WorkflowRoute,
+    WorkflowRouteAction,
+    choose_review_route,
+    route_review_payload,
+    route_tester_decision,
+)
 
 
 class PhaseRunner(Protocol):
@@ -458,11 +466,23 @@ class WorkflowEngine:
                 user_prompt,
                 phase_scope=self.phase_scope("review", iteration_id=review_iteration),
             )
-            blocked_reason = self.review_environment_block_reason(review_results)
-            if blocked_reason:
-                raise TaskFailedError(f"Reviewer blocked delivery due to runtime environment conflict: {blocked_reason}")
-            if self.review_approved(review_results):
+            route = self.review_route(review_results)
+            self.emit_review_route(task_id, REVIEWING, review_round_id, route)
+            if route.action == WorkflowRouteAction.CONTINUE:
                 break
+            if route.action == WorkflowRouteAction.BLOCK_TASK:
+                raise TaskFailedError(f"Reviewer blocked delivery due to {route.error_type.value}: {route.reason}")
+            if route.action == WorkflowRouteAction.RETRY_ARTIFACT:
+                raise TaskFailedError(f"Reviewer produced an unrouteable review_result.json: {route.reason}")
+            if route.action == WorkflowRouteAction.TESTER_ENVIRONMENT_REPAIR:
+                tester_decision = self.run_review_environment_repair(task_id, user_prompt, review_round_id, review_iteration)
+                tester_route = route_tester_decision(tester_decision)
+                if tester_route.action == WorkflowRouteAction.CONTINUE:
+                    break
+                if tester_route.action == WorkflowRouteAction.BLOCK_TASK:
+                    raise TaskFailedError(f"Tester blocked review environment repair: {tester_route.reason}")
+                if tester_route.action != WorkflowRouteAction.EXECUTOR_FIX:
+                    raise TaskFailedError(f"Review environment repair did not produce a routeable result: {tester_route.reason}")
 
             fix_round_id = self.next_phase_round_id(task_id)
             o.run_role_phase(
@@ -480,48 +500,103 @@ class WorkflowEngine:
             raise TaskFailedError("Review was not approved within max_review_rounds")
 
     def review_approved(self, results: list[AgentRunResult]) -> bool:
+        return self.review_route(results).action == WorkflowRouteAction.CONTINUE
+
+    def review_route(self, results: list[AgentRunResult]) -> WorkflowRoute:
+        routes: list[WorkflowRoute] = []
         for result in results:
             for artifact in result.artifacts:
                 if artifact.artifact_type != REVIEW_RESULT_ARTIFACT or not artifact.path.exists():
                     continue
                 payload = load_review_result(artifact.path)
-                if review_decision_code_from_payload(payload) != 0:
-                    continue
-                if self._review_verdict_json_approved(payload):
-                    return True
-        return False
+                routes.append(route_review_payload(payload))
+        return choose_review_route(routes)
 
     def _review_verdict_json_approved(self, payload: dict[str, Any]) -> bool:
-        status = str(
-            payload.get("review_status")
-            or payload.get("decision")
-            or payload.get("status")
-            or ""
-        ).strip().lower()
-        if status not in {"approved", "approve", "pass", "passed", "success"}:
-            return False
-        environment_check = payload.get("environment_check")
-        if not isinstance(environment_check, dict):
-            return False
-        environment_status = str(environment_check.get("status") or "").strip().lower()
-        return environment_status in {"ready", "not_applicable", "pass", "passed", "success"}
+        return route_review_payload(payload).action == WorkflowRouteAction.CONTINUE
 
     def review_environment_block_reason(self, results: list[AgentRunResult]) -> str | None:
-        for result in results:
-            for artifact in result.artifacts:
-                if artifact.artifact_type != REVIEW_RESULT_ARTIFACT or not artifact.path.exists():
-                    continue
-                payload = load_review_result(artifact.path)
-                environment_check = payload.get("environment_check")
-                if not isinstance(environment_check, dict):
-                    continue
-                status = str(environment_check.get("status") or "").strip().lower()
-                if status != "blocked":
-                    continue
-                reason = environment_check.get("blocking_reason") or payload.get("blocking_reason") or payload.get("reason")
-                text = str(reason).strip()
-                return text or "reviewer reported a blocked runtime environment with no reason"
+        route = self.review_route(results)
+        if route.action == WorkflowRouteAction.BLOCK_TASK and route.error_type == WorkflowErrorType.ENVIRONMENT_BLOCKED:
+            return route.reason or "reviewer reported a blocked runtime environment with no reason"
         return None
+
+    def run_review_environment_repair(
+        self,
+        task_id: str,
+        user_prompt: str,
+        review_round_id: int,
+        review_iteration: int,
+    ) -> TesterResult:
+        existing = self.latest_passing_tester_decision(task_id)
+        if existing:
+            self.emit_review_environment_repair_reused(task_id, review_round_id, existing)
+            return existing
+        return self.run_testing_until_tester_decision(
+            task_id,
+            REGRESSION_TESTING,
+            review_round_id,
+            user_prompt,
+            phase_scope=self.phase_scope(
+                "review_environment_repair",
+                parent_round_id=review_round_id,
+                iteration_id=review_iteration,
+            ),
+        )
+
+    def latest_passing_tester_decision(self, task_id: str) -> TesterResult | None:
+        current_phase_ids = {
+            str(phase["phase_id"])
+            for phase in self.current_prompt_turn_phases(task_id)
+            if phase["phase_type"] in {TESTING, REGRESSION_TESTING}
+        }
+        for artifact in reversed(self.runtime.repository.list_artifacts(task_id, TESTER_RESULT_ARTIFACT)):
+            if artifact.get("phase_id") not in current_phase_ids:
+                continue
+            path = Path(artifact["path"])
+            if not path.exists() or not path.is_file():
+                continue
+            try:
+                decision = load_tester_result(path)
+            except TesterResultError:
+                continue
+            if decision.tests_passed and not decision.has_environment_dependency_issue:
+                return decision
+        return None
+
+    def emit_review_route(self, task_id: str, phase: str, round_id: int, route: WorkflowRoute) -> None:
+        self.runtime.emit_progress(
+            ProgressEvent(
+                "workflow_route_decision",
+                task_id=task_id,
+                phase=phase,
+                role="orchestrator",
+                round_id=round_id,
+                status=route.action.value,
+                message=route.reason or f"Workflow routed to {route.action.value}",
+                data={
+                    "route_action": route.action.value,
+                    "error_type": route.error_type.value,
+                },
+            )
+        )
+
+    def emit_review_environment_repair_reused(self, task_id: str, round_id: int, decision: TesterResult) -> None:
+        self.runtime.emit_progress(
+            ProgressEvent(
+                "review_environment_repair_reused_tester_result",
+                task_id=task_id,
+                phase=REVIEWING,
+                role="tester",
+                round_id=round_id,
+                status=decision.status,
+                message="Reviewer requested environment follow-up; latest tester_result.json already passed without environment dependency issues.",
+                data={
+                    "artifact": str(decision.artifact_path),
+                    "environment_dependency_issue": decision.environment_dependency_issue,
+                },
+            )
+        )
 
     def run_regression_test_fix_loop(self, task_id: str, user_prompt: str, review_round_id: int, merge_ok: bool) -> None:
         o = self.runtime
@@ -610,8 +685,9 @@ class WorkflowEngine:
                 self.emit_tester_result_invalid(task_id, phase, round_id, repair_attempt, last_error)
                 continue
             self.emit_tester_decision(task_id, phase, round_id, decision)
-            if decision.has_environment_dependency_issue:
-                last_error = decision.summary or decision.failure_type or "tester reported environment dependency issue"
+            route = route_tester_decision(decision)
+            if route.action == WorkflowRouteAction.TESTER_ENVIRONMENT_REPAIR:
+                last_error = route.reason
                 next_loop_type = "tester_environment_repair"
                 self.emit_tester_environment_repair_requested(task_id, phase, round_id, repair_attempt, decision)
                 continue

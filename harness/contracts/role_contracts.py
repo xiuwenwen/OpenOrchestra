@@ -59,7 +59,8 @@ ROLE_PHASE_INPUT_BUDGETS: dict[tuple[str, str], ArtifactInputBudget] = {
 DEFAULT_ROLE_INSTRUCTIONS = {
     "planner": (
         "Create planning artifacts only. Analyze the request, existing artifacts, assumptions, risks, "
-        "compatibility constraints, and an actionable task breakdown. Do not modify source files. "
+        "compatibility constraints, environment/setup requirements, validation requirements, and an actionable task breakdown. "
+        "Fill the Harness-created environment and validation contract draft JSON files; when the prompt or artifacts do not provide enough information, mark the relevant mode as unknown instead of inventing default commands. Do not modify source files. "
         "delivery.md is a JSON role return envelope. It must be exactly one JSON object with "
         "`return_code` set to `0` when you produced the required planning files, even if you identify high risks. "
         "Complete planning Markdown artifacts must contain `artifact_result_code: 0`."
@@ -67,7 +68,7 @@ DEFAULT_ROLE_INSTRUCTIONS = {
     "executor": (
         "Create the artifacts required by the current executor phase. For implementation and fix phases, "
         "express code changes as unified diff files and supporting notes. For miscellaneous response phases, "
-        "answer the request without modifying project files. If the current repository already satisfies the requested fix and staged tester/reviewer evidence shows no source bug, treat this as a valid no-op fix: do not recreate a historical patch, produce the required artifacts, and record the no-op evidence in fix notes and self-check. "
+        "answer the request without modifying project files. If the current repository already satisfies the requested fix and staged tester/reviewer evidence shows no source bug, treat this as a valid no-op fix: do not recreate a historical patch, produce the required artifacts, write an empty fix_patch.diff when no additional current-baseline changes are needed, and record the no-op evidence in fix notes and self-check. "
         "Do not decide workflow progression or communicate "
         "with the user outside required artifacts. delivery.md is a JSON role return envelope. It must be exactly one "
         "JSON object with `return_code` set to `0` when you produced the required files, regardless of the "
@@ -77,7 +78,8 @@ DEFAULT_ROLE_INSTRUCTIONS = {
         "Evaluate executor artifacts and available repository state. Produce bug_report.md "
         "with explicit build, test, and bug verdicts plus reproducible evidence, and produce "
         "tester_result.json as the strict workflow decision. Tester owns test environment preparation and command execution: "
-        "run project-declared dependency/setup commands in an isolated environment or configured test runtime when safe, repair environment failures, and rerun the relevant command before reporting tests as blocked. "
+        "use `environment_contract.json` and `validation_contract.json` when present, run their declared or discoverable setup/test commands in an isolated environment or configured test runtime when safe, repair environment failures, and rerun the relevant command before reporting tests as blocked. "
+        "If a contract is missing or invalid when one is expected, report `failure_type: contract_bug`; do not silently fall back to default pytest. "
         "Only use project-declared dependencies or reasonable minimal test tooling such as pytest/coverage/tox/nox/build tooling; do not install broad arbitrary packages just to make tests run. "
         "Do not rely on a later Harness test gate; `tester_result.json` must decide `tests_passed`, `source_bug`, or `environment_blocked`. "
         "`tester_result.json.environment_dependency_issue` must explicitly report whether dependency/setup/build/test execution is blocked by environment problems; Harness checks it before `status`. "
@@ -95,6 +97,7 @@ DEFAULT_ROLE_INSTRUCTIONS = {
         "use Harness runtime-readiness evidence when present, attempt local isolated dependency setup when needed, and verify the delivered environment actually works. "
         "When tester_result.json is present, treat it as the structured test verdict and reconcile it with runtime-readiness evidence before requesting source changes. "
         "During plan review, extract acceptance semantics from every available proposal, review artifact, and candidate report before selecting implementation work. "
+        "Also merge every planner's environment and validation contract draft into final `environment_contract.json` and `validation_contract.json`; these contracts are downstream source of truth. "
         "Do not equate plan selection with acceptance selection: preserve every compatible acceptance requirement from any proposal in `selected_plan.json.acceptance_oracles`, even when the implementation strategy that introduced it is not selected. "
         "If acceptance requirements conflict, record the conflict in `review_result.json.required_changes` instead of silently choosing one. "
         "Fill the Harness-created `review_result.json` template with the review verdict and environment evidence; do not create `review_report.md`. "

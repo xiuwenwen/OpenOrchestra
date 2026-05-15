@@ -55,7 +55,7 @@ def test_role_phase_contract_binds_outputs_and_visibility() -> None:
     assert contract.required_outputs_with_delivery() == ["decision.json", "delivery.md"]
     assert {(rule.source_role, tuple(sorted(rule.artifact_types))) for rule in contract.visibility_rules} == {
         ("orchestrator", ("objective_gate.md",)),
-        ("reviewer", ("selected_plan.json",)),
+        ("reviewer", ("environment_contract.json", "selected_plan.json", "validation_contract.json")),
         ("tester", ("bug_report.md", "tester_result.json")),
     }
 
@@ -75,6 +75,25 @@ def test_role_contract_registry_binds_instruction_outputs_and_contract_lines() -
     assert contract.required_outputs == ("bug_report.md", "tester_result.json", "delivery.md")
     assert contract.input_budget == artifact_input_budget_for("tester", "TESTING")
     assert any("Do not copy `build_result_code`" in line for line in contract.output_contract_lines)
+
+
+def test_planning_and_plan_review_contract_outputs_include_environment_contracts() -> None:
+    assert required_outputs_for("planner", "PLANNING_DRAFT") == [
+        "plan.md",
+        "assumptions.md",
+        "risk.md",
+        "todo_breakdown.json",
+        "environment_contract_draft.json",
+        "validation_contract_draft.json",
+        "delivery.md",
+    ]
+    assert required_outputs_for("reviewer", "PLAN_REVIEW") == [
+        "review_result.json",
+        "selected_plan.json",
+        "environment_contract.json",
+        "validation_contract.json",
+        "delivery.md",
+    ]
 
 
 def test_role_phase_input_budgets_are_defined_for_context_heavy_roles() -> None:

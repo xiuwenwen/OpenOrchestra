@@ -47,6 +47,37 @@ def _valid_checkpoint_content(artifact_type: str) -> str:
         return "return_code: 0\n"
     if artifact_type == "todo_breakdown.json":
         return json.dumps({"schema_version": 1, "todos": [], "risks": []}) + "\n"
+    if artifact_type in {"environment_contract_draft.json", "environment_contract.json"}:
+        return json.dumps(
+            {
+                "schema_version": "environment_contract.v1",
+                "contract_id": "env",
+                "contract_status": "draft" if artifact_type.endswith("_draft.json") else "final",
+                "source": "checkpoint",
+                "confidence": "unknown",
+                "runtime": {"type": "unknown"},
+                "setup": {"mode": "unknown", "commands": [], "discovery_allowed": True},
+                "dependencies": {"mode": "unknown", "commands": [], "files": []},
+                "unknowns": ["checkpoint fixture"],
+                "evidence_sources": [],
+            }
+        ) + "\n"
+    if artifact_type in {"validation_contract_draft.json", "validation_contract.json"}:
+        return json.dumps(
+            {
+                "schema_version": "validation_contract.v1",
+                "contract_id": "validation",
+                "contract_status": "draft" if artifact_type.endswith("_draft.json") else "final",
+                "source": "checkpoint",
+                "confidence": "unknown",
+                "runtime": "unknown",
+                "tests": {"mode": "unknown", "commands": [], "discovery_allowed": True},
+                "pass_criteria": {"type": "unknown", "conditions": []},
+                "acceptance_oracle_ids": [],
+                "unknowns": ["checkpoint fixture"],
+                "evidence_sources": [],
+            }
+        ) + "\n"
     return f"artifact_result_code: 0\n\n# {artifact_type}\n"
 
 
