@@ -50,34 +50,7 @@ class ArtifactVisibilityPolicy:
         filtered_ids: set[str] = set()
         latest_matches: dict[tuple[int, str], dict[str, Any]] = {}
         rules = self.rules_for(role, phase)
-        latest_planning_round = max(
-            (
-                int(phases_by_id[artifact["phase_id"]]["round_id"])
-                for artifact in artifacts
-                if artifact.get("phase_id") in phases_by_id
-                and (artifact.get("role") or "") == "planner"
-                and phases_by_id[artifact["phase_id"]]["phase_type"]
-                in {PLANNING_DRAFT, PLANNING_REVISION, PLANNING_PEER_REVIEW}
-                and phases_by_id[artifact["phase_id"]].get("round_id") is not None
-            ),
-            default=None,
-        )
-        rejected_plan_review_round = self._latest_rejected_plan_review_round(artifacts, phases_by_id, round_id)
-        latest_complete_test_phase = self._latest_complete_artifact_phase_before(
-            artifacts,
-            phases_by_id,
-            round_id,
-            source_role="tester",
-            artifact_types=TEST_REPORT_ARTIFACTS,
-            source_phases=_phases(TESTING, REGRESSION_TESTING),
-        )
-        latest_complete_test_phase_any = self._latest_complete_artifact_phase(
-            artifacts,
-            phases_by_id,
-            source_role="tester",
-            artifact_types=TEST_REPORT_ARTIFACTS,
-            source_phases=_phases(TESTING, REGRESSION_TESTING),
-        )
+        context = self._visibility_context(artifacts, phases_by_id, round_id)
         def append_once(artifact: dict[str, Any]) -> None:
             artifact_id = str(artifact.get("artifact_id") or artifact.get("path") or id(artifact))
             if artifact_id in filtered_ids:
@@ -99,10 +72,10 @@ class ArtifactVisibilityPolicy:
                     effective_round=effective_round,
                     target_round=round_id,
                     current_agent_id=current_agent_id,
-                    latest_planning_round=latest_planning_round,
-                    rejected_plan_review_round=rejected_plan_review_round,
-                    latest_complete_test_phase=latest_complete_test_phase,
-                    latest_complete_test_phase_any=latest_complete_test_phase_any,
+                    latest_planning_round=context["latest_planning_round"],
+                    rejected_plan_review_round=context["rejected_plan_review_round"],
+                    latest_complete_test_phase=context["latest_complete_test_phase"],
+                    latest_complete_test_phase_any=context["latest_complete_test_phase_any"],
                 ):
                     continue
                 if rule.round_policy in {ROUND_LATEST_PER_TYPE, ROUND_LATEST_BEFORE_CURRENT_PER_TYPE}:
@@ -127,11 +100,107 @@ class ArtifactVisibilityPolicy:
             return list(contract.visibility_rules)
         return [rule for rule in ARTIFACT_VISIBILITY_RULES if rule.target_role == role and rule.target_phase in {phase, ANY_PHASE}]
 
+    def visibility_reason_for_artifact(
+        self,
+        artifact: dict[str, Any],
+        artifacts: list[dict[str, Any]],
+        phases_by_id: dict[str, dict[str, Any]],
+        role: str,
+        phase: str,
+        round_id: int | None,
+        current_agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        phase_row = phases_by_id.get(artifact.get("phase_id") or "")
+        artifact_phase = str(phase_row["phase_type"]) if phase_row else None
+        artifact_round = int(phase_row["round_id"]) if phase_row and phase_row.get("round_id") is not None else None
+        effective_round = artifact_round if artifact_round is not None else self._artifact_declared_round_id(artifact)
+        context = self._visibility_context(artifacts, phases_by_id, round_id)
+        for rule_index, rule in enumerate(self.rules_for(role, phase)):
+            if not self._artifact_matches_visibility_rule(
+                artifact,
+                rule,
+                artifact_phase=artifact_phase,
+                effective_round=effective_round,
+                target_round=round_id,
+                current_agent_id=current_agent_id,
+                latest_planning_round=context["latest_planning_round"],
+                rejected_plan_review_round=context["rejected_plan_review_round"],
+                latest_complete_test_phase=context["latest_complete_test_phase"],
+                latest_complete_test_phase_any=context["latest_complete_test_phase_any"],
+            ):
+                continue
+            return {
+                "rule_index": rule_index,
+                "rule": f"{rule.target_role}:{rule.target_phase} <- {rule.source_role}",
+                "target_role": rule.target_role,
+                "target_phase": rule.target_phase,
+                "source_role": rule.source_role,
+                "source_phases": sorted(rule.source_phases) if rule.source_phases is not None else ["*"],
+                "round_policy": rule.round_policy,
+                "self_policy": rule.self_policy,
+                "condition": rule.condition,
+                "artifact_phase": artifact_phase,
+                "artifact_round": effective_round,
+                "reason": f"matched visibility rule {rule_index} with round_policy={rule.round_policy}",
+            }
+        return {
+            "rule_index": None,
+            "rule": "unknown",
+            "target_role": role,
+            "target_phase": phase,
+            "source_role": artifact.get("role") or "unknown",
+            "source_phases": [],
+            "round_policy": "unknown",
+            "self_policy": "unknown",
+            "condition": "unknown",
+            "artifact_phase": artifact_phase,
+            "artifact_round": effective_round,
+            "reason": "artifact was visible but no matching rule explanation was found",
+        }
+
     def allowed_by_table(self, target_role: str, target_phase: str, source_role: str, artifact_type: str) -> bool:
         for rule in self.rules_for(target_role, target_phase):
             if rule.source_role == source_role and artifact_type in rule.artifact_types:
                 return True
         return False
+
+    def _visibility_context(
+        self,
+        artifacts: list[dict[str, Any]],
+        phases_by_id: dict[str, dict[str, Any]],
+        round_id: int | None,
+    ) -> dict[str, Any]:
+        latest_planning_round = max(
+            (
+                int(phases_by_id[artifact["phase_id"]]["round_id"])
+                for artifact in artifacts
+                if artifact.get("phase_id") in phases_by_id
+                and (artifact.get("role") or "") == "planner"
+                and phases_by_id[artifact["phase_id"]]["phase_type"]
+                in {PLANNING_DRAFT, PLANNING_REVISION, PLANNING_PEER_REVIEW}
+                and phases_by_id[artifact["phase_id"]].get("round_id") is not None
+            ),
+            default=None,
+        )
+        return {
+            "latest_planning_round": latest_planning_round,
+            "rejected_plan_review_round": self._latest_rejected_plan_review_round(artifacts, phases_by_id, round_id),
+            "latest_complete_test_phase": self._latest_complete_artifact_phase_before(
+                artifacts,
+                phases_by_id,
+                round_id,
+                source_role="tester",
+                artifact_types=TEST_REPORT_ARTIFACTS,
+                source_phases=_phases(TESTING, REGRESSION_TESTING),
+            ),
+            "latest_complete_test_phase_any": self._latest_complete_artifact_phase(
+                artifacts,
+                phases_by_id,
+                source_role="tester",
+                artifact_types=TEST_REPORT_ARTIFACTS,
+                source_phases=_phases(TESTING, REGRESSION_TESTING),
+            ),
+        }
 
     def _artifact_order_key(
         self,

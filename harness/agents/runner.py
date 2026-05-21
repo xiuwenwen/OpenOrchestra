@@ -959,7 +959,7 @@ class AgentPhaseRunner:
             data["delivery_contract_review_stdout"] = str(review.stdout_path)
         if review.stderr_path:
             data["delivery_contract_review_stderr"] = str(review.stderr_path)
-        if not review.accepts:
+        if not review.accepts_format_only_failure:
             return data
         delivery_path = context.output_dir / "delivery.md"
         original_path = review.prompt_path.parent / "delivery.original.md"

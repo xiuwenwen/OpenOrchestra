@@ -9,10 +9,31 @@ from typing import Any
 DEFAULT_CONFIG_PATH = Path("config/config.yaml")
 
 
-def _parse_scalar(value: str) -> Any:
+def _strip_inline_comment(line: str) -> str:
+    in_single = False
+    in_double = False
+    escaped = False
+    for index, char in enumerate(line):
+        if char == "\\" and in_double and not escaped:
+            escaped = True
+            continue
+        if char == "'" and not in_double and not escaped:
+            in_single = not in_single
+        elif char == '"' and not in_single and not escaped:
+            in_double = not in_double
+        elif char == "#" and not in_single and not in_double and (index == 0 or line[index - 1].isspace()):
+            return line[:index].rstrip()
+        escaped = False
+    return line.rstrip()
+
+
+def _parse_scalar(value: str, *, line_no: int | None = None) -> Any:
     value = value.strip()
     if not value:
         return {}
+    if value in {"|", ">"}:
+        location = f" at line {line_no}" if line_no is not None else ""
+        raise ValueError(f"Unsupported config value{location}: multiline YAML scalars are not supported")
     if value == "[]":
         return []
     if value.startswith("[") and value.endswith("]"):
@@ -40,17 +61,20 @@ def _parse_scalar(value: str) -> Any:
 def _minimal_yaml_load(text: str) -> dict[str, Any]:
     """Parse the small YAML subset used by config/config.yaml.
 
-    This intentionally avoids a PyYAML dependency. It supports nested mappings
-    with two-space indentation, scalar string/int/bool values, and scalar lists.
+    This intentionally avoids a PyYAML dependency and is not a general YAML
+    parser. It supports nested mappings, scalar string/int/bool values, scalar
+    lists, list-of-mapping entries, and inline comments outside quoted strings.
     """
     root: dict[str, Any] = {}
     entries = [
-        raw_line
-        for raw_line in text.splitlines()
-        if raw_line.strip() and not raw_line.lstrip().startswith("#")
+        (line_no, cleaned)
+        for line_no, raw_line in enumerate(text.splitlines(), start=1)
+        if (cleaned := _strip_inline_comment(raw_line)).strip()
     ]
     stack: list[tuple[int, dict[str, Any] | list[Any]]] = [(-1, root)]
-    for index, raw_line in enumerate(entries):
+    for index, (line_no, raw_line) in enumerate(entries):
+        if "\t" in raw_line[: len(raw_line) - len(raw_line.lstrip())]:
+            raise ValueError(f"Invalid config indentation at line {line_no}: tabs are not supported")
         indent = len(raw_line) - len(raw_line.lstrip(" "))
         line = raw_line.strip()
         while stack and indent <= stack[-1][0]:
@@ -58,35 +82,35 @@ def _minimal_yaml_load(text: str) -> dict[str, Any]:
         parent = stack[-1][1]
         if line.startswith("- "):
             if not isinstance(parent, list):
-                raise ValueError(f"Invalid config list item: {raw_line!r}")
+                raise ValueError(f"Invalid config list item at line {line_no}: {raw_line!r}")
             item = line[2:].strip()
             if ":" in item and not item.startswith(("'", '"')):
                 key, value = item.split(":", 1)
-                parsed_item: dict[str, Any] = {key.strip(): _parse_scalar(value)}
+                parsed_item: dict[str, Any] = {key.strip(): _parse_scalar(value, line_no=line_no)}
                 parent.append(parsed_item)
                 stack.append((indent, parsed_item))
             else:
-                parent.append(_parse_scalar(item))
+                parent.append(_parse_scalar(item, line_no=line_no))
             continue
         if ":" not in line:
-            raise ValueError(f"Invalid config line: {raw_line!r}")
+            raise ValueError(f"Invalid config line at line {line_no}: {raw_line!r}")
         key, value = line.split(":", 1)
         key = key.strip()
         if not isinstance(parent, dict):
-            raise ValueError(f"Invalid config mapping entry inside list: {raw_line!r}")
+            raise ValueError(f"Invalid config mapping entry inside list at line {line_no}: {raw_line!r}")
         if not value.strip():
             parsed: dict[str, Any] | list[Any]
             parsed = [] if _next_entry_is_list(entries, index, indent) else {}
         else:
-            parsed = _parse_scalar(value)
+            parsed = _parse_scalar(value, line_no=line_no)
         parent[key] = parsed
         if isinstance(parsed, (dict, list)):
             stack.append((indent, parsed))
     return root
 
 
-def _next_entry_is_list(entries: list[str], current_index: int, current_indent: int) -> bool:
-    for raw_line in entries[current_index + 1 :]:
+def _next_entry_is_list(entries: list[tuple[int, str]], current_index: int, current_indent: int) -> bool:
+    for _, raw_line in entries[current_index + 1 :]:
         indent = len(raw_line) - len(raw_line.lstrip(" "))
         if indent <= current_indent:
             return False
@@ -98,7 +122,10 @@ def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     config_path = Path(path)
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
-    return _minimal_yaml_load(config_path.read_text(encoding="utf-8"))
+    try:
+        return _minimal_yaml_load(config_path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise ValueError(f"Invalid config file {config_path}: {exc}") from exc
 
 
 def dump_config(config: dict[str, Any]) -> str:

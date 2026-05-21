@@ -174,65 +174,23 @@ class Orchestrator:
             self._active_workflow_type = None
             self._active_task_resume_status = None
 
-    def _run_new_project_flow(self, task_id: str, user_prompt: str) -> Path:
-        return self.workflow_engine.run_new_project_flow(task_id, user_prompt)
-
     def _run_bugfix_flow(self, task_id: str, user_prompt: str) -> Path:
         return self.workflow_engine.run_bugfix_flow(task_id, user_prompt)
-
-    def _bugfix_resume_start_round(self, task_id: str) -> int:
-        return self.workflow_engine.bugfix_resume_start_round(task_id)
-
-    def _highest_bugfix_round_id(self, task_id: str) -> int | None:
-        return self.workflow_engine.highest_bugfix_round_id(task_id)
-
-    def _run_feature_change_flow(self, task_id: str, user_prompt: str) -> Path:
-        return self.workflow_engine.run_feature_change_flow(task_id, user_prompt)
-
-    def _run_misc_flow(self, task_id: str, user_prompt: str) -> Path:
-        return self.workflow_engine.run_misc_flow(task_id, user_prompt)
 
     def _run_planning_block(self, task_id: str, user_prompt: str) -> None:
         self.workflow_engine.run_planning_block(task_id, user_prompt)
 
-    def _planning_peer_review_loop_count(self) -> int:
-        return self.workflow_engine.planning_peer_review_loop_count()
-
-    def _peer_reviews_satisfied(self, results: list[AgentRunResult]) -> bool:
-        return self.workflow_engine.peer_reviews_satisfied(results)
-
-    def _plan_review_approved(self, results: list[AgentRunResult]) -> bool:
-        return self.workflow_engine.plan_review_approved(results)
-
     def _run_execution_test_loop(self, task_id: str, user_prompt: str) -> None:
         self.workflow_engine.run_execution_test_loop(task_id, user_prompt)
 
-    def _execution_test_end_round(self, start_round: int, max_rounds: int | None) -> int | None:
-        return self.workflow_engine.execution_test_end_round(start_round, max_rounds)
-
-    def _execution_resume_start_round(self, task_id: str) -> int:
-        return self.workflow_engine.execution_resume_start_round(task_id)
-
     def _max_test_fix_rounds(self) -> int | None:
         return self.workflow_engine.max_test_fix_rounds()
-
-    def _resolve_test_fix_round_limit(self, task_id: str, current_limit: int | None) -> int | None:
-        return self.workflow_engine.resolve_test_fix_round_limit(task_id, current_limit)
-
-    def _highest_execution_test_round_id(self, task_id: str) -> int | None:
-        return self.workflow_engine.highest_execution_test_round_id(task_id)
 
     def _run_review_loop(self, task_id: str, user_prompt: str) -> None:
         self.workflow_engine.run_review_loop(task_id, user_prompt)
 
     def _run_regression_test_fix_loop(self, task_id: str, user_prompt: str, review_round_id: int, merge_ok: bool) -> None:
         self.workflow_engine.run_regression_test_fix_loop(task_id, user_prompt, review_round_id, merge_ok)
-
-    def _regression_phase_round_id(self, review_round_id: int, test_round_id: int, max_rounds: int | None) -> int:
-        return self.workflow_engine.regression_phase_round_id(review_round_id, test_round_id, max_rounds)
-
-    def _run_delivery(self, task_id: str, user_prompt: str) -> Path:
-        return self.workflow_engine.run_delivery(task_id, user_prompt)
 
     def run_role_phase(
         self,
@@ -747,37 +705,6 @@ class Orchestrator:
             repo_dir=repo_dir,
         )
 
-    def _test_target_manifest_lines(
-        self,
-        task_id: str,
-        role: str,
-        phase: str,
-        round_id: int | None,
-        repo_dir: Path | None,
-    ) -> list[str]:
-        return self.input_staging_service.test_target_manifest_lines(task_id, role, phase, round_id, repo_dir)
-
-    def _testing_failure_context_manifest_lines(
-        self,
-        task_id: str,
-        artifacts: list[dict[str, Any]],
-        phases_by_id: dict[str, dict[str, Any]],
-        role: str,
-        phase: str,
-        round_id: int | None,
-    ) -> list[str]:
-        return self.input_staging_service.testing_failure_context_manifest_lines(
-            task_id, artifacts, phases_by_id, role, phase, round_id
-        )
-
-    def _failed_test_rounds_before(
-        self,
-        task_id: str,
-        phases_by_id: dict[str, dict[str, Any]],
-        round_id: int,
-    ) -> list[int]:
-        return self.input_staging_service.failed_test_rounds_before(task_id, phases_by_id, round_id)
-
     def _artifact_input_limits(self, role: str | None = None, phase: str | None = None) -> dict[str, Any]:
         return self.input_staging_service.artifact_input_limits(role, phase)
 
@@ -795,41 +722,6 @@ class Orchestrator:
     def _positive_int(self, value: Any, default: int, field_name: str) -> int:
         return self.positive_int(value, default, field_name)
 
-    def _copy_artifact_with_budget(
-        self,
-        source: Path,
-        destination: Path,
-        *,
-        max_file_bytes: int,
-        remaining_total_bytes: int,
-    ) -> tuple[int, bool]:
-        return self.input_staging_service.copy_artifact_with_budget(
-            source,
-            destination,
-            max_file_bytes=max_file_bytes,
-            remaining_total_bytes=remaining_total_bytes,
-        )
-
-    def _append_skipped_artifact_manifest(
-        self,
-        manifest_lines: list[str],
-        index: int,
-        artifact: dict[str, Any],
-        source: Path,
-        reason: str,
-    ) -> None:
-        self.input_staging_service.append_skipped_artifact_manifest(manifest_lines, index, artifact, source, reason)
-
-    def _append_path_only_artifact_manifest(
-        self,
-        manifest_lines: list[str],
-        index: int,
-        artifact: dict[str, Any],
-        source: Path,
-        reason: str,
-    ) -> None:
-        self.input_staging_service.append_path_only_artifact_manifest(manifest_lines, index, artifact, source, reason)
-
     def _artifact_staging_mode(
         self,
         role: str,
@@ -846,9 +738,6 @@ class Orchestrator:
             large_artifact_mode=large_artifact_mode,
         )
 
-    def _artifact_max_file_bytes(self, configured_max_file_bytes: int, staging_mode: str) -> int:
-        return self.input_staging_service.artifact_max_file_bytes(configured_max_file_bytes, staging_mode)
-
     def latest_final_delivery(self, task_id: str) -> Path | None:
         return self.communicator.latest_final_delivery(task_id)
 
@@ -864,29 +753,8 @@ class Orchestrator:
     def _delivery_project_dir(self, task_id: str, prompt: str, deliver_root: Path | None = None) -> Path:
         return self.delivery_publisher.delivery_project_dir(task_id, prompt, deliver_root)
 
-    def _write_success_path(self, task_id: str, project_dir: Path, final_delivery: Path, usage_guide: Path | None) -> Path:
-        return self.delivery_publisher.write_success_path(task_id, project_dir, final_delivery, usage_guide)
-
-    def _record_published_artifact(self, task_id: str, artifact_type: str, path: Path) -> None:
-        self.delivery_publisher.record_published_artifact(task_id, artifact_type, path)
-
-    def _publish_supporting_artifacts(self, task_id: str, project_dir: Path) -> list[tuple[str, Path]]:
-        return self.delivery_publisher.publish_supporting_artifacts(task_id, project_dir)
-
-    def _publish_materialized_source(self, task_id: str, project_dir: Path) -> list[Path]:
-        return self.delivery_publisher.publish_materialized_source(task_id, project_dir)
-
     def _publish_dependency_installer(self, project_dir: Path) -> list[Path]:
         return self.delivery_publisher.publish_dependency_installer(project_dir)
-
-    def _infer_delivery_python_dependencies(self, source_dir: Path, project_dir: Path) -> list[str]:
-        return self.delivery_publisher.infer_delivery_python_dependencies(source_dir, project_dir)
-
-    def _copy_ignore_for_publish(self, directory: str, names: list[str]) -> set[str]:
-        return self.delivery_publisher.copy_ignore_for_publish(directory, names)
-
-    def _new_files_from_unified_diff(self, patch_text: str) -> dict[Path, list[str]]:
-        return self.delivery_publisher.new_files_from_unified_diff(patch_text)
 
     def _materialized_files_from_unified_diff(
         self,
@@ -903,22 +771,6 @@ class Orchestrator:
 
     def _strip_diff_path(self, raw_path: str) -> Path:
         return self.delivery_publisher.strip_diff_path(raw_path)
-
-    def _parse_old_hunk_start(self, header: str) -> int | None:
-        return self.delivery_publisher.parse_old_hunk_start(header)
-
-    def _configured_source_repo(self) -> Path | None:
-        source_repo = self.config.get("system", {}).get("source_repo")
-        if not source_repo:
-            return None
-        path = Path(str(source_repo)).expanduser().resolve()
-        return path if path.exists() and path.is_dir() else None
-
-    def _latest_patch_artifact(self, task_id: str) -> dict[str, Any] | None:
-        return self.delivery_publisher.latest_patch_artifact(task_id)
-
-    def _safe_deliver_filename(self, artifact_type: str) -> str:
-        return self.delivery_publisher.safe_deliver_filename(artifact_type)
 
     def _is_safe_relative_path(self, path: Path) -> bool:
         return self.delivery_publisher.is_safe_relative_path(path)

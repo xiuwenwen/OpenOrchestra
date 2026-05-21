@@ -73,6 +73,8 @@ def test_prompt_builder_marks_merged_patch_as_authoritative(tmp_path: Path) -> N
     prompt = PromptBuilder().build(context)
 
     assert "## Test Target" in prompt
+    assert "## Role Template" in prompt
+    assert "You are the tester role for a Harness-managed coding task." in prompt
     assert "Test this exact repository directory" in prompt
     assert "## Required Test Work" in prompt
     assert "Record exact commands run, exit codes" in prompt

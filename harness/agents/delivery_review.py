@@ -51,8 +51,14 @@ class DeliveryContractReview:
     stderr_path: Path | None = None
 
     @property
-    def accepts(self) -> bool:
+    def accepts_format_only_failure(self) -> bool:
+        # Accept only the narrow case where the role succeeded but delivery.md
+        # failed the Harness return-envelope format contract.
         return self.decision == "accept" and self.actual_role_success and self.instruction_following_issue
+
+    @property
+    def accepts(self) -> bool:
+        return self.accepts_format_only_failure
 
 
 class DeliveryContractReviewer:

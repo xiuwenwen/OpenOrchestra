@@ -68,5 +68,45 @@ def test_delivery_contract_review_parses_json_decision(tmp_path: Path) -> None:
     )
 
     assert review.accepts
+    assert review.accepts_format_only_failure
     assert review.delivery_return_code == 0
     assert review.reason == "format only"
+
+
+def test_delivery_contract_review_accepts_only_format_only_success(tmp_path: Path) -> None:
+    reviewer = DeliveryContractReviewer()
+    prompt_path = tmp_path / "prompt.md"
+    stdout_path = tmp_path / "stdout.log"
+    stderr_path = tmp_path / "stderr.log"
+
+    assert reviewer._parse_review(
+        '{"decision":"accept","delivery_return_code":0,"instruction_following_issue":true,'
+        '"actual_role_success":true,"reason":"format only"}',
+        prompt_path,
+        stdout_path,
+        stderr_path,
+    ).accepts_format_only_failure
+
+    assert not reviewer._parse_review(
+        '{"decision":"accept","delivery_return_code":0,"instruction_following_issue":true,'
+        '"actual_role_success":false,"reason":"missing real output"}',
+        prompt_path,
+        stdout_path,
+        stderr_path,
+    ).accepts_format_only_failure
+
+    assert not reviewer._parse_review(
+        '{"decision":"retry","delivery_return_code":0,"instruction_following_issue":true,'
+        '"actual_role_success":true,"reason":"review asked for retry"}',
+        prompt_path,
+        stdout_path,
+        stderr_path,
+    ).accepts_format_only_failure
+
+    assert not reviewer._parse_review(
+        '{"decision":"accept","delivery_return_code":0,"instruction_following_issue":false,'
+        '"actual_role_success":true,"reason":"not a format-only failure"}',
+        prompt_path,
+        stdout_path,
+        stderr_path,
+    ).accepts_format_only_failure

@@ -191,11 +191,15 @@ def test_reviewer_input_excludes_superseded_tester_retry_outputs(tmp_path: Path)
         round_id=0,
     )
     manifest = staged[0].read_text(encoding="utf-8")
+    handoff = json.loads((tmp_path / "review-input-retry" / "handoff_manifest.json").read_text(encoding="utf-8"))
 
     assert "tester_result.json v2" in manifest
     assert "bug_report.md v2" in manifest
     assert "tester_result.json v1" not in manifest
     assert "bug_report.md v1" not in manifest
+    assert "visibility_round_policy: latest_complete_test" in manifest
+    assert {entry["visibility"]["round_policy"] for entry in handoff["artifacts"]} == {"latest_complete_test"}
+    assert {entry["visibility"]["artifact_phase"] for entry in handoff["artifacts"]} == {TESTING}
 
 
 def test_tester_receives_no_executor_markdown_artifacts(tmp_path: Path) -> None:
@@ -233,8 +237,10 @@ def test_tester_receives_no_executor_markdown_artifacts(tmp_path: Path) -> None:
     (repo_dir / "app.py").write_text("print('ok')\n", encoding="utf-8")
     staged = orchestrator._stage_input_artifacts(task_id, tmp_path / "input", "tester", "TESTING", repo_dir=repo_dir)
     manifest = staged[0].read_text(encoding="utf-8")
+    handoff = json.loads((tmp_path / "input" / "handoff_manifest.json").read_text(encoding="utf-8"))
 
     assert staged == [tmp_path / "input" / "manifest.md"]
+    assert handoff["artifacts"] == []
     assert "## Harness Test Target" in manifest
     assert f"- repository_dir: {repo_dir}" in manifest
     assert "- Treat `repository_dir` as the runnable implementation under test." in manifest

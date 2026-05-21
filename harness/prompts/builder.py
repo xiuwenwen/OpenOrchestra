@@ -16,6 +16,9 @@ from harness.prompts.specializations import (
 )
 
 
+PROMPT_TEMPLATE_DIR = Path(__file__).with_name("templates")
+
+
 class PromptBuilder:
     def build(self, context: AgentRunContext) -> str:
         input_artifacts = "\n".join(f"- {context.runtime_path(path)}" for path in context.input_artifacts) or "- none"
@@ -29,6 +32,7 @@ class PromptBuilder:
             f"- `{name}`: `{context.runtime_path(context.output_dir / name)}`" for name in context.required_outputs
         ) or "- none"
         role_specialization = self._role_specialization(context)
+        role_template = self._role_template_lines(context.role)
         metadata_lines = self._metadata_lines(context)
         retry_feedback = self._retry_feedback_lines(context)
         sections = [
@@ -47,10 +51,16 @@ class PromptBuilder:
             "## Role Responsibility",
             context.role_instruction,
             "",
-            "## Role Boundary",
-            *role_boundary_prompt_lines_for(context.role),
-            "",
         ]
+        if role_template:
+            sections.extend(["## Role Template", *role_template, ""])
+        sections.extend(
+            [
+                "## Role Boundary",
+                *role_boundary_prompt_lines_for(context.role),
+                "",
+            ]
+        )
         if role_specialization:
             sections.extend(["## Role Specialization", *role_specialization, ""])
         if retry_feedback:
@@ -142,6 +152,12 @@ class PromptBuilder:
             if message:
                 lines.append(f"- {message}")
         return lines
+
+    def _role_template_lines(self, role: str) -> list[str]:
+        path = PROMPT_TEMPLATE_DIR / f"{role}.md"
+        if not path.exists():
+            return []
+        return path.read_text(encoding="utf-8").splitlines()
 
     def _output_contract_lines(self, context: AgentRunContext) -> list[str]:
         return output_contract_lines_for(context.role, context.phase, context.required_outputs)

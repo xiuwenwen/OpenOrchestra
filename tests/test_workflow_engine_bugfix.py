@@ -285,6 +285,18 @@ def test_tester_environment_dependency_issue_exhaustion_blocks_executor(monkeypa
     assert calls == [None, {"loop_type": "tester_environment_repair", "iteration_id": 1}]
 
 
+def test_tester_decision_source_bug_beats_passing_result(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("do not greenlight mixed tester results", workflow_type=BUGFIX)
+    passing = _tester_run_result(tmp_path, task_id, "passing-phase", "tests_passed", False)
+    source_bug = _tester_run_result(tmp_path, task_id, "source-bug-phase", "source_bug", False)
+
+    decision = orchestrator.workflow_engine.tester_decision_from_results(task_id, [passing, source_bug])
+
+    assert decision.source_bug
+    assert not decision.tests_passed
+
+
 def test_failed_exhausted_bugfix_continue_appends_new_round_window(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     config["limits"]["max_test_fix_rounds"] = 2

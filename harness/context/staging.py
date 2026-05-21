@@ -66,13 +66,13 @@ class InputStagingService:
         limits = self.artifact_input_limits(role, phase)
         staged_file_count = 0
         staged_total_bytes = 0
-        visible_artifacts = [
+        candidate_artifacts = [
             artifact
             for artifact in artifacts
             if not (exclude_phase_id and artifact["phase_id"] == exclude_phase_id)
         ]
         visible_artifacts = self.visibility.filter_visible_artifacts(
-            visible_artifacts,
+            candidate_artifacts,
             phases_by_id,
             role,
             phase,
@@ -94,6 +94,15 @@ class InputStagingService:
             if not source.exists():
                 continue
             source_size = source.stat().st_size
+            visibility = self.visibility.visibility_reason_for_artifact(
+                artifact,
+                candidate_artifacts,
+                phases_by_id,
+                role,
+                phase,
+                round_id,
+                current_agent_id=current_agent_id,
+            )
             safe_type = artifact["artifact_type"].replace("/", "__").replace(" ", "_")
             artifact_role = artifact["role"] or "unknown"
             agent_id = artifact["agent_id"] or "unknown"
@@ -116,6 +125,7 @@ class InputStagingService:
                 "source_path": str(source),
                 "source_bytes": source_size,
                 "staging_mode": staging_mode,
+                "visibility": visibility,
             }
             if staging_mode == "path_only":
                 handoff_entries.append({**handoff_entry, "status": "path_only", "staged_path": None})
@@ -125,16 +135,31 @@ class InputStagingService:
                     artifact,
                     source,
                     "large artifact indexed by path only to avoid repeating full content in model context",
+                    visibility,
                 )
                 continue
             if staged_file_count >= limits["max_files"]:
                 handoff_entries.append({**handoff_entry, "status": "skipped", "reason": "max_files exceeded"})
-                self.append_skipped_artifact_manifest(manifest_lines, index, artifact, source, "max_files exceeded")
+                self.append_skipped_artifact_manifest(
+                    manifest_lines,
+                    index,
+                    artifact,
+                    source,
+                    "max_files exceeded",
+                    visibility,
+                )
                 continue
             remaining_total_bytes = limits["max_total_bytes"] - staged_total_bytes
             if remaining_total_bytes <= 0:
                 handoff_entries.append({**handoff_entry, "status": "skipped", "reason": "max_total_bytes exceeded"})
-                self.append_skipped_artifact_manifest(manifest_lines, index, artifact, source, "max_total_bytes exceeded")
+                self.append_skipped_artifact_manifest(
+                    manifest_lines,
+                    index,
+                    artifact,
+                    source,
+                    "max_total_bytes exceeded",
+                    visibility,
+                )
                 continue
             destination = staged_dir / f"{index:03d}_{artifact_role}_{agent_id}_{safe_type}_v{version}_{source.name}"
             copied_bytes, truncated = self.copy_artifact_with_budget(
@@ -164,6 +189,7 @@ class InputStagingService:
                     f"- role: {artifact_role}",
                     f"- agent_id: {agent_id}",
                     f"- phase_id: {artifact['phase_id']}",
+                    *self.visibility_manifest_lines(visibility),
                     f"- source_bytes: {source_size}",
                     f"- staged_bytes: {copied_bytes}",
                     f"- truncated: {str(truncated).lower()}",
@@ -548,6 +574,7 @@ class InputStagingService:
         artifact: dict[str, Any],
         source: Path,
         reason: str,
+        visibility: dict[str, Any] | None = None,
     ) -> None:
         manifest_lines.extend(
             [
@@ -558,6 +585,7 @@ class InputStagingService:
                 f"- role: {artifact['role'] or 'unknown'}",
                 f"- agent_id: {artifact['agent_id'] or 'unknown'}",
                 f"- phase_id: {artifact['phase_id']}",
+                *self.visibility_manifest_lines(visibility),
                 f"- source_bytes: {source.stat().st_size}",
                 "",
             ]
@@ -570,6 +598,7 @@ class InputStagingService:
         artifact: dict[str, Any],
         source: Path,
         reason: str,
+        visibility: dict[str, Any] | None = None,
     ) -> None:
         manifest_lines.extend(
             [
@@ -581,10 +610,26 @@ class InputStagingService:
                 f"- role: {artifact['role'] or 'unknown'}",
                 f"- agent_id: {artifact['agent_id'] or 'unknown'}",
                 f"- phase_id: {artifact['phase_id']}",
+                *self.visibility_manifest_lines(visibility),
                 f"- source_bytes: {source.stat().st_size}",
                 "",
             ]
         )
+
+    def visibility_manifest_lines(self, visibility: dict[str, Any] | None) -> list[str]:
+        if not visibility:
+            return []
+        source_phases = visibility.get("source_phases") or []
+        source_phase_text = ", ".join(str(value) for value in source_phases) if source_phases else "unknown"
+        artifact_round = visibility.get("artifact_round")
+        return [
+            f"- source_phase: {visibility.get('artifact_phase') or 'unknown'}",
+            f"- source_round_id: {artifact_round if artifact_round is not None else 'unknown'}",
+            f"- visibility_rule: {visibility.get('rule') or 'unknown'}",
+            f"- visibility_round_policy: {visibility.get('round_policy') or 'unknown'}",
+            f"- visibility_source_phases: {source_phase_text}",
+            f"- visibility_reason: {visibility.get('reason') or 'visible'}",
+        ]
 
     def artifact_staging_mode(
         self,
