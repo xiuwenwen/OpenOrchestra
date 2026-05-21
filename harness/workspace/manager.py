@@ -152,7 +152,8 @@ class WorkspaceManager:
         src = Path(source)
         dst = Path(destination)
         if src.is_symlink():
-            return shutil.copy2(src, dst)
+            os.symlink(os.readlink(src), dst)
+            return str(destination)
         if cls._clone_file(source, destination):
             shutil.copystat(source, destination, follow_symlinks=True)
             return str(destination)

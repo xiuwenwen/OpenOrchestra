@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import shutil
+import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any, Callable
 
+from harness.adapters.command_runner import CommandRunner
 from harness.agents.result import ArtifactRef
 from harness.artifacts.hashing import sha256_file
 from harness.contracts.role_contracts import required_outputs_for
+from harness.core.errors import TaskFailedError
 from harness.state.repository import StateRepository
 from harness.workspace.manager import WorkspaceManager
 
@@ -17,6 +21,7 @@ from harness.workspace.manager import WorkspaceManager
 MATERIALIZED_SUCCESS_MARKER = ".harness_materialized_success.json"
 LatestPathProvider = Callable[[str], Path | None]
 SourceRepoProvider = Callable[[str], Path | None]
+_COMMAND_RUNNER = CommandRunner()
 
 
 def delivery_required_outputs() -> list[str]:
@@ -31,12 +36,14 @@ class DeliveryPublisher:
         repository: StateRepository,
         latest_usage_guide: LatestPathProvider,
         latest_materialized_repo: LatestPathProvider,
+        latest_cumulative_patch: LatestPathProvider,
         source_repo_for_existing_project_task: SourceRepoProvider,
     ):
         self.config = config
         self.repository = repository
         self.latest_usage_guide = latest_usage_guide
         self.latest_materialized_repo = latest_materialized_repo
+        self.latest_cumulative_patch = latest_cumulative_patch
         self.source_repo_for_existing_project_task = source_repo_for_existing_project_task
 
     def publish_delivery(self, task_id: str, final_path: Path) -> Path:
@@ -70,6 +77,7 @@ class DeliveryPublisher:
             "",
             f"- final_delivery.json: {destination}",
             f"- success_path.md: {success_path}",
+            f"- delivery_manifest.json: {project_dir / 'delivery_manifest.json'}",
         ]
         if usage_guide and usage_guide.exists():
             lines.append(f"- usage_guide.md: {project_dir / 'usage_guide.md'}")
@@ -99,8 +107,30 @@ class DeliveryPublisher:
                 ]
             )
         manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        delivery_manifest = project_dir / "delivery_manifest.json"
+        delivery_manifest.write_text(
+            json.dumps(
+                self.delivery_manifest_payload(
+                    task_id,
+                    project_dir,
+                    final_path,
+                    destination,
+                    usage_guide,
+                    tester_result,
+                    copied_artifacts,
+                    source_files,
+                    dependency_files,
+                ),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         self.record_published_artifact(task_id, "success_path.md", success_path)
         self.record_published_artifact(task_id, "artifacts_manifest.md", manifest)
+        self.record_published_artifact(task_id, "delivery_manifest.json", delivery_manifest)
         if tester_result and tester_result.exists():
             self.record_published_artifact(task_id, "tester_result.json", project_dir / "tester_result.json")
         for dependency_file in dependency_files:
@@ -134,6 +164,7 @@ class DeliveryPublisher:
         if usage_guide and usage_guide.exists():
             lines.append(f"usage_guide: {project_dir / 'usage_guide.md'}")
         lines.append(f"artifacts_manifest: {project_dir / 'artifacts_manifest.md'}")
+        lines.append(f"delivery_manifest: {project_dir / 'delivery_manifest.json'}")
         lines.extend(
             [
                 "",
@@ -166,6 +197,68 @@ class DeliveryPublisher:
             artifact_type,
             build_ref,
         )
+
+    def delivery_manifest_payload(
+        self,
+        task_id: str,
+        project_dir: Path,
+        final_source: Path,
+        final_published: Path,
+        usage_guide: Path | None,
+        tester_result: Path | None,
+        copied_artifacts: list[tuple[str, Path]],
+        source_files: list[Path],
+        dependency_files: list[Path],
+    ) -> dict[str, Any]:
+        files = {
+            "final_delivery.json": self.delivery_file_record(task_id, final_source, final_published),
+            "success_path.md": {"published_path": str(project_dir / "success_path.md")},
+            "artifacts_manifest.md": {"published_path": str(project_dir / "artifacts_manifest.md")},
+        }
+        if usage_guide and usage_guide.exists():
+            files["usage_guide.md"] = self.delivery_file_record(task_id, usage_guide, project_dir / "usage_guide.md")
+        if tester_result and tester_result.exists():
+            files["tester_result.json"] = self.delivery_file_record(task_id, tester_result, project_dir / "tester_result.json")
+        final_patch = project_dir / "patches" / "final.patch"
+        if final_patch.exists():
+            files["patches/final.patch"] = self.delivery_file_record(task_id, self.latest_delivery_patch(task_id), final_patch)
+        for artifact_type, published_path in copied_artifacts:
+            files[f"artifacts/{published_path.name}"] = self.delivery_file_record(
+                task_id,
+                self.latest_artifact_path(task_id, artifact_type),
+                published_path,
+            )
+        return {
+            "schema_version": "delivery_path_contract.v1",
+            "task_id": task_id,
+            "success_path": str(project_dir),
+            "files": files,
+            "materialized_source_files": [str(path.relative_to(project_dir)) for path in source_files],
+            "dependency_files": [str(path.relative_to(project_dir)) for path in dependency_files],
+        }
+
+    def delivery_file_record(self, task_id: str, source: Path | None, published: Path) -> dict[str, Any]:
+        return {
+            "source_path": str(source) if source else None,
+            "published_path": str(published),
+            "source_artifact": self.artifact_identity_for_path(task_id, source) if source else None,
+        }
+
+    def artifact_identity_for_path(self, task_id: str, path: Path | None) -> dict[str, Any] | None:
+        if path is None:
+            return None
+        for artifact in reversed(self.repository.list_artifacts(task_id)):
+            if Path(artifact["path"]) == path:
+                return {
+                    "artifact_id": artifact["artifact_id"],
+                    "artifact_type": artifact["artifact_type"],
+                    "version": artifact["version"],
+                    "hash": artifact["hash"],
+                    "role": artifact["role"],
+                    "agent_id": artifact["agent_id"],
+                    "phase_id": artifact["phase_id"],
+                }
+        return None
 
     def latest_artifact_path(self, task_id: str, artifact_type: str) -> Path | None:
         artifacts = self.repository.list_artifacts(task_id, artifact_type)
@@ -207,12 +300,18 @@ class DeliveryPublisher:
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
             copied.append((artifact_type, destination))
-        final_patch_ref = self.latest_patch_artifact(task_id)
-        if final_patch_ref:
-            source = Path(final_patch_ref["path"])
-            if source.exists():
-                patch_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, patch_dir / "final.patch")
+        final_patch = self.latest_delivery_patch(task_id)
+        requires_patch = self.source_repo_for_existing_project_task(task_id) is not None
+        if not final_patch or not final_patch.exists():
+            if requires_patch:
+                raise TaskFailedError("Delivery requires final.patch for existing-project source tasks")
+            return copied
+        if not self.patch_applies_to_delivery_base(task_id, final_patch):
+            if requires_patch:
+                raise TaskFailedError("Delivery final.patch does not apply to the configured source repository")
+            return copied
+        patch_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(final_patch, patch_dir / "final.patch")
         return copied
 
     def publish_materialized_source(self, task_id: str, project_dir: Path) -> list[Path]:
@@ -460,6 +559,34 @@ class DeliveryPublisher:
             if artifacts:
                 return artifacts[-1]
         return None
+
+    def latest_delivery_patch(self, task_id: str) -> Path | None:
+        cumulative_patch = self.latest_cumulative_patch(task_id)
+        if cumulative_patch and cumulative_patch.exists() and cumulative_patch.is_file():
+            return cumulative_patch
+        final_patch_ref = self.latest_patch_artifact(task_id)
+        if not final_patch_ref:
+            return None
+        path = Path(final_patch_ref["path"])
+        return path if path.exists() and path.is_file() else None
+
+    def patch_applies_to_delivery_base(self, task_id: str, patch_path: Path) -> bool:
+        source_repo = self.source_repo_for_existing_project_task(task_id)
+        if not source_repo or not shutil.which("git"):
+            return not source_repo
+        with tempfile.TemporaryDirectory(prefix="harness-delivery-patch-check-") as tmp:
+            check_dir = Path(tmp) / "repo"
+            shutil.copytree(
+                source_repo,
+                check_dir,
+                ignore=self.copy_ignore_for_publish,
+                copy_function=WorkspaceManager.copy_file_fast,
+            )
+            completed = _COMMAND_RUNNER.run_capture(
+                ["git", "apply", "--check", "--whitespace=nowarn", str(patch_path)],
+                cwd=check_dir,
+            )
+            return completed.returncode == 0
 
     def safe_deliver_filename(self, artifact_type: str) -> str:
         return artifact_type.replace("/", "__").replace("\\", "__").replace(" ", "_")

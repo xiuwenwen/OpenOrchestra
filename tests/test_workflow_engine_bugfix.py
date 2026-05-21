@@ -70,6 +70,33 @@ def _record_classification(orchestrator: Orchestrator, task_id: str, workflow_ty
     )
 
 
+def _oracle(
+    oracle_id: str = "A1",
+    *,
+    required_for_tester: bool = True,
+    required_for_final: bool = True,
+) -> dict[str, object]:
+    return {
+        "id": oracle_id,
+        "description": f"{oracle_id} passes",
+        "kind": "test",
+        "verification_mode_code": 1,
+        "required": True,
+        "owner": "tester" if required_for_tester else "external_evaluator",
+        "stage": "pre_delivery" if required_for_tester else "post_delivery",
+        "runtime": "resolved_runtime" if required_for_tester else "official",
+        "required_for_tester": required_for_tester,
+        "required_for_final": required_for_final,
+        "commands": ["pytest"] if required_for_tester else [],
+        "expected_exception": "",
+        "must_contain": [],
+        "must_not_contain": ["Traceback"] if required_for_tester else [],
+        "semantic_assertions": [] if required_for_tester else ["official evaluator passes"],
+        "failure_signal": "oracle fails",
+        "evidence_hint": "oracle evidence",
+    }
+
+
 def _tester_run_result(
     tmp_path: Path,
     task_id: str,
@@ -78,6 +105,7 @@ def _tester_run_result(
     env_issue: bool,
     *,
     oracle_id: str = "A1",
+    oracle_status: str | None = None,
 ) -> AgentRunResult:
     next_action = {
         "tests_passed": "continue",
@@ -91,7 +119,7 @@ def _tester_run_result(
                 "schema_version": 1,
                 "status": status,
                 "next_action": next_action,
-                "failure_type": "env_setup" if env_issue else status,
+                "failure_type": "env_setup" if env_issue else ("none" if status == "tests_passed" else status),
                 "environment_dependency_issue": env_issue,
                 "summary": "dependency issue" if env_issue else status,
                 "setup_commands_run": [],
@@ -99,7 +127,8 @@ def _tester_run_result(
                 "oracle_results": [
                     {
                         "oracle_id": oracle_id,
-                        "status": "blocked" if env_issue else ("passed" if status == "tests_passed" else "failed"),
+                        "status": oracle_status
+                        or ("blocked" if env_issue else ("passed" if status == "tests_passed" else "failed")),
                         "evidence": "dependency issue" if env_issue else status,
                         "commands_run": ["pytest"],
                         "output_excerpt": "",
@@ -133,6 +162,15 @@ def _tester_run_result(
 
 
 def _selected_plan_artifact(orchestrator: Orchestrator, tmp_path: Path, task_id: str) -> None:
+    _selected_plan_artifact_with_oracles(orchestrator, tmp_path, task_id, [_oracle()])
+
+
+def _selected_plan_artifact_with_oracles(
+    orchestrator: Orchestrator,
+    tmp_path: Path,
+    task_id: str,
+    acceptance_oracles: list[dict[str, object]],
+) -> None:
     phase_id = orchestrator.repository.create_phase(task_id, PLAN_REVIEW, "reviewer", 0, status="COMPLETED")
     path = tmp_path / "selected_plan.json"
     path.write_text(
@@ -140,22 +178,8 @@ def _selected_plan_artifact(orchestrator: Orchestrator, tmp_path: Path, task_id:
             {
                 "schema_version": 1,
                 "selected_plan_id": "plan",
-                "summary": "verify A1",
-                "acceptance_oracles": [
-                    {
-                        "id": "A1",
-                        "description": "A1 passes",
-                        "kind": "test",
-                        "required": True,
-                        "commands": ["pytest"],
-                        "expected_exception": "",
-                        "must_contain": [],
-                        "must_not_contain": ["Traceback"],
-                        "semantic_assertions": [],
-                        "failure_signal": "pytest fails",
-                        "evidence_hint": "pytest output",
-                    }
-                ],
+                "summary": "verify selected acceptance contract",
+                "acceptance_oracles": acceptance_oracles,
             }
         ),
         encoding="utf-8",
@@ -193,11 +217,46 @@ def test_tester_result_must_satisfy_selected_plan_acceptance_oracles(monkeypatch
     task_id = orchestrator.create_task("fix acceptance drift", workflow_type=BUGFIX)
     _selected_plan_artifact(orchestrator, tmp_path, task_id)
     calls: list[dict[str, int | str | None] | None] = []
+    retry_feedbacks: list[list[str] | None] = []
 
     def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
         calls.append(kwargs.get("phase_scope"))
+        retry_feedbacks.append(kwargs.get("retry_feedback"))
         oracle_id = "B1" if len(calls) == 1 else "A1"
         return [_tester_run_result(tmp_path, task_id, f"phase-{len(calls)}", "tests_passed", False, oracle_id=oracle_id)]
+
+    monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
+
+    decision = orchestrator.workflow_engine.run_testing_until_tester_decision(task_id, TESTING, 0, "fix")
+
+    assert decision.tests_passed
+    assert calls == [None, {"loop_type": "tester_result_retry", "iteration_id": 1}]
+    assert retry_feedbacks[0] is None
+    assert retry_feedbacks[1] is not None
+    assert "Previous tester_result.json was rejected" in retry_feedbacks[1][0]
+
+
+def test_tester_result_required_for_tester_not_run_retries_tester(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["limits"]["max_tester_environment_repair_rounds"] = 1
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("fix required tester oracle", workflow_type=BUGFIX)
+    _selected_plan_artifact(orchestrator, tmp_path, task_id)
+    calls: list[dict[str, int | str | None] | None] = []
+
+    def fake_run_role_phase(role: str, phase: str, round_id: int, required_outputs: list[str], user_prompt: str, **kwargs):
+        calls.append(kwargs.get("phase_scope"))
+        oracle_status = "not_run" if len(calls) == 1 else "passed"
+        return [
+            _tester_run_result(
+                tmp_path,
+                task_id,
+                f"phase-{len(calls)}",
+                "tests_passed",
+                False,
+                oracle_status=oracle_status,
+            )
+        ]
 
     monkeypatch.setattr(orchestrator, "run_role_phase", fake_run_role_phase)
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from harness.adapters.health import BackendHealthMonitor
 from harness.agents.runner import AgentPhaseRunner
+from harness.artifact_plane import ArtifactPlane, ArtifactPlaneRepository
 from harness.artifacts.manager import ArtifactManager
 from harness.artifacts.validator import ArtifactValidator
 from harness.artifacts.visibility import ArtifactVisibilityPolicy
@@ -12,6 +14,8 @@ from harness.communication.communicator import Communicator
 from harness.config.runtime import RuntimeConfigService
 from harness.context.staging import InputStagingService
 from harness.core.scheduler import BackendBulkheadScheduler
+from harness.events import SQLiteEventStore
+from harness.gates.final_validation import FinalValidationGateService
 from harness.gates.patch_gate import PatchGateService
 from harness.gates.runtime_readiness import RuntimeReadinessGateService
 from harness.gates.test_gate import TestGateService
@@ -33,6 +37,8 @@ class ApplicationServices:
     artifact_manager: ArtifactManager
     artifact_visibility: ArtifactVisibilityPolicy
     validator: ArtifactValidator
+    event_store: SQLiteEventStore
+    artifact_plane: ArtifactPlane
     communicator: Communicator
     backend_health: BackendHealthMonitor
     scheduler: BackendBulkheadScheduler
@@ -40,6 +46,7 @@ class ApplicationServices:
     materialized_repo_service: MaterializedRepoService
     test_gate_service: TestGateService
     runtime_readiness_gate_service: RuntimeReadinessGateService
+    final_validation_gate_service: FinalValidationGateService
     patch_gate_service: PatchGateService
     input_staging_service: InputStagingService
     agent_runner: AgentPhaseRunner
@@ -63,6 +70,12 @@ def build_orchestrator_services(
     artifact_manager = artifact_manager or ArtifactManager(system["artifact_root"], repository)
     artifact_visibility = ArtifactVisibilityPolicy()
     validator = ArtifactValidator()
+    event_store = SQLiteEventStore(Path(system["state_db"]).with_name("harness_events.sqlite3"))
+    artifact_plane = ArtifactPlane(
+        repository=ArtifactPlaneRepository(Path(system["artifact_root"]) / "_artifact_plane"),
+        validator=validator,
+        event_store=event_store,
+    )
     communicator = Communicator(repository)
     backend_health = BackendHealthMonitor.from_config(
         config,
@@ -91,11 +104,19 @@ def build_orchestrator_services(
         config=config,
         test_gate_service=test_gate_service,
     )
+    final_validation_gate_service = FinalValidationGateService(
+        config=config,
+        repository=repository,
+        artifact_manager=artifact_manager,
+        latest_materialized_repo=materialized_repo_service.latest_materialized_repo,
+        emit=orchestrator.emit_progress,
+    )
     patch_gate_service = PatchGateService(
         config=config,
         repository=repository,
         artifact_manager=artifact_manager,
         source_repo_for_task=materialized_repo_service.source_repo_for_existing_project_task,
+        patch_apply_base_for_task=materialized_repo_service.latest_materialized_repo_before_round,
         materialized_repo_dir=materialized_repo_service.materialized_repo_dir,
         copy_source=materialized_repo_service.copy_source_for_patch_validation,
         write_success_marker=materialized_repo_service.write_materialized_success_marker,
@@ -115,6 +136,7 @@ def build_orchestrator_services(
         repository=repository,
         latest_usage_guide=communicator.latest_usage_guide,
         latest_materialized_repo=materialized_repo_service.latest_materialized_repo,
+        latest_cumulative_patch=materialized_repo_service.latest_cumulative_patch,
         source_repo_for_existing_project_task=materialized_repo_service.source_repo_for_existing_project_task,
     )
     workflow_engine = WorkflowEngine(orchestrator)
@@ -125,6 +147,8 @@ def build_orchestrator_services(
         artifact_manager=artifact_manager,
         artifact_visibility=artifact_visibility,
         validator=validator,
+        event_store=event_store,
+        artifact_plane=artifact_plane,
         communicator=communicator,
         backend_health=backend_health,
         scheduler=scheduler,
@@ -132,6 +156,7 @@ def build_orchestrator_services(
         materialized_repo_service=materialized_repo_service,
         test_gate_service=test_gate_service,
         runtime_readiness_gate_service=runtime_readiness_gate_service,
+        final_validation_gate_service=final_validation_gate_service,
         patch_gate_service=patch_gate_service,
         input_staging_service=input_staging_service,
         agent_runner=agent_runner,

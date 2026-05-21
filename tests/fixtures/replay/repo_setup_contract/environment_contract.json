@@ -1,0 +1,22 @@
+{
+  "schema_version": "environment_contract.v1",
+  "contract_id": "env-repo-setup",
+  "contract_status": "final",
+  "source": "planner",
+  "confidence": "high",
+  "runtime": {
+    "type": "python"
+  },
+  "setup": {
+    "mode": "repo_setup",
+    "commands": [],
+    "discovery_allowed": true
+  },
+  "dependencies": {
+    "mode": "install",
+    "commands": [],
+    "discovery_allowed": true
+  },
+  "unknowns": [],
+  "evidence_sources": []
+}

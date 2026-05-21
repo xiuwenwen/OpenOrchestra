@@ -1,0 +1,31 @@
+{
+  "name": "no-op patch retest route",
+  "task_id": "replay-no-op",
+  "events": [
+    {
+      "event_id": "event-no-op-1",
+      "event_type": "SnapshotUnchangedButRetestable",
+      "schema_version": 1,
+      "task_id": "replay-no-op",
+      "aggregate_type": "workflow",
+      "aggregate_id": "replay-no-op",
+      "trace_id": "trace-no-op",
+      "correlation_id": "trace-no-op",
+      "span_id": "span-no-op-1",
+      "parent_span_id": null,
+      "created_at": "2026-05-21T00:00:00+00:00",
+      "payload": {
+        "changed_files": [],
+        "reason": "no-op patch accepted because latest tester evidence already passed"
+      }
+    }
+  ],
+  "route_expectations": [
+    {
+      "step_name": "materialize",
+      "event_type": "SnapshotUnchangedButRetestable",
+      "target_step": "tester_verify",
+      "route_action": "retest_current_repo_snapshot"
+    }
+  ]
+}

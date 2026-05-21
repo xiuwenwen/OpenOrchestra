@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -70,6 +70,24 @@ class StateRepository:
                 (limit,),
             ).fetchall()
         return [TaskRecord.from_row(row) for row in rows]
+
+    def list_task_start_times(self, task_ids: Sequence[str]) -> dict[str, str]:
+        ids = [task_id for task_id in task_ids if task_id]
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT task_id, MIN(created_at) AS started_at
+                FROM events
+                WHERE event_type = 'task_started'
+                  AND task_id IN ({placeholders})
+                GROUP BY task_id
+                """,
+                ids,
+            ).fetchall()
+        return {str(row["task_id"]): str(row["started_at"]) for row in rows if row["started_at"]}
 
     def update_task_configuration(self, task_id: str, configuration: str) -> None:
         now = utc_now_iso()

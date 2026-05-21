@@ -14,12 +14,14 @@ const i18n={
 const phaseIcons={PLANNING_DRAFT:"📋",PLANNING_PEER_REVIEW:"👁",PLANNING_REVISION:"✏️",PLAN_REVIEW:"🔍",EXECUTION:"⚡",PATCH_MERGE:"🔀",TESTING:"🧪",FIXING:"🔧",REVIEWING:"🔍",REVIEW_FIXING:"🔧",REGRESSION_TESTING:"🧪",DELIVERY:"📦",MISC_RESPONSE:"💬",COMPLETED:"✅"};
 const roleOrder=["orchestrator","planner","executor","tester","reviewer","communicator"];
 const dateFmt=new Intl.DateTimeFormat(navigator.language||"zh-CN",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+const taskDateFmt=new Intl.DateTimeFormat(navigator.language||"zh-CN",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
 
 function t(k){return(i18n[uiLanguage]&&i18n[uiLanguage][k])||i18n.zh[k]||k}
 function roleLabel(r){return uiLanguage==="en"?(rlEn[r]||r):(rl[r]||r)}
 function labelPhase(p){return(uiLanguage==="en"?plEn[p]:pl[p])||p||"-"}
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function short(s,n=60){s=String(s??"").replace(/\s+/g," ");return s.length>n?s.slice(0,n-1)+"…":s}
+function formatTaskStart(v){const d=new Date(v||"");return Number.isNaN(d.getTime())?String(v||"-"):taskDateFmt.format(d)}
 function fmtBytes(b){if(b==null)return"";if(b<1024)return b+" B";if(b<1048576)return Math.round(b/1024)+" KB";return(b/1048576).toFixed(1)+" MB"}
 function statusLabel(st){
   const s=String(st||"PENDING");
@@ -96,7 +98,8 @@ function renderTasks(tasks){
   if(!tasks.length){root.innerHTML=`<div class="empty-msg">${esc(t("noTasks"))}</div>`;return}
   root.innerHTML=tasks.map((tk,i)=>`<button class="tsk ${tk.task_id===currentTask?"act":""}" onclick="selectTask('${esc(tk.task_id)}')">
     <div class="tsk-top"><span class="tsk-id">${esc(tk.task_id.slice(0,8))}</span>${pill(tk.status)}</div>
-    <div class="tsk-prompt">${esc(short(tk.user_prompt,50))}</div></button>`).join("");
+    <div class="tsk-prompt">${esc(short(tk.user_prompt,50))}</div>
+    <div class="tsk-start" title="${esc(tk.started_at||tk.created_at||"")}"><span>${uiLanguage==="en"?"Start":"开始"}</span><time>${esc(formatTaskStart(tk.started_at||tk.created_at))}</time></div></button>`).join("");
 }
 function selectTask(id){currentTask=id;lastEventId=0;selectedPhaseIdx=-1;selectedRole=null;selectedRoundKey=null;
   history.replaceState(null,"","?task="+encodeURIComponent(id));refresh()}

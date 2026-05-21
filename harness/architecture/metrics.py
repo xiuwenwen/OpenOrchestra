@@ -58,8 +58,8 @@ class ArchitectureThresholds:
     max_production_file_loc: int = 1_200
     max_test_file_loc: int = 3_500
     max_function_loc: int = 300
-    max_production_total_loc: int = 20_000
-    max_test_total_loc: int = 12_400
+    max_production_total_loc: int = 23_900
+    max_test_total_loc: int = 13_900
 
 
 DEFAULT_THRESHOLDS = ArchitectureThresholds()

@@ -15,6 +15,30 @@ def write_json_artifact(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def selected_plan_oracle(**overrides: object) -> dict[str, object]:
+    oracle: dict[str, object] = {
+        "id": "AO-1",
+        "description": "run regression",
+        "kind": "test",
+        "verification_mode_code": 1,
+        "required": True,
+        "owner": "tester",
+        "stage": "pre_delivery",
+        "runtime": "resolved_runtime",
+        "required_for_tester": True,
+        "required_for_final": True,
+        "commands": ["python -m pytest"],
+        "expected_exception": "",
+        "must_contain": [],
+        "must_not_contain": [],
+        "semantic_assertions": [],
+        "failure_signal": "pytest exits non-zero",
+        "evidence_hint": "pytest output",
+    }
+    oracle.update(overrides)
+    return oracle
+
+
 def write_valid_plan_review_contracts(output_dir: Path) -> None:
     write_json_artifact(
         output_dir / "environment_contract.json",
@@ -132,7 +156,13 @@ def test_artifact_validator_canonicalizes_selected_plan_oracle_kind_aliases(tmp_
                         "id": "AO-1",
                         "description": "run existing regression",
                         "kind": "regression",
+                        "verification_mode_code": 1,
                         "required": True,
+                        "owner": "tester",
+                        "stage": "pre_delivery",
+                        "runtime": "resolved_runtime",
+                        "required_for_tester": True,
+                        "required_for_final": True,
                         "commands": ["python -m pytest tests/test_example.py"],
                         "expected_exception": "",
                         "must_contain": [],
@@ -145,7 +175,13 @@ def test_artifact_validator_canonicalizes_selected_plan_oracle_kind_aliases(tmp_
                         "id": "AO-2",
                         "description": "compile project",
                         "kind": "compile",
+                        "verification_mode_code": 1,
                         "required": True,
+                        "owner": "tester",
+                        "stage": "pre_delivery",
+                        "runtime": "resolved_runtime",
+                        "required_for_tester": True,
+                        "required_for_final": True,
                         "commands": ["python -m compileall -q ."],
                         "expected_exception": "",
                         "must_contain": [],
@@ -199,19 +235,7 @@ def test_plan_review_approval_requires_nonblocking_findings_in_selected_plan(tmp
             "schema_version": 1,
             "summary": "selected plan",
             "acceptance_oracles": [
-                {
-                    "id": "AO-1",
-                    "description": "run regression",
-                    "kind": "test",
-                    "required": True,
-                    "commands": ["python -m pytest"],
-                    "expected_exception": "",
-                    "must_contain": [],
-                    "must_not_contain": [],
-                    "semantic_assertions": [],
-                    "failure_signal": "pytest exits non-zero",
-                    "evidence_hint": "pytest output",
-                }
+                selected_plan_oracle()
             ],
         },
     )
@@ -264,19 +288,7 @@ def test_plan_review_approval_rejects_required_changes(tmp_path: Path) -> None:
             "summary": "selected plan",
             "reviewer_integrated_findings": ["note carried forward"],
             "acceptance_oracles": [
-                {
-                    "id": "AO-1",
-                    "description": "run regression",
-                    "kind": "test",
-                    "required": True,
-                    "commands": ["python -m pytest"],
-                    "expected_exception": "",
-                    "must_contain": [],
-                    "must_not_contain": [],
-                    "semantic_assertions": [],
-                    "failure_signal": "pytest exits non-zero",
-                    "evidence_hint": "pytest output",
-                }
+                selected_plan_oracle()
             ],
         },
     )
@@ -509,17 +521,15 @@ def test_validator_accepts_selected_plan_with_acceptance_oracles(tmp_path: Path)
                 "summary": "do it",
                 "acceptance_oracles": [
                     {
-                        "id": "A1",
-                        "description": "expected behavior is preserved",
-                        "kind": "runtime",
-                        "required": True,
-                        "commands": ["pytest"],
-                        "expected_exception": "",
-                        "must_contain": [],
-                        "must_not_contain": ["Traceback"],
-                        "semantic_assertions": [],
-                        "failure_signal": "pytest fails",
-                        "evidence_hint": "pytest output",
+                        **selected_plan_oracle(
+                            id="A1",
+                            description="expected behavior is preserved",
+                            kind="runtime",
+                            commands=["pytest"],
+                            must_not_contain=["Traceback"],
+                            failure_signal="pytest fails",
+                            evidence_hint="pytest output",
+                        ),
                     }
                 ],
             }
@@ -539,8 +549,8 @@ def test_validator_rejects_tester_result_without_oracle_results(tmp_path: Path) 
         json.dumps(
             {
                 "schema_version": 1,
-                "status": "tests_passed",
-                "next_action": "continue",
+                "tester_status_code": 0,
+                "next_action_code": 0,
                 "failure_type": "none",
                 "environment_dependency_issue": False,
                 "summary": "passed",

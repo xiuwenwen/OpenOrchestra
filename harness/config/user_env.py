@@ -52,9 +52,13 @@ ENV_CONFIG_SPECS: dict[str, tuple[tuple[str, ...], type]] = {
     "OO_ARTIFACT_INPUT_MAX_FILES": (("artifact_input", "max_files"), int),
     "OO_ARTIFACT_INPUT_MAX_FILE_BYTES": (("artifact_input", "max_file_bytes"), int),
     "OO_ARTIFACT_INPUT_MAX_TOTAL_BYTES": (("artifact_input", "max_total_bytes"), int),
+    "OO_RUNTIME": (("runtime", "mode"), str),
+    "OO_RUNTIME_DOCKER_IMAGE": (("runtime", "docker", "image"), str),
+    "OO_RUNTIME_DOCKER_NETWORK": (("runtime", "docker", "network"), str),
     "OO_TEST_RUNTIME": (("testing", "runtime"), str),
     "OO_TEST_DOCKER_IMAGE": (("testing", "docker", "python_image"), str),
-    "OO_TEST_DOCKER_NETWORK": (("testing", "docker", "network"), str),
+    "OO_TEST_DOCKER_SETUP_NETWORK": (("testing", "docker", "setup_network"), str),
+    "OO_TEST_DOCKER_TEST_NETWORK": (("testing", "docker", "test_network"), str),
     "OO_TEST_TIMEOUT_SECONDS": (("testing", "timeout_seconds"), int),
     "OO_POLICY_SAME_ROLE_CAN_RUN_CONCURRENTLY": (("policy", "same_role_can_run_concurrently"), bool),
     "OO_POLICY_ALLOW_MEDIUM_BUG_DELIVERY": (("policy", "allow_medium_bug_delivery"), bool),
@@ -63,6 +67,7 @@ ENV_CONFIG_SPECS: dict[str, tuple[tuple[str, ...], type]] = {
 LEGACY_ENV_ALIASES = {key.replace("OO_", "HARNESS_", 1): key for key in ENV_CONFIG_SPECS}
 LEGACY_GENERATED_DEFAULT_VALUES: dict[str, set[str]] = {
     "OO_CLAUDE_CONTEXT_WINDOW_TOKENS": {"200000"},
+    "OO_RUNTIME": {"host"},
     "OO_TEST_RUNTIME": {"auto", "docker"},
 }
 

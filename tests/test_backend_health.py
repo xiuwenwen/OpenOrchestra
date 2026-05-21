@@ -8,7 +8,6 @@ from harness.adapters.base import AgentAdapter
 from harness.adapters.health import BackendHealthMonitor
 from harness.agents.context import AgentRunContext
 from harness.agents.result import AgentRunResult
-from harness.contracts.role_contracts import required_outputs_for
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressEvent
 from harness.core.state_machine import PLANNING_DRAFT
@@ -82,6 +81,69 @@ def test_backend_health_auth_opens_immediately_and_contract_errors_do_not_poison
     assert opened.state == "open"
     assert opened.failure_kind == "auth"
     assert not opened.allowed
+
+
+def test_backend_health_output_invalid_with_agent_exit_code_does_not_poison_backend() -> None:
+    monitor = BackendHealthMonitor(failure_threshold=1, cooldown_seconds=10)
+
+    ignored = monitor.record_failure(
+        "claude",
+        "Agent exit_code=1 status=FAILED; plan.md still contains Harness output template marker",
+        status="OUTPUT_INVALID",
+    )
+
+    assert ignored.state == "healthy"
+    assert ignored.allowed
+    assert ignored.failure_kind == "output_contract"
+    assert ignored.consecutive_failures == 0
+
+
+def test_backend_health_docker_runtime_failure_does_not_poison_backend() -> None:
+    monitor = BackendHealthMonitor(failure_threshold=1, cooldown_seconds=10)
+
+    ignored = monitor.record_failure(
+        "claude",
+        "Agent exit_code=1 status=FAILED\n"
+        "Unable to find image 'openorchestra-agent-runtime:latest' locally\n"
+        "Error response from daemon: pull access denied for openorchestra-agent-runtime, repository does not exist",
+        status="FAILED",
+    )
+
+    assert ignored.state == "healthy"
+    assert ignored.allowed
+    assert ignored.failure_kind == "agent_runtime"
+    assert ignored.consecutive_failures == 0
+
+
+def test_backend_health_cli_settings_failure_is_agent_runtime() -> None:
+    monitor = BackendHealthMonitor(failure_threshold=1, cooldown_seconds=10)
+
+    ignored = monitor.record_failure(
+        "claude",
+        "Agent exit_code=1 status=FAILED; stderr: Error: Settings file not found: /openorchestra/logs/claude_invocation_settings.json",
+        status="FAILED",
+    )
+
+    assert ignored.state == "healthy"
+    assert ignored.allowed
+    assert ignored.failure_kind == "agent_runtime"
+    assert ignored.consecutive_failures == 0
+
+
+def test_backend_health_api_socket_failure_beats_output_contract_status() -> None:
+    monitor = BackendHealthMonitor(failure_threshold=1, cooldown_seconds=10)
+
+    ignored = monitor.record_failure(
+        "claude",
+        "[claude] API Error: Unable to connect to API (FailedToOpenSocket)\n"
+        "plan.md still contains Harness output template marker",
+        status="OUTPUT_INVALID",
+    )
+
+    assert ignored.state == "healthy"
+    assert ignored.allowed
+    assert ignored.failure_kind == "agent_runtime"
+    assert ignored.consecutive_failures == 0
 
 
 def test_backend_health_monitor_persists_open_state_across_instances() -> None:
@@ -158,7 +220,7 @@ def test_agent_runner_stops_retries_when_backend_circuit_opens(monkeypatch, tmp_
             "planner",
             PLANNING_DRAFT,
             0,
-            required_outputs_for("planner", PLANNING_DRAFT),
+            [],
             "plan with a failing backend",
         )
 
@@ -170,3 +232,43 @@ def test_agent_runner_stops_retries_when_backend_circuit_opens(monkeypatch, tmp_
         and event.data.get("backend") == "claude"
         for event in events
     )
+
+
+def test_agent_runner_docker_runtime_stderr_does_not_open_backend(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    orchestrator = Orchestrator(config)
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "stderr.log").write_text(
+        "Unable to find image 'openorchestra-agent-runtime:latest' locally\n"
+        "Error response from daemon: pull access denied for openorchestra-agent-runtime\n",
+        encoding="utf-8",
+    )
+    context = AgentRunContext(
+        task_id="task-1",
+        phase_id="phase-1",
+        phase=PLANNING_DRAFT,
+        role="planner",
+        agent_id="planner-1",
+        round_id=0,
+        user_prompt="plan",
+        role_instruction="plan",
+        workspace_dir=tmp_path,
+        repo_dir=tmp_path,
+        input_dir=tmp_path / "input",
+        output_dir=tmp_path / "output",
+        log_dir=log_dir,
+    )
+
+    snapshot = orchestrator.agent_runner.record_backend_failure(
+        "claude",
+        context,
+        0,
+        "Agent exit_code=1 status=FAILED",
+        status="FAILED",
+    )
+
+    assert snapshot.allowed
+    assert snapshot.state == "healthy"
+    assert snapshot.failure_kind == "agent_runtime"
+    assert orchestrator.backend_health.check("claude").allowed

@@ -128,6 +128,7 @@ def test_selected_plan_template_contains_acceptance_oracles(tmp_path: Path) -> N
     payload = json.loads((tmp_path / "selected_plan.json").read_text(encoding="utf-8"))
 
     assert payload["acceptance_oracles"][0]["id"] == TEMPLATE_PENDING_VALUE
+    assert payload["acceptance_oracles"][0]["verification_mode_code"] == TEMPLATE_PENDING_VALUE
     assert payload["acceptance_oracles"][0]["required"] is True
     assert payload["reviewer_integrated_findings"] == []
     assert payload["required_executor_notes"] == []
@@ -145,6 +146,9 @@ def test_tester_result_template_contains_oracle_results(tmp_path: Path) -> None:
     payload = json.loads((tmp_path / "tester_result.json").read_text(encoding="utf-8"))
 
     assert payload["oracle_results"][0]["oracle_id"] == TEMPLATE_PENDING_VALUE
+    assert payload["tester_status_code"] == TEMPLATE_PENDING_VALUE
+    assert payload["next_action_code"] == TEMPLATE_PENDING_VALUE
+    assert payload["oracle_results"][0]["oracle_result_code"] == TEMPLATE_PENDING_VALUE
     assert "commands_run" in payload["oracle_results"][0]
 
 
@@ -164,6 +168,9 @@ def test_contract_templates_use_mode_not_bare_empty_commands(tmp_path: Path) -> 
     assert environment["setup"]["commands"] == []
     assert validation["tests"]["mode"] == TEMPLATE_PENDING_VALUE
     assert validation["tests"]["commands"] == []
+    assert validation["final_check"]["mode"] == "unknown"
+    assert validation["final_check"]["commands"] == []
+    assert validation["final_check"]["failure_type"] == "source_bug"
 
 
 def test_runner_seeds_output_templates_before_adapter_invocation(tmp_path: Path, monkeypatch) -> None:

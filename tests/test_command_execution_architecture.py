@@ -7,6 +7,7 @@ from pathlib import Path
 ALLOWED_SUBPROCESS_CALL_FILES = {
     Path("harness/adapters/command_runner.py"),
     Path("harness/adapters/subprocess_runner.py"),
+    Path("harness/runtime/host.py"),
 }
 
 

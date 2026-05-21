@@ -26,6 +26,23 @@ OUTPUT_CONTRACT_PATTERNS = (
     "artifact_result_code",
     "delivery.md",
 )
+AGENT_RUNTIME_PATTERNS = (
+    "api error: unable to connect to api",
+    "connectionrefused",
+    "failedtoopensocket",
+    "temporary failure in name resolution",
+    "unable to find image",
+    "pull access denied",
+    "repository does not exist",
+    "docker daemon",
+    "cannot connect to the docker daemon",
+    "docker binary not found",
+    "docker: command not found",
+    "error response from daemon",
+    "no such image",
+    "settings file not found",
+)
+NON_BACKEND_FAILURE_KINDS = {"request_size", "output_contract", "agent_runtime"}
 
 
 @dataclass(frozen=True)
@@ -118,7 +135,7 @@ class BackendHealthMonitor:
     def record_failure(self, backend: str, message: str, *, status: str | None = None) -> BackendHealthSnapshot:
         state = self._state_for(backend)
         kind = self.classify_failure(message, status=status)
-        if not self.enabled or kind in {"request_size", "output_contract"}:
+        if not self.enabled or kind in NON_BACKEND_FAILURE_KINDS:
             return self._snapshot(backend, state, allowed=True, failure_kind=kind)
 
         state.consecutive_failures += 1
@@ -155,10 +172,12 @@ class BackendHealthMonitor:
             return "timeout"
         if any(pattern in text for pattern in REQUEST_SIZE_PATTERNS):
             return "request_size"
-        if "agent exit_code=" in text and "agent exit_code=0" not in text:
-            return "runtime_error"
+        if any(pattern in text for pattern in AGENT_RUNTIME_PATTERNS):
+            return "agent_runtime"
         if any(pattern in text for pattern in OUTPUT_CONTRACT_PATTERNS) or str(status or "").upper() == "OUTPUT_INVALID":
             return "output_contract"
+        if "agent exit_code=" in text and "agent exit_code=0" not in text:
+            return "runtime_error"
         return "runtime_error"
 
     def _state_for(self, backend: str) -> _BackendHealthState:

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "tester_status_code": "pending_model_completion",
+  "next_action_code": "pending_model_completion",
+  "failure_type": "pending_model_completion",
+  "environment_ready": "pending_model_completion",
+  "environment_dependency_issue": "pending_model_completion",
+  "summary": "The model left core template fields unresolved.",
+  "setup_commands_run": [],
+  "test_commands_run": [],
+  "oracle_results": [],
+  "remaining_blockers": [],
+  "harness_template_status": "pending_model_completion"
+}

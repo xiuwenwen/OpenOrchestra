@@ -5,6 +5,7 @@ import re
 
 from harness.agents.context import AgentRunContext
 from harness.collaboration.protocol import STEP_CRITIQUE, STEP_MERGE, STEP_PROPOSE, STEP_REVISE, STEP_VOTE, protocol_prompt_lines
+from harness.contracts.role_boundaries import role_boundary_prompt_lines_for
 from harness.contracts.role_contracts import output_contract_lines_for
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE
 from harness.prompts.specializations import (
@@ -17,13 +18,19 @@ from harness.prompts.specializations import (
 
 class PromptBuilder:
     def build(self, context: AgentRunContext) -> str:
-        input_artifacts = "\n".join(f"- {path}" for path in context.input_artifacts) or "- none"
+        input_artifacts = "\n".join(f"- {context.runtime_path(path)}" for path in context.input_artifacts) or "- none"
         required_outputs = "\n".join(f"- {name}" for name in context.required_outputs) or "- none"
+        runtime_workspace = context.runtime_workspace_dir or str(context.workspace_dir)
+        runtime_repo = context.runtime_repo_dir or str(context.repo_dir)
+        runtime_input = context.runtime_input_dir or str(context.input_dir)
+        runtime_output = context.runtime_output_dir or str(context.output_dir)
+        runtime_log = context.runtime_log_dir or str(context.log_dir)
         required_output_paths = "\n".join(
-            f"- `{name}`: `{context.output_dir / name}`" for name in context.required_outputs
+            f"- `{name}`: `{context.runtime_path(context.output_dir / name)}`" for name in context.required_outputs
         ) or "- none"
         role_specialization = self._role_specialization(context)
         metadata_lines = self._metadata_lines(context)
+        retry_feedback = self._retry_feedback_lines(context)
         sections = [
             "# Harness Agent Contract",
             "",
@@ -40,27 +47,40 @@ class PromptBuilder:
             "## Role Responsibility",
             context.role_instruction,
             "",
+            "## Role Boundary",
+            *role_boundary_prompt_lines_for(context.role),
+            "",
         ]
         if role_specialization:
             sections.extend(["## Role Specialization", *role_specialization, ""])
+        if retry_feedback:
+            sections.extend(
+                [
+                    "## Previous Attempt Feedback",
+                    "- Harness rejected the previous attempt. Correct these issues before doing anything else; do not repeat the same invalid output.",
+                    *retry_feedback,
+                    "",
+                ]
+            )
         sections.extend(
             [
                 "## Harness Metadata",
                 *metadata_lines,
                 "",
                 "## Workspace Boundaries",
-                f"- Workspace directory: {context.workspace_dir}",
-                f"- Repository directory: {context.repo_dir}",
-                f"- Input directory: {context.input_dir}",
-                f"- Output directory: {context.output_dir}",
-                f"- Log directory: {context.log_dir}",
+                f"- Workspace directory: {runtime_workspace}",
+                f"- Repository directory: {runtime_repo}",
+                f"- Input directory: {runtime_input}",
+                f"- Output directory: {runtime_output}",
+                f"- Log directory: {runtime_log}",
+                f"- Runtime mode: {context.runtime_mode}",
                 "",
                 "## Input Artifacts",
                 input_artifacts,
                 "",
                 "## Input Rules",
-                f"- Input artifacts are local copies under {context.input_dir}.",
-                f"- Read `{context.input_dir / 'manifest.md'}` before making decisions when it exists.",
+                f"- Input artifacts are local copies under {runtime_input}.",
+                f"- Read `{context.runtime_path(context.input_dir / 'manifest.md')}` before making decisions when it exists.",
                 "- The manifest marks artifacts that Harness truncated or skipped to stay within the role input budget.",
                 "- Treat truncated artifacts as partial evidence; call out missing evidence in your required reports instead of guessing.",
                 "- Do not assume artifact source paths outside this workspace are readable.",
@@ -69,6 +89,7 @@ class PromptBuilder:
                 "- `merged_patch.diff` is the authoritative implementation artifact after PATCH_MERGE exists.",
                 "- Harness gate reports, when present, are hard-gate evidence that LLM roles cannot override.",
                 "- `patch_gate_result.json`, when present, is the structured patch-gate verdict; use its `failure_type`, command exit codes, stdout, and stderr before retrying a patch.",
+                "- `external_evaluator_result.json`, when present, is the structured final-validation verdict; use its `status`, `failure_type`, `summary`, command records, and log paths before changing code or test scope.",
                 "- Every `merged_patch.diff` artifact must have sibling `merged_patch_metadata.json`.",
                 "- Merged patch metadata must declare `patch_artifact`, `base_source_type`, `base_source_path`, `base_round`, `base_task_id`, `apply_target`, `patch_scope`, `changed_files`, `expected_apply_command`, and `compatibility_notes`.",
                 "- Valid merged `patch_scope` value is `merged_authoritative`.",
@@ -93,8 +114,8 @@ class PromptBuilder:
                 "- Required `.diff` outputs are not pre-created templates; generate them from actual repository changes.",
                 "",
                 "## Output Contract",
-                f"- Write every required deliverable under this exact output directory: `{context.output_dir}`.",
-                f"- Work on source files only under the repository directory: `{context.repo_dir}`.",
+                f"- Write every required deliverable under this exact output directory: `{runtime_output}`.",
+                f"- Work on source files only under the repository directory: `{runtime_repo}`.",
                 "- Create every required output file before exiting.",
                 "- Do not write final deliverables anywhere outside the output directory.",
                 "- Do not overwrite input artifacts.",
@@ -113,6 +134,14 @@ class PromptBuilder:
             ]
         )
         return "\n".join(sections)
+
+    def _retry_feedback_lines(self, context: AgentRunContext) -> list[str]:
+        lines: list[str] = []
+        for item in context.retry_feedback:
+            message = str(item).strip()
+            if message:
+                lines.append(f"- {message}")
+        return lines
 
     def _output_contract_lines(self, context: AgentRunContext) -> list[str]:
         return output_contract_lines_for(context.role, context.phase, context.required_outputs)
@@ -156,7 +185,7 @@ class PromptBuilder:
                 "- For FIXING and REVIEW_FIXING, target the current materialized/source repository; do not describe a historical empty project baseline unless the current repository is actually empty.",
                 "- If `patch_gate_result.json` is staged, address its `failure_type`, `executor_message`, and command stderr directly before producing the next patch.",
                 "- Create or update implementation files under the repository directory first, then generate `patch.diff` or `fix_patch.diff` mechanically from repository changes.",
-                f"- Prefer command-generated diffs written directly to the output directory. For git repositories, use `git add -N . && git diff --no-ext-diff -- . > {context.output_dir / 'patch.diff'}` or the corresponding `fix_patch.diff` path.",
+                f"- Prefer command-generated diffs written directly to the output directory. For git repositories, use `git add -N . && git diff --no-ext-diff -- . > {context.runtime_path(context.output_dir / 'patch.diff')}` or the corresponding `fix_patch.diff` path.",
                 "- If staged tester/reviewer artifacts show the current materialized repository already satisfies the requested fix and no source bug remains, treat that as a valid no-op fix: leave source files unchanged, write an empty `fix_patch.diff` generated mechanically from the current repository state, and record `no_op_fix: true` plus the exact evidence in `fix_notes.md` and `self_check.md`.",
                 "- In a no-op fix, do not recreate or paste a historical patch against the original base; the required patch file must represent only changes still needed from the current repository baseline.",
                 "- If the repository is not a git worktree, initialize a temporary git baseline or use a script/diff command that writes unified diff output directly to the required patch file.",
@@ -169,7 +198,7 @@ class PromptBuilder:
         if context.role == "tester":
             return [
                 "## Test Target",
-                f"- Test this exact repository directory: `{context.repo_dir}`.",
+                f"- Test this exact repository directory: `{context.runtime_repo_dir or context.repo_dir}`.",
                 "- Treat the repository directory as the runnable implementation produced by Harness.",
                 "- Compare observable behavior against the original user request in `## User Request` and the `## Harness Test Target` section of the input manifest.",
                 "- If `selected_plan.json` is present, treat `selected_plan.json.acceptance_oracles` as the authoritative acceptance contract and verify those oracle IDs directly.",
@@ -190,7 +219,9 @@ class PromptBuilder:
                 "- Run at least one smoke or CLI-level check when the repository exposes an entry point and doing so is safe.",
                 "- There is no post-tester Harness test gate. Harness consumes only your `tester_result.json` decision for test workflow progression.",
                 "- Verify the core user-facing requirements from the original request by execution whenever possible; if execution is blocked, include the blocker, attempted commands, and the smallest code-level evidence you used instead.",
-                "- For each required acceptance oracle, record `passed`, `failed`, `blocked`, or `not_run` in `tester_result.json.oracle_results` with concrete evidence.",
+                "- Use the numeric codes already present in the Harness-generated JSON templates; do not invent enum values or route with natural-language status fields.",
+                "- For each `selected_plan.json.acceptance_oracles` item with `required_for_tester: true`, record `oracle_result_code` in `tester_result.json.oracle_results` with concrete evidence: `0` passed, `1` failed, `2` blocked, `3` not run.",
+                "- Final-only oracles with `required_for_final: true` and `required_for_tester: false` may be recorded as `not_run`, but do not claim them as passed from tester-local evidence.",
                 "- Do not reinterpret expected behavior from executor prose when it conflicts with `selected_plan.json.acceptance_oracles`; report the oracle ID and evidence instead.",
                 "- If build or test execution is blocked, do not declare the fix correct; report the blocked status and the exact missing evidence.",
                 "- Record exact commands run, exit codes, and important output excerpts in `bug_report.md` and `tester_result.json`.",
@@ -200,13 +231,15 @@ class PromptBuilder:
                 "- `bug_report.md` must contain `artifact_result_code: 0` when complete.",
                 "- `bug_report.md` is the single tester report. Include build, test, bug, evidence, and reproduction sections in this one file.",
                 "- `tester_result.json` must be exactly one JSON object with no Markdown, prose, YAML, or code fence.",
-                '- Required JSON shape: `{"schema_version":1,"status":"tests_passed|source_bug|environment_blocked","next_action":"continue|fix_code|block_task","failure_type":"none|source_bug|environment_bug|env_setup|test_command_bug|test_command|contract_bug|process_bug|test|inconclusive","environment_ready":true,"environment_dependency_issue":false,"summary":"...","setup_commands_run":[],"test_commands_run":[],"oracle_results":[{"oracle_id":"A1","status":"passed|failed|blocked|not_run","evidence":"...","commands_run":[],"output_excerpt":""}],"remaining_blockers":[]}`.',
-                '- When `selected_plan.json.acceptance_oracles` is present, `oracle_results` must include every required oracle ID from `selected_plan.json`.',
-                '- Set `environment_dependency_issue: true` whenever dependency, interpreter, package, import, build-tool, or runtime environment problems still block setup/build/test execution; Harness checks this before `status` and reruns the tester environment repair loop instead of entering executor fixing.',
+                '- Required JSON shape: `{"schema_version":1,"tester_status_code":0,"next_action_code":0,"failure_type":"none|source_bug|environment_bug|env_setup|test_command_bug|test_command|contract_bug|contract_invalid|process_bug|agent_runtime|infra|patch_apply|test|inconclusive","environment_ready":true,"environment_dependency_issue":false,"summary":"...","setup_commands_run":[],"test_commands_run":[],"oracle_results":[{"oracle_id":"A1","oracle_result_code":0,"baseline_result_code":3,"current_result_code":0,"regression_delta_code":2,"evidence":"...","commands_run":[],"output_excerpt":""}],"remaining_blockers":[]}`.',
+                '- When `selected_plan.json.acceptance_oracles` is present, `oracle_results` must include every oracle ID with `required_for_tester: true` from `selected_plan.json`.',
+                '- Tester status codes: `0` tests passed, `1` source bug, `2` environment blocked. Next-action codes: `0` continue, `1` fix code, `2` block task.',
+                '- Set `environment_dependency_issue: true` whenever dependency, interpreter, package, import, build-tool, or runtime environment problems still block setup/build/test execution; Harness checks this before the tester status code and reruns the tester environment repair loop instead of entering executor fixing.',
                 '- Set `failure_type: "contract_bug"` when present contracts are invalid or insufficient and no permitted discovery path can resolve them.',
-                '- Use `status: "tests_passed"` and `next_action: "continue"` only when the relevant setup/build/test/smoke evidence passed and every required acceptance oracle passed.',
-                '- Use `status: "source_bug"` and `next_action: "fix_code"` only when commands ran in a working environment and at least one required acceptance oracle failed because of source or behavior.',
-                '- Use `status: "environment_blocked"` and `next_action: "block_task"` only after you attempted safe environment repair and still cannot run the needed verification.',
+                '- Use `tester_status_code: 0` and `next_action_code: 0` only when the relevant setup/build/test/smoke evidence passed and every required-for-tester acceptance oracle has `oracle_result_code: 0`.',
+                '- Use `tester_status_code: 1` and `next_action_code: 1` only when commands ran in a working environment and at least one required-for-tester acceptance oracle failed because of source or behavior.',
+                '- Use `tester_status_code: 2` and `next_action_code: 2` only after you attempted safe environment repair and still cannot run the needed verification.',
+                '- For `verification_mode_code: 1`, the current check must pass. For `verification_mode_code: 2`, `oracle_result_code: 0` requires baseline/current evidence and `regression_delta_code: 0`; no baseline evidence means the oracle is not passed.',
                 "- Prefer running build, tests, and smoke checks directly in the repository directory when it contains materialized source.",
                 "- Use staged Harness evidence only when it is explicitly present in the input manifest; otherwise validate by executing or inspecting the repository directory.",
                 "- Do not treat executor planning notes, self-checks, or change summaries as test evidence.",
@@ -294,8 +327,13 @@ class PromptBuilder:
                     "- `selected_plan.json` is the single authoritative plan for executor agents.",
                     "- `selected_plan.json`, `environment_contract.json`, and `validation_contract.json` are the authoritative downstream contract set for executor and tester agents.",
                     "- `selected_plan.json` must include files, steps, acceptance criteria, acceptance_oracles, test commands, dependencies, and risks using the planner todo schema.",
-                    '- Each `acceptance_oracles` entry must include `id`, `description`, `kind`, `required`, `commands`, `expected_exception`, `must_contain`, `must_not_contain`, `semantic_assertions`, `failure_signal`, and `evidence_hint`.',
+                    '- Each `acceptance_oracles` entry must include `id`, `description`, `kind`, `verification_mode_code`, `required`, `commands`, `expected_exception`, `must_contain`, `must_not_contain`, `semantic_assertions`, `failure_signal`, and `evidence_hint`.',
+                    '- `acceptance_oracles[*].verification_mode_code` must be numeric: `1` absolute pass, `2` regression delta. Use `2` only when baseline-vs-current evidence can prove no new regression.',
                     '- `acceptance_oracles[*].kind` must be exactly one of `"manual"`, `"runtime"`, `"static"`, or `"test"`; encode existing tests, regressions, and compile checks as `"test"`.',
+                    '- `acceptance_oracles[*].owner` must be exactly one of `"tester"`, `"reviewer"`, `"external_evaluator"`, `"harness"`, or `"manual"`.',
+                    '- Do not use `"executor"` as an acceptance oracle owner; owner means the verification authority, not the role that changes code.',
+                    '- Use `"tester"` for local reproduction/regression verification, `"external_evaluator"` for official or benchmark evaluation, `"harness"` for Harness gates, `"reviewer"` for review-only checks, and `"manual"` for human verification.',
+                    '- `acceptance_oracles[*].stage` must be exactly one of `"pre_delivery"`, `"post_delivery"`, `"runtime_readiness"`, `"regression"`, or `"manual"`.',
                     *self._contract_schema_rules(draft=False),
                     "- In `review_result.json`, use `review_decision_code: 0` when the merged plan is actionable enough for execution, `1` when changes are required, or `2` for blocking rejection.",
                     "- For PLAN_REVIEW, set `environment_check.attempted` to `false`, `environment_check.status` to `not_applicable`, `environment_check.commands_run` to `[]`, and `environment_check.fixable` to `false`.",
@@ -372,6 +410,8 @@ class PromptBuilder:
             '- Use `"explicit"` only when `commands` is non-empty and comes from the prompt, adapter metadata, or repository evidence.',
             '- Use `"benchmark_spec"` when an adapter or benchmark metadata defines the environment/test runtime but the concrete command is owned by that adapter.',
             '- Use `"unknown"` with concrete `unknowns` when the information is not available; do not encode uncertainty as bare `commands: []`.',
+            f'- In `validation_contract{suffix}.json.final_check`, use `mode: "explicit"` only when Harness should run the listed external/final evaluator commands after review, and use `mode: "unknown"` or `"none"` when no such command is available.',
+            f'- `validation_contract{suffix}.json.final_check.failure_type` must use the shared failure taxonomy and should be `"source_bug"` for external evaluator failures caused by delivered behavior.',
         ]
 
     def _metadata_lines(self, context: AgentRunContext) -> list[str]:

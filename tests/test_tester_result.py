@@ -87,12 +87,43 @@ def test_tester_result_requires_oracle_results_field(tmp_path: Path) -> None:
         load_tester_result(path)
 
 
-def test_tests_passed_rejects_failed_oracle_result(tmp_path: Path) -> None:
+def test_tester_result_loader_allows_nonpassed_oracle_without_selected_plan_context(tmp_path: Path) -> None:
     path = tmp_path / "tester_result.json"
     _write_tester_result(path)
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["oracle_results"][0]["status"] = "failed"
+    payload["oracle_results"][0]["status"] = "not_run"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(HarnessTesterResultError, match="tests_passed"):
+    result = load_tester_result(path)
+
+    assert result.tests_passed
+    assert result.oracle_results[0]["status"] == "not_run"
+
+
+def test_tester_result_loader_accepts_numeric_route_codes(tmp_path: Path) -> None:
+    path = tmp_path / "tester_result.json"
+    _write_tester_result(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("status")
+    payload.pop("next_action")
+    payload["tester_status_code"] = 0
+    payload["next_action_code"] = 0
+    payload["oracle_results"][0].pop("status")
+    payload["oracle_results"][0]["oracle_result_code"] = 0
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = load_tester_result(path)
+
+    assert result.tests_passed
+    assert result.next_action == "continue"
+
+
+def test_tester_result_loader_rejects_mismatched_numeric_route_code(tmp_path: Path) -> None:
+    path = tmp_path / "tester_result.json"
+    _write_tester_result(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["tester_status_code"] = 1
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(HarnessTesterResultError, match="does not match tester_status_code"):
         load_tester_result(path)

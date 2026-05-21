@@ -154,6 +154,12 @@ OO_ARTIFACT_ROOT=./artifacts
 OO_DELIVER_ROOT=./deliver
 OO_STATE_DB=./state/harness.db
 OO_SOURCE_REPO=.
+OO_RUNTIME=docker
+OO_RUNTIME_DOCKER_IMAGE=openorchestra-agent-runtime:latest
+OO_RUNTIME_DOCKER_NETWORK=bridge
+OO_TEST_RUNTIME=docker
+OO_TEST_DOCKER_SETUP_NETWORK=bridge
+OO_TEST_DOCKER_TEST_NETWORK=none
 OO_PLANNER_COUNT=2
 OO_EXECUTOR_COUNT=2
 OO_TESTER_COUNT=1
@@ -197,9 +203,13 @@ OpenOrchestra 将用户意图、流程路由、Agent 执行、测试、审查、
 
 ### Test Runtime Boundary / 测试运行边界
 
-OpenOrchestra itself runs on the host: orchestration, UI, state, artifacts, backend CLIs, and Docker daemon probing stay on the local machine. Project setup and test commands run in the selected test runtime.
+OpenOrchestra itself runs on the host: orchestration, UI, state, artifacts, and Docker daemon probing stay on the local machine. Agent backend CLIs, patch gates, final validation commands, project setup, and test commands run in Docker when the corresponding runtime selects Docker.
 
-OpenOrchestra 主进程运行在宿主机：编排、UI、状态库、artifacts、backend CLI、Docker daemon 检测都在本机。项目依赖安装和测试命令运行在选定的测试 runtime 中。
+OpenOrchestra 主进程运行在宿主机：编排、UI、状态库、artifacts、Docker daemon 检测都在本机。Agent backend CLI、patch gate、final validation、项目依赖安装和测试命令在对应 runtime 选择 Docker 时都进入 Docker。
+
+Role runtime Docker network and test runtime Docker networks are separate. Role agents usually need outbound API access for Codex/Claude/Gemini/Qwen, so `OO_RUNTIME_DOCKER_NETWORK=bridge` is the normal default. Test setup can use `OO_TEST_DOCKER_SETUP_NETWORK=bridge`; actual tests can run with `OO_TEST_DOCKER_TEST_NETWORK=none` for stricter isolation.
+
+Role runtime Docker 网络和 test runtime Docker 网络是两套配置。Role Agent 通常需要访问 Codex/Claude/Gemini/Qwen API，所以默认使用 `OO_RUNTIME_DOCKER_NETWORK=bridge`。测试环境安装阶段可以用 `OO_TEST_DOCKER_SETUP_NETWORK=bridge`，真正测试阶段可以用 `OO_TEST_DOCKER_TEST_NETWORK=none` 做更强隔离。
 
 When `testing.runtime` selects Docker, the source repo is mounted as `/workspace` and generated test commands use container commands such as:
 

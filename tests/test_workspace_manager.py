@@ -38,3 +38,20 @@ def test_workspace_manager_copies_source_repo_without_generated_dirs(tmp_path: P
     (workspace.repo_dir / "app.py").write_text("print('fixed')\n", encoding="utf-8")
     diff = subprocess.run(["git", "diff", "--", "app.py"], cwd=workspace.repo_dir, capture_output=True, text=True, check=False)
     assert diff.returncode == 0 and "diff --git a/app.py b/app.py" in diff.stdout and "+print('fixed')" in diff.stdout
+
+
+def test_workspace_manager_preserves_symlinks_without_following_targets(tmp_path: Path) -> None:
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("do-not-copy\n", encoding="utf-8")
+    source_repo = tmp_path / "source"
+    source_repo.mkdir()
+    (source_repo / "safe.txt").write_text("safe\n", encoding="utf-8")
+    (source_repo / "link.txt").symlink_to(outside)
+
+    manager = WorkspaceManager(tmp_path / "workspace-root")
+    workspace = manager.create_workspace("task", "phase", "executor", "executor-1", 0, 0, source_repo=source_repo)
+
+    copied_link = workspace.repo_dir / "link.txt"
+    assert copied_link.is_symlink()
+    assert copied_link.readlink() == outside
+    assert copied_link.read_text(encoding="utf-8") == "do-not-copy\n"

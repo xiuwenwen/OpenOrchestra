@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import threading
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -17,6 +18,17 @@ from harness.ui.api import (
 from harness.ui.html import render_html as _html
 from harness.ui.state_view import HarnessStateView, UiEventStore
 from harness.ui.translation import DisplayTranslator
+
+
+CLIENT_DISCONNECT_EXCEPTIONS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, TimeoutError)
+
+
+class QuietClientDisconnectHTTPServer(ThreadingHTTPServer):
+    def handle_error(self, request: object, client_address: tuple[str, int] | object) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, CLIENT_DISCONNECT_EXCEPTIONS):
+            return
+        super().handle_error(request, client_address)
 
 
 class HarnessWebServer:
@@ -49,7 +61,7 @@ class HarnessWebServer:
         translator = DisplayTranslator(self.config)
         Handler = build_api_handler(self.state_view, translator, _html)
 
-        self._server = ThreadingHTTPServer((self.host, self.port), Handler)
+        self._server = QuietClientDisconnectHTTPServer((self.host, self.port), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, name="harness-ui", daemon=True)
         self._thread.start()
         return self

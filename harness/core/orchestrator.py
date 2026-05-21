@@ -34,6 +34,7 @@ from harness.core.state_machine import (
     RUNNING,
 )
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT, normalize_workflow_type
+from harness.runtime.resolver import RuntimeResolver
 
 if TYPE_CHECKING:
     from harness.artifacts.manager import ArtifactManager
@@ -74,6 +75,8 @@ class Orchestrator:
         self.artifact_manager = services.artifact_manager
         self.artifact_visibility = services.artifact_visibility
         self.validator = services.validator
+        self.event_store = services.event_store
+        self.artifact_plane = services.artifact_plane
         self.communicator = services.communicator
         self.backend_health = services.backend_health
         self.scheduler = services.scheduler
@@ -81,6 +84,7 @@ class Orchestrator:
         self.materialized_repo_service = services.materialized_repo_service
         self.test_gate_service = services.test_gate_service
         self.runtime_readiness_gate_service = services.runtime_readiness_gate_service
+        self.final_validation_gate_service = services.final_validation_gate_service
         self.patch_gate_service = services.patch_gate_service
         self.input_staging_service = services.input_staging_service
         self.agent_runner = services.agent_runner
@@ -142,6 +146,7 @@ class Orchestrator:
                 data={"workflow_type": workflow_type},
             )
         )
+        self.record_resolved_runtime(task_id)
         try:
             final_path = self.workflow_engine.run(task_id, workflow_type, user_prompt)
             self.repository.update_task(task_id, status=COMPLETED, current_phase=COMPLETED, current_role=None)
@@ -238,6 +243,7 @@ class Orchestrator:
         user_prompt: str | None = None,
         agent_count_override: int | None = None,
         phase_scope: dict[str, int | str | None] | None = None,
+        retry_feedback: list[str] | None = None,
     ) -> list[AgentRunResult]:
         return self.agent_runner.run_role_phase(
             role,
@@ -247,6 +253,7 @@ class Orchestrator:
             user_prompt,
             agent_count_override,
             phase_scope,
+            retry_feedback,
         )
 
     def is_failed_resume(self, task_id: str) -> bool:
@@ -354,6 +361,13 @@ class Orchestrator:
     def _run_runtime_readiness_gate(self, task_id: str, round_id: int) -> bool:
         return self.run_runtime_readiness_gate(task_id, round_id)
 
+    def run_final_validation_gate(self, task_id: str, round_id: int):
+        self.final_validation_gate_service.latest_materialized_repo = self._latest_materialized_repo
+        return self.final_validation_gate_service.run(task_id, round_id)
+
+    def _run_final_validation_gate(self, task_id: str, round_id: int):
+        return self.run_final_validation_gate(task_id, round_id)
+
     def _harness_test_command_argv(self, command: str) -> list[str]:
         return self.test_gate_service.harness_test_command_argv(command)
 
@@ -429,8 +443,8 @@ class Orchestrator:
     def _materialized_repo_field(self, report: str, field_name: str) -> str | None:
         return self.materialized_repo_service.materialized_repo_field(report, field_name)
 
-    def _write_materialized_success_marker(self, repo_dir: Path, task_id: str, round_id: int, patch_path: Path) -> None:
-        self.materialized_repo_service.write_materialized_success_marker(repo_dir, task_id, round_id, patch_path)
+    def _write_materialized_success_marker(self, repo_dir: Path, task_id: str, round_id: int, patch_path: Path, **kwargs: Any) -> None:
+        self.materialized_repo_service.write_materialized_success_marker(repo_dir, task_id, round_id, patch_path, **kwargs)
 
     def backend_for(self, task_id: str | None, role: str) -> str:
         return self.config_service.backend_for(task_id, role)
@@ -451,6 +465,29 @@ class Orchestrator:
         if backend in {"gemini", "qwen"}:
             return HeadlessCLIAdapter(backend)
         raise ValueError(f"Unsupported agent backend: {backend}")
+
+    def record_resolved_runtime(self, task_id: str) -> None:
+        config = self.config_service.config_for_task(task_id)
+        spec = RuntimeResolver(config).resolve()
+        payload = {
+            "schema_version": "resolved_runtime.v1",
+            "runtime": {
+                "mode": spec.mode,
+                "image": spec.image,
+                "workdir": spec.workdir,
+                "network": spec.network,
+                "cache_root": str(spec.cache_root) if spec.cache_root else "",
+                "env_allowlist": list(spec.env_allowlist),
+            },
+            "source": "harness",
+        }
+        self.artifact_manager.create_text_artifact(
+            task_id,
+            "resolved_runtime.json",
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            role="orchestrator",
+            agent_id="runtime-resolver",
+        )
 
     def source_repo_for_workspace(self) -> Path | None:
         return self.materialized_repo_service.source_repo_for_workspace()
@@ -523,6 +560,9 @@ class Orchestrator:
 
     def _latest_materialized_repo(self, task_id: str) -> Path | None:
         return self.materialized_repo_service.latest_materialized_repo(task_id)
+
+    def _latest_cumulative_patch(self, task_id: str) -> Path | None:
+        return self.materialized_repo_service.latest_cumulative_patch(task_id)
 
     def _materialized_round_number(self, path: Path) -> int:
         try:

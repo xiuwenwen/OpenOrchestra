@@ -57,6 +57,7 @@ def test_bootstrap_wires_orchestrator_services(tmp_path: Path) -> None:
 
     assert services.agent_runner.orchestrator is owner
     assert services.workflow_engine.runtime is owner
+    assert services.artifact_plane.event_store is services.event_store
     assert services.materialized_repo_service.repository is services.repository
     assert services.test_gate_service.repository is services.repository
     assert services.patch_gate_service.repository is services.repository
@@ -88,3 +89,4 @@ def test_orchestrator_still_constructs_with_default_services(tmp_path: Path) -> 
     task_id = orchestrator.create_task("bootstrap smoke")
 
     assert orchestrator.repository.get_task(task_id)["task_id"] == task_id
+    assert orchestrator.artifact_plane.event_store is orchestrator.event_store

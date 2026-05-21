@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import threading
@@ -8,14 +9,21 @@ from pathlib import Path
 
 from harness.adapters.command_runner import CommandRunner
 from harness.adapters.process_registry import kill_process_tree, register_process, supports_process_groups, unregister_process
+from harness.runtime.spec import RuntimeCommandRequest, RuntimeExecutor, RuntimeSpec
 from harness.ui.terminal import TerminalStatusLine
 
 
 class SubprocessRunner:
-    def __init__(self, stream_output: bool = False, stream_prefix: str = ""):
+    def __init__(
+        self,
+        stream_output: bool = False,
+        stream_prefix: str = "",
+        runtime_executor: RuntimeExecutor | None = None,
+    ):
         self.stream_output = stream_output
         self.stream_prefix = stream_prefix
         self.command_runner = CommandRunner()
+        self.runtime_executor = runtime_executor
 
     def run(
         self,
@@ -26,8 +34,26 @@ class SubprocessRunner:
         stderr_path: Path,
         input_text: str | None = None,
         env: dict[str, str] | None = None,
+        runtime_spec: RuntimeSpec | None = None,
     ) -> int:
         self.command_runner.validate_command(command)
+        runtime_executor = self.runtime_executor
+        if runtime_executor is None and runtime_spec is not None and runtime_spec.is_docker:
+            from harness.runtime.docker import DockerRuntimeExecutor
+
+            runtime_executor = DockerRuntimeExecutor()
+        if runtime_executor is not None:
+            return self._run_with_runtime_executor(
+                command,
+                cwd,
+                timeout_seconds,
+                stdout_path,
+                stderr_path,
+                input_text=input_text,
+                env=env,
+                runtime_spec=runtime_spec,
+                runtime_executor=runtime_executor,
+            )
         timeout = timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,6 +112,59 @@ class SubprocessRunner:
             stdout_path.write_text(self.command_runner.decode_timeout_stream(exc.stdout), encoding="utf-8")
             stderr_path.write_text(self.command_runner.decode_timeout_stream(exc.stderr) + "\nTIMEOUT\n", encoding="utf-8")
             return 124
+
+    def _run_with_runtime_executor(
+        self,
+        command: list[str],
+        cwd: Path,
+        timeout_seconds: float | None,
+        stdout_path: Path,
+        stderr_path: Path,
+        *,
+        input_text: str | None,
+        env: dict[str, str] | None,
+        runtime_spec: RuntimeSpec | None,
+        runtime_executor: RuntimeExecutor,
+    ) -> int:
+        def stream_callback(stream_name: str, chunk: str) -> None:
+            if not self.stream_output:
+                return
+            terminal_handle = sys.stderr if stream_name == "stderr" else sys.stdout
+            TerminalStatusLine.write_live(f"{self.stream_prefix}{chunk}", terminal_handle)
+
+        result = runtime_executor.run_to_files(
+            RuntimeCommandRequest(
+                command=tuple(command),
+                cwd=cwd,
+                timeout_seconds=timeout_seconds,
+                input_text=input_text,
+                env=env,
+                spec=runtime_spec or RuntimeSpec(),
+            ),
+            stdout_path,
+            stderr_path,
+            live_path=stdout_path.parent / "live.log",
+            stream_callback=stream_callback,
+        )
+        self._write_runtime_invocation(stdout_path.parent, result)
+        return result.returncode
+
+    def _write_runtime_invocation(self, log_dir: Path, result) -> None:
+        payload = {
+            "schema_version": "runtime_invocation.v1",
+            "runtime_mode": result.runtime_mode,
+            "image": result.image,
+            "container_name": result.container_name,
+            "setup_host_commands": [list(command) for command in result.setup_host_commands],
+            "host_command": list(result.host_command),
+            "container_command": list(result.container_command),
+            "returncode": result.returncode,
+            "timed_out": result.timed_out,
+        }
+        (log_dir / "runtime_invocation.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     def _copy_stream(self, stream, handle, terminal_handle, live_handle, live_lock: threading.Lock, stream_name: str) -> None:
         if stream is None:

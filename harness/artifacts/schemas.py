@@ -80,6 +80,8 @@ PROJECT_CONTEXT_ARTIFACTS = _types("project_context.md")
 TEST_REPORT_ARTIFACTS = _types("bug_report.md", "tester_result.json")
 PATCH_FIX_GATE_ARTIFACTS = _types("objective_gate.md", "patch_gate_result.json")
 RUNTIME_READINESS_ARTIFACTS = _types("runtime_readiness.md")
+RUNTIME_CONTEXT_ARTIFACTS = _types("resolved_runtime.json")
+EXTERNAL_EVALUATOR_ARTIFACTS = _types("external_evaluator_result.json")
 EXECUTOR_REVIEW_ARTIFACTS = _types(
     "changed_files.md",
     "merged_patch.diff",
@@ -100,6 +102,17 @@ PLAN_RECHECK_EXECUTOR_ARTIFACTS = _types(
     "self_check.md",
 )
 ARTIFACT_VISIBILITY_RULES: tuple[ArtifactVisibilityRule, ...] = (
+    ArtifactVisibilityRule("planner", ANY_PHASE, "orchestrator", RUNTIME_CONTEXT_ARTIFACTS),
+    ArtifactVisibilityRule("executor", ANY_PHASE, "orchestrator", RUNTIME_CONTEXT_ARTIFACTS),
+    ArtifactVisibilityRule("tester", ANY_PHASE, "orchestrator", RUNTIME_CONTEXT_ARTIFACTS),
+    ArtifactVisibilityRule("reviewer", ANY_PHASE, "orchestrator", RUNTIME_CONTEXT_ARTIFACTS),
+    ArtifactVisibilityRule("communicator", ANY_PHASE, "orchestrator", RUNTIME_CONTEXT_ARTIFACTS),
+    ArtifactVisibilityRule("executor", FIXING, "orchestrator", EXTERNAL_EVALUATOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
+    ArtifactVisibilityRule("executor", REVIEW_FIXING, "orchestrator", EXTERNAL_EVALUATOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
+    ArtifactVisibilityRule("tester", TESTING, "orchestrator", EXTERNAL_EVALUATOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
+    ArtifactVisibilityRule("tester", REGRESSION_TESTING, "orchestrator", EXTERNAL_EVALUATOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
+    ArtifactVisibilityRule("reviewer", REVIEWING, "orchestrator", EXTERNAL_EVALUATOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
+    ArtifactVisibilityRule("communicator", DELIVERY, "orchestrator", EXTERNAL_EVALUATOR_ARTIFACTS, round_policy=ROUND_LATEST_PER_TYPE),
     ArtifactVisibilityRule("planner", PLANNING_DRAFT, "context", PROJECT_CONTEXT_ARTIFACTS),
     ArtifactVisibilityRule("planner", PLANNING_REVISION, "context", PROJECT_CONTEXT_ARTIFACTS),
     ArtifactVisibilityRule("reviewer", PLAN_REVIEW, "context", PROJECT_CONTEXT_ARTIFACTS),
@@ -427,16 +440,16 @@ def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]
             "- Put bug outcome in `bug_report.md` as `bug_result_code: 0`, `bug_result_code: 1`, or `bug_result_code: -1`.",
             "- If testing is blocked by a broken implementation, still write a complete `bug_report.md` with `artifact_result_code: 0` and describe the blocker in the verdict fields.",
             "- Write `tester_result.json` as one strict JSON object; it is the workflow decision contract, not Markdown.",
-            '- `tester_result.json.status` must be exactly one of `"tests_passed"`, `"source_bug"`, or `"environment_blocked"`.',
+            "- `tester_result.json.tester_status_code` must be numeric: `0` tests passed, `1` source bug, `2` environment blocked.",
             '- `tester_result.json.environment_dependency_issue` must be a boolean and must be `true` whenever setup/build/test execution is blocked by dependency, interpreter, package, import, toolchain, or runtime environment issues.',
             "- `tester_result.json.environment_ready` must be a boolean when present; use `false` whenever setup/build/test execution is blocked by environment or command issues.",
-            '- `tester_result.json.next_action` must match the status: `"continue"`, `"fix_code"`, or `"block_task"`.',
-            '- `tester_result.json.failure_type` must use the shared taxonomy: `"none"`, `"source_bug"`, `"environment_bug"`, `"env_setup"`, `"test_command_bug"`, `"test_command"`, `"contract_bug"`, `"process_bug"`, `"test"`, or `"inconclusive"`.',
-            "- `tester_result.json.oracle_results` must be a list of per-acceptance-oracle verdict objects with `oracle_id`, `status`, `evidence`, and `commands_run`.",
+            "- `tester_result.json.next_action_code` must match `tester_status_code`: `0` continue, `1` fix code, `2` block task.",
+            '- `tester_result.json.failure_type` must use the shared taxonomy: `"none"`, `"source_bug"`, `"environment_bug"`, `"env_setup"`, `"test_command_bug"`, `"test_command"`, `"contract_bug"`, `"contract_invalid"`, `"process_bug"`, `"agent_runtime"`, `"infra"`, `"patch_apply"`, `"test"`, or `"inconclusive"`.',
+            "- `tester_result.json.oracle_results` must be a list of per-acceptance-oracle verdict objects with `oracle_id`, numeric `oracle_result_code`, `evidence`, and `commands_run`; workflow routing enforces only `required_for_tester: true` oracles.",
             "- Tester owns environment setup and command execution before writing `tester_result.json`; do not rely on a later Harness test gate.",
             "- Tester must use `environment_contract.json` and `validation_contract.json` when present; contract JSON parse/schema failures are `failure_type: contract_bug`, not a reason to run default pytest.",
             "- Use `environment_blocked` only after safe project-declared or minimal test-tooling setup/repair was attempted and the environment still cannot run.",
-            "- Harness checks `environment_dependency_issue` before `status`; when it is true Harness reruns the tester environment repair loop instead of sending the report to executor.",
+            "- Harness checks `environment_dependency_issue` before `tester_status_code`; when it is true Harness reruns the tester environment repair loop instead of sending the report to executor.",
             "- Harness validates `delivery.md` and report headers; any non-zero `return_code` or non-zero `artifact_result_code` prevents the run from advancing.",
         ]
     if role == "reviewer":
@@ -453,6 +466,10 @@ def output_contract_lines_for(role: str, phase: str, required_outputs: list[str]
             "- During PLAN_REVIEW, use `review_decision_code: 1` only when planner revision is required before execution.",
             "- During PLAN_REVIEW, `selected_plan.json.acceptance_oracles` must be the authoritative structured acceptance contract.",
             "- During PLAN_REVIEW, `selected_plan.json.acceptance_oracles[*].kind` must be exactly one of `manual`, `runtime`, `static`, or `test`; encode existing tests, regressions, and compile checks as `test`.",
+            "- During PLAN_REVIEW, `selected_plan.json.acceptance_oracles[*].verification_mode_code` must be numeric: `1` absolute pass, `2` regression delta.",
+            "- During PLAN_REVIEW, `selected_plan.json.acceptance_oracles[*].owner` must be exactly one of `tester`, `reviewer`, `external_evaluator`, `harness`, or `manual`; never use `executor` because owner means verifier authority.",
+            "- During PLAN_REVIEW, `selected_plan.json.acceptance_oracles[*].stage` must be exactly one of `pre_delivery`, `post_delivery`, `runtime_readiness`, `regression`, or `manual`.",
+            "- During PLAN_REVIEW, every acceptance oracle must include `owner`, `stage`, `runtime`, `required_for_tester`, and `required_for_final` so downstream roles know who must verify it and when.",
             "- During PLAN_REVIEW, `environment_contract.json` and `validation_contract.json` must be the authoritative environment and validation contracts for all downstream executor/tester/reviewer phases.",
             "- Use `environment_check.status: blocked` only for irreconcilable runtime or system conflicts that should stop Harness immediately.",
         ]

@@ -33,6 +33,7 @@ from harness.core.orchestrator import Orchestrator
 from harness.core.progress import ProgressMultiplexer
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT
 from harness.delivery.handoff import DeliveryHandoff, format_delivery_handoff, format_total_elapsed
+from harness.runtime.preflight import check_role_runtime_preflight
 from harness.ui.display import display_width, pad_display, truncate_display
 from harness.ui.launcher import start_ui_server
 from harness.ui.server import UiEventStore
@@ -105,13 +106,26 @@ def main() -> int:
     parser.add_argument(
         "--test-runtime",
         choices=["auto", "native", "docker", "swebench"],
-        help="Override test execution runtime for this invocation.",
+        help="Override test execution strategy for this invocation; this does not control role subprocess runtime.",
+    )
+    parser.add_argument(
+        "--runtime",
+        choices=["host", "docker", "auto"],
+        help="Override role subprocess runtime for this invocation.",
+    )
+    parser.add_argument("--runtime-docker-image", help="Override the Docker image for role subprocess runtime.")
+    parser.add_argument(
+        "--runtime-docker-network",
+        help="Docker network for role subprocess runtime, for example bridge, none, default, host, or a custom network.",
     )
     parser.add_argument("--test-docker-image", help="Override the default Python Docker image for test execution.")
     parser.add_argument(
-        "--docker-network",
-        choices=["none", "install_only", "always", "default"],
-        help="Docker network policy for test execution.",
+        "--test-docker-setup-network",
+        help="Docker network used while preparing the test environment.",
+    )
+    parser.add_argument(
+        "--test-docker-test-network",
+        help="Docker network used while running test commands.",
     )
     parser.add_argument("--no-docker-test", action="store_true", help="Disable Docker test execution for this invocation.")
     parser.add_argument(
@@ -142,12 +156,20 @@ def main() -> int:
             print(f"[ERROR] --source-repo must be an existing directory: {source_repo}", file=sys.stderr)
             return 2
         config.setdefault("system", {})["source_repo"] = str(source_repo)
+    if args.runtime:
+        config.setdefault("runtime", {})["mode"] = args.runtime
+    if args.runtime_docker_image:
+        config.setdefault("runtime", {}).setdefault("docker", {})["image"] = args.runtime_docker_image
+    if args.runtime_docker_network:
+        config.setdefault("runtime", {}).setdefault("docker", {})["network"] = args.runtime_docker_network
     if args.test_runtime:
         config.setdefault("testing", {})["runtime"] = args.test_runtime
     if args.test_docker_image:
         config.setdefault("testing", {}).setdefault("docker", {})["python_image"] = args.test_docker_image
-    if args.docker_network:
-        config.setdefault("testing", {}).setdefault("docker", {})["network"] = args.docker_network
+    if args.test_docker_setup_network:
+        config.setdefault("testing", {}).setdefault("docker", {})["setup_network"] = args.test_docker_setup_network
+    if args.test_docker_test_network:
+        config.setdefault("testing", {}).setdefault("docker", {})["test_network"] = args.test_docker_test_network
     if args.no_docker_test:
         config.setdefault("testing", {}).setdefault("docker", {})["enabled"] = False
         if str(config.get("testing", {}).get("runtime") or "auto") == "docker":
@@ -212,6 +234,12 @@ def main() -> int:
                     f"difficulty={classification.difficulty_score} peer_review={str(peer_review).lower()}",
                     flush=True,
                 )
+            runtime_preflight = check_role_runtime_preflight(config, backend)
+            if not runtime_preflight.ok:
+                print(runtime_preflight.message, file=sys.stderr)
+                return 2
+            if runtime_preflight.message:
+                print(runtime_preflight.message, flush=True)
             if args.ui:
                 cli.ui_server = start_ui_server(config, orchestrator, ui_store, args.ui_port, args.config)
             # One-shot runs must fail closed at the fix-round limit instead of

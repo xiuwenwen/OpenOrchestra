@@ -78,6 +78,8 @@ def _config(tmp_path: Path) -> dict:
             }
         },
         "artifact_input": {"max_files": 50, "max_file_bytes": 262144, "max_total_bytes": 1048576},
+        "runtime": {"mode": "host"},
+        "testing": {"runtime": "native"},
     }
 
 
@@ -769,6 +771,87 @@ def test_main_source_repo_argument_overrides_persistent_env(monkeypatch, tmp_pat
     }
 
 
+def test_main_runtime_arguments_override_role_runtime_config(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("unused: true\n", encoding="utf-8")
+    captured: dict[str, str] = {}
+
+    class PreflightOk:
+        ok = True
+        message = ""
+
+    def fake_load_config(path):
+        assert str(path) == str(config_path)
+        return _config(tmp_path)
+
+    def fake_run_once(orchestrator, prompt: str, workflow_type: str, classification=None) -> int:
+        runtime = orchestrator.config["runtime"]
+        captured["mode"] = runtime["mode"]
+        captured["image"] = runtime["docker"]["image"]
+        captured["network"] = runtime["docker"]["network"]
+        return 0
+
+    monkeypatch.setattr(main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(main_module, "load_user_env", lambda path=main_module.USER_ENV_PATH: {"OO_BACKEND": "codex"})
+    monkeypatch.setattr(main_module, "ensure_user_env_defaults", lambda config, values, path=main_module.USER_ENV_PATH: None)
+    monkeypatch.setattr(main_module, "resolve_real_backend", lambda requested: requested)
+    monkeypatch.setattr(main_module, "run_once", fake_run_once)
+    monkeypatch.setattr(main_module, "check_role_runtime_preflight", lambda *args, **kwargs: PreflightOk())
+    monkeypatch.setattr(
+        main_module.sys,
+        "argv",
+        [
+            "harness",
+            "--config",
+            str(config_path),
+            "--no-ui",
+            "--workflow",
+            "bugfix",
+            "--runtime",
+            "docker",
+            "--runtime-docker-image",
+            "agent:test",
+            "--runtime-docker-network",
+            "none",
+            "fix the bug",
+        ],
+    )
+
+    assert main_module.main() == 0
+    assert captured == {"mode": "docker", "image": "agent:test", "network": "none"}
+
+
+def test_main_role_runtime_preflight_blocks_before_ui_and_task(monkeypatch, tmp_path: Path, capsys) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("unused: true\n", encoding="utf-8")
+
+    class PreflightFailed:
+        ok = False
+        message = "runtime image missing"
+
+    def fake_load_config(path):
+        assert str(path) == str(config_path)
+        config = _config(tmp_path)
+        config["runtime"] = {"mode": "docker", "docker": {"image": "missing:latest"}}
+        return config
+
+    monkeypatch.setattr(main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(main_module, "load_user_env", lambda path=main_module.USER_ENV_PATH: {"OO_BACKEND": "claude"})
+    monkeypatch.setattr(main_module, "ensure_user_env_defaults", lambda config, values, path=main_module.USER_ENV_PATH: None)
+    monkeypatch.setattr(main_module, "resolve_real_backend", lambda requested: requested)
+    monkeypatch.setattr(main_module, "check_role_runtime_preflight", lambda *args, **kwargs: PreflightFailed())
+    monkeypatch.setattr(main_module, "start_ui_server", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("ui should not start")))
+    monkeypatch.setattr(main_module, "run_once", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("task should not start")))
+    monkeypatch.setattr(
+        main_module.sys,
+        "argv",
+        ["harness", "--config", str(config_path), "--workflow", "bugfix", "fix the bug"],
+    )
+
+    assert main_module.main() == 2
+    assert "runtime image missing" in capsys.readouterr().err
+
+
 def test_main_prompt_file_supplies_one_shot_prompt(monkeypatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("unused: true\n", encoding="utf-8")
@@ -1020,11 +1103,13 @@ def test_user_env_round_trip(tmp_path: Path) -> None:
 def test_generated_docker_runtime_default_is_rewritten_to_config_default(tmp_path: Path) -> None:
     env_path = tmp_path / ".openorchestra.env"
     config = _config(tmp_path)
-    config["testing"] = {"runtime": "auto"}
+    config["runtime"] = {"mode": "docker"}
+    config["testing"] = {"runtime": "docker"}
 
-    main_module.ensure_user_env_defaults(config, {"OO_TEST_RUNTIME": "docker"}, env_path)
+    main_module.ensure_user_env_defaults(config, {"OO_RUNTIME": "host", "OO_TEST_RUNTIME": "docker"}, env_path)
 
-    assert main_module.load_user_env(env_path)["OO_TEST_RUNTIME"] == "auto"
+    assert main_module.load_user_env(env_path)["OO_RUNTIME"] == "docker"
+    assert main_module.load_user_env(env_path)["OO_TEST_RUNTIME"] == "docker"
 
 
 def test_legacy_user_env_keys_are_mapped_to_openorchestra_keys(tmp_path: Path) -> None:

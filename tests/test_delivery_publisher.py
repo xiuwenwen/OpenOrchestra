@@ -13,6 +13,7 @@ from harness.agents import runner as agent_runner_module
 from harness.agents.result import AgentRunResult, ArtifactRef
 from harness.artifacts.schemas import required_outputs_for
 import harness.core.orchestrator as orchestrator_module
+from harness.core.errors import TaskFailedError
 from harness.core.orchestrator import Orchestrator
 from harness.core.progress import ProgressEvent
 from harness.core.state_machine import (
@@ -162,6 +163,7 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
         round_id=0,
     )
     manifest = staged[0].read_text(encoding="utf-8")
+    handoff = json.loads((tmp_path / "communicator-input" / "handoff_manifest.json").read_text(encoding="utf-8"))
 
     assert "latest-merged-metadata.json" in manifest
     assert "latest-changed-files.md" in manifest
@@ -182,6 +184,14 @@ def test_final_handoff_stages_lean_delivery_evidence(tmp_path: Path) -> None:
     assert "old-review-report.md" not in manifest
     assert "final-round-2-test_gate.md" not in manifest
     assert "final-round-1-test_gate.md" not in manifest
+    assert tmp_path / "communicator-input" / "handoff_manifest.json" not in staged
+    assert handoff["target_role"] == "communicator"
+    assert any(
+        item["artifact_type"] == "tester_result.json"
+        and item["status"] == "staged"
+        and item["hash"] == "hash"
+        for item in handoff["artifacts"]
+    )
 
 def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> None:
     config = _config(tmp_path)
@@ -199,6 +209,7 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     assert final_delivery == tmp_path / "deliver" / f"build-weather-tool-{task_id[:8]}" / "final_delivery.json"
     assert final_delivery.exists()
     assert (final_delivery.parent / "success_path.md").exists()
+    assert (final_delivery.parent / "delivery_manifest.json").exists()
     assert (final_delivery.parent / "usage_guide.md").exists()
     assert (final_delivery.parent / "tester_result.json").exists()
     assert (final_delivery.parent / "patches" / "final.patch").exists()
@@ -212,6 +223,7 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     validation_artifacts = orchestrator.repository.list_artifacts(task_id, "patch_validation.md")
     materialized_artifacts = orchestrator.repository.list_artifacts(task_id, "materialized_repo.md")
     success_path_artifacts = orchestrator.repository.list_artifacts(task_id, "success_path.md")
+    delivery_manifest_artifacts = orchestrator.repository.list_artifacts(task_id, "delivery_manifest.json")
     assert merged_artifacts
     assert validation_artifacts
     assert "status: pass" in Path(validation_artifacts[-1]["path"]).read_text(encoding="utf-8")
@@ -219,6 +231,7 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     materialized_report = Path(materialized_artifacts[-1]["path"]).read_text(encoding="utf-8")
     assert "status: success" in materialized_report
     assert success_path_artifacts
+    assert delivery_manifest_artifacts
     assert Path(success_path_artifacts[-1]["path"]) == final_delivery.parent / "success_path.md"
     assert (final_delivery.parent / "patches" / "final.patch").read_text(encoding="utf-8") == Path(
         merged_artifacts[-1]["path"]
@@ -232,6 +245,11 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
     assert "patch_validation.md" not in manifest
     assert "materialized_repo.md" not in manifest
     assert "source/mock.txt" in manifest
+    delivery_manifest = json.loads((final_delivery.parent / "delivery_manifest.json").read_text(encoding="utf-8"))
+    assert delivery_manifest["schema_version"] == "delivery_path_contract.v1"
+    assert delivery_manifest["files"]["final_delivery.json"]["source_artifact"]["artifact_type"] == "final_delivery.json"
+    assert delivery_manifest["files"]["patches/final.patch"]["source_artifact"]["artifact_type"] == "merged_patch.diff"
+    assert "source/mock.txt" in delivery_manifest["materialized_source_files"]
     tester_run = next(
         run
         for run in orchestrator.repository.list_agent_runs(task_id)
@@ -251,6 +269,172 @@ def test_delivery_is_published_to_shallow_deliver_directory(tmp_path: Path) -> N
         / "repo"
     )
     assert (tester_repo / "mock.txt").read_text(encoding="utf-8") == "mock change\n"
+
+
+def test_delivery_publishes_validated_cumulative_patch_over_latest_delta(tmp_path: Path) -> None:
+    source_repo = tmp_path / "source"
+    source_repo.mkdir()
+    (source_repo / "app.py").write_text("old\n", encoding="utf-8")
+    config = _config(tmp_path)
+    config["system"]["source_repo"] = str(source_repo)
+    config["system"]["deliver_root"] = str(tmp_path / "deliver")
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("Fix existing project", workflow_type=BUGFIX)
+    materialized_repo = orchestrator._materialized_repo_dir(task_id, 1)
+    materialized_repo.mkdir(parents=True)
+    (materialized_repo / "app.py").write_text("new\n", encoding="utf-8")
+    cumulative_patch = tmp_path / "cumulative.patch"
+    cumulative_patch.write_text(
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n",
+        encoding="utf-8",
+    )
+    latest_delta_patch = tmp_path / "latest-delta.patch"
+    latest_delta_patch.write_text(
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1 +1 @@\n"
+        "-already-new\n"
+        "+new\n",
+        encoding="utf-8",
+    )
+    orchestrator._write_materialized_success_marker(
+        materialized_repo,
+        task_id,
+        1,
+        latest_delta_patch,
+        cumulative_patch_path=cumulative_patch,
+        apply_base_repo=materialized_repo,
+        export_base_repo=source_repo,
+    )
+    orchestrator.artifact_manager.create_text_artifact(
+        task_id,
+        "materialized_repo.md",
+        "\n".join(
+            [
+                "# Materialized Repository",
+                "",
+                "status: success",
+                f"task_id: {task_id}",
+                "round_id: 1",
+                f"repo_path: {materialized_repo}",
+                "",
+            ]
+        ),
+    )
+    orchestrator.artifact_manager.create_text_artifact(
+        task_id,
+        "merged_patch.diff",
+        latest_delta_patch.read_text(encoding="utf-8"),
+    )
+    final_delivery = tmp_path / "final_delivery.json"
+    final_delivery.write_text(json.dumps({"return_code": 0}), encoding="utf-8")
+
+    published = orchestrator._publish_delivery(task_id, final_delivery)
+
+    assert published.exists()
+    assert (published.parent / "patches" / "final.patch").read_text(encoding="utf-8") == cumulative_patch.read_text(
+        encoding="utf-8"
+    )
+    assert (published.parent / "source" / "app.py").read_text(encoding="utf-8") == "new\n"
+
+
+def test_delivery_requires_final_patch_for_existing_project_source(tmp_path: Path) -> None:
+    source_repo = tmp_path / "source"
+    source_repo.mkdir()
+    (source_repo / "app.py").write_text("old\n", encoding="utf-8")
+    config = _config(tmp_path)
+    config["system"]["source_repo"] = str(source_repo)
+    config["system"]["deliver_root"] = str(tmp_path / "deliver")
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("Fix existing project", workflow_type=BUGFIX)
+    final_delivery = tmp_path / "final_delivery.json"
+    final_delivery.write_text(json.dumps({"return_code": 0}), encoding="utf-8")
+
+    with pytest.raises(TaskFailedError, match="Delivery requires final.patch"):
+        orchestrator._publish_delivery(task_id, final_delivery)
+
+
+def test_patch_validation_uses_previous_materialized_repo_and_exports_cumulative_patch(tmp_path: Path) -> None:
+    source_repo = tmp_path / "source"
+    source_repo.mkdir()
+    (source_repo / "app.py").write_text("one\n", encoding="utf-8")
+    config = _config(tmp_path)
+    config["system"]["source_repo"] = str(source_repo)
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("Fix existing project in rounds", workflow_type=BUGFIX)
+    round0_repo = orchestrator._materialized_repo_dir(task_id, 0)
+    round0_repo.mkdir(parents=True)
+    (round0_repo / "app.py").write_text("two\n", encoding="utf-8")
+    round0_patch = tmp_path / "round0.patch"
+    round0_patch.write_text(
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1 +1 @@\n"
+        "-one\n"
+        "+two\n",
+        encoding="utf-8",
+    )
+    orchestrator._write_materialized_success_marker(
+        round0_repo,
+        task_id,
+        0,
+        round0_patch,
+        cumulative_patch_path=round0_patch,
+        apply_base_repo=source_repo,
+        export_base_repo=source_repo,
+    )
+    orchestrator.artifact_manager.create_text_artifact(
+        task_id,
+        "materialized_repo.md",
+        "\n".join(
+            [
+                "# Materialized Repository",
+                "",
+                "status: success",
+                f"task_id: {task_id}",
+                "round_id: 0",
+                f"repo_path: {round0_repo}",
+                "",
+            ]
+        ),
+    )
+    phase_id = orchestrator.repository.create_phase(task_id, PATCH_MERGE, "executor", 1)
+    round1_delta = (
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -1 +1 @@\n"
+        "-two\n"
+        "+three\n"
+    )
+    orchestrator.artifact_manager.create_text_artifact(
+        task_id,
+        "merged_patch.diff",
+        round1_delta,
+        phase_id=phase_id,
+        role="executor",
+        agent_id="executor-1",
+    )
+
+    assert orchestrator._run_patch_validation(task_id, 1)
+
+    round1_repo = orchestrator._latest_materialized_repo(task_id)
+    assert round1_repo
+    assert (round1_repo / "app.py").read_text(encoding="utf-8") == "three\n"
+    cumulative_artifacts = orchestrator.repository.list_artifacts(task_id, "cumulative_patch.diff")
+    assert cumulative_artifacts
+    cumulative = Path(cumulative_artifacts[-1]["path"]).read_text(encoding="utf-8")
+    assert "-one" in cumulative
+    assert "+three" in cumulative
+    assert "-two" not in cumulative
+
 
 def test_delivery_internal_artifacts_are_explicit_opt_in(tmp_path: Path) -> None:
     config = _config(tmp_path)

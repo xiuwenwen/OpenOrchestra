@@ -70,7 +70,7 @@ def _write_tester_result(path: Path, status: str) -> None:
                 "schema_version": 1,
                 "status": status,
                 "next_action": next_action,
-                "failure_type": status,
+                "failure_type": "none" if status == "tests_passed" else status,
                 "environment_dependency_issue": status == "environment_blocked",
                 "summary": status,
                 "setup_commands_run": [],

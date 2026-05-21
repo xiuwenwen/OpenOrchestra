@@ -8,6 +8,7 @@ from harness.adapters.claude_config import (
     claude_context_window_tokens,
     claude_dynamic_max_output_tokens,
 )
+from harness.adapters.runner_invocation import run_subprocess_runner
 from harness.adapters.subprocess_runner import SubprocessRunner
 from harness.agents.context import AgentRunContext
 from harness.agents.result import AgentRunResult
@@ -47,21 +48,23 @@ class CodexCLIAdapter(AgentAdapter):
         command = self.command + self._config_args(context, max_output_tokens) + [
             "--skip-git-repo-check",
             "--cd",
-            str(context.repo_dir),
+            context.runtime_repo_dir or str(context.repo_dir),
             "--add-dir",
-            str(context.input_dir),
+            context.runtime_input_dir or str(context.input_dir),
             "--add-dir",
-            str(context.output_dir),
+            context.runtime_output_dir or str(context.output_dir),
             "-",
         ]
         (context.log_dir / "command.txt").write_text(" ".join(command), encoding="utf-8")
-        exit_code = self.runner.run(
+        exit_code = run_subprocess_runner(
+            self.runner,
             command,
             context.repo_dir,
             context.timeout_seconds,
             stdout_path,
             stderr_path,
             input_text=prompt,
+            runtime_spec=context.runtime_spec,
         )
         return AgentRunResult(
             task_id=context.task_id,

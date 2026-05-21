@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any
 
 from harness.artifacts.review_decision import review_decision_code_from_payload
+from harness.core.taxonomy import RUNTIME_BLOCKER_FAILURE_TYPES
 from harness.testing.tester_result import TesterResult
 
 
@@ -37,7 +38,7 @@ READY_ENVIRONMENT_STATUSES = {"ready", "not_applicable", "pass", "passed", "succ
 
 
 def route_tester_decision(decision: TesterResult) -> WorkflowRoute:
-    if decision.has_environment_dependency_issue:
+    if decision.has_environment_dependency_issue or decision.failure_type in RUNTIME_BLOCKER_FAILURE_TYPES:
         return WorkflowRoute(
             WorkflowRouteAction.TESTER_ENVIRONMENT_REPAIR,
             WorkflowErrorType.ENVIRONMENT_ISSUE,

@@ -6,15 +6,30 @@ from pathlib import Path
 import re
 
 from harness.artifacts.delivery_codes import DELIVERY_SUCCESS_RETURN_CODE, delivery_status_for_return_code
+from harness.artifacts.enums import (
+    NEXT_ACTION_CODE_TO_ACTION,
+    NEXT_ACTION_TO_CODE,
+    TESTER_STATUS_CODE_TO_STATUS,
+    VALID_NEXT_ACTION_CODES,
+    VALID_TESTER_STATUS_CODES,
+    allowed_codes,
+    numeric_code,
+)
 from harness.artifacts.metadata import load_artifact_metadata, metadata_int_field
-from harness.artifacts.output_templates import output_has_pending_template_marker
-from harness.artifacts.acceptance import validate_acceptance_oracles, validate_tester_oracle_results
+from harness.artifacts.output_templates import (
+    TEMPLATE_PENDING_LINE_PATTERN,
+    TEMPLATE_PENDING_VALUE,
+    TEMPLATE_STATUS_FIELD,
+    output_has_pending_template_marker,
+)
+from harness.artifacts.acceptance import validate_acceptance_oracles, validate_tester_oracle_result_shape
 from harness.artifacts.peer_review import (
     PEER_REVIEW_RESULT_ARTIFACT,
     parse_peer_review_result_content,
     validate_peer_review_result_payload,
 )
 from harness.artifacts.review_decision import REVIEW_RESULT_ARTIFACT, parse_review_result_content, validate_review_result_payload
+from harness.core.taxonomy import FAILURE_TYPES, RUNTIME_BLOCKER_FAILURE_TYPES
 
 RETURN_CODE_FIELD_PATTERN = re.compile(r"^\s*[\-\*\s]*\**return_code\**\s*:\s*\**(-?\d+)\**\s*$")
 ARTIFACT_RESULT_CODE_FIELD_PATTERN = re.compile(r"^\s*[\-\*\s]*\**artifact_result_code\**\s*:\s*\**(-?\d+)\**\s*$")
@@ -32,6 +47,14 @@ PLAN_REVIEW_REQUIRED_ARTIFACTS = {
     "validation_contract.json",
 }
 CONTRACT_MODES = {"explicit", "benchmark_spec", "repo_discovery", "agent_discovery", "none", "unknown"}
+CONTRACT_MODE_ALIASES = {
+    "repo_setup": "repo_discovery",
+    "install": "repo_discovery",
+    "setup": "repo_discovery",
+    "dependency_install": "repo_discovery",
+    "docker_benchmark": "benchmark_spec",
+    "docker_swebench": "benchmark_spec",
+}
 CONTRACT_CONFIDENCE_VALUES = {"high", "medium", "low", "unknown"}
 CONTRACT_STATUSES = {"draft", "final"}
 ORACLE_KIND_ALIASES = {
@@ -46,18 +69,7 @@ ORACLE_KIND_ALIASES = {
     "runtime_check": "runtime",
     "code_inspection": "static",
 }
-TESTER_FAILURE_TYPES = {
-    "none",
-    "source_bug",
-    "environment_bug",
-    "env_setup",
-    "test_command_bug",
-    "test_command",
-    "contract_bug",
-    "process_bug",
-    "test",
-    "inconclusive",
-}
+TESTER_FAILURE_TYPES = FAILURE_TYPES
 
 
 @dataclass(frozen=True)
@@ -79,6 +91,15 @@ class ValidationResult:
     @property
     def errors(self) -> list[str]:
         return [issue.message for issue in self.issues if issue.severity == "error"]
+
+
+@dataclass(frozen=True)
+class ValidationRepair:
+    artifact: str
+    field_path: str
+    before: object
+    after: object
+    rule_name: str
 
 
 class ArtifactValidator:
@@ -222,10 +243,10 @@ class ArtifactValidator:
             for field in ("risks", "required_executor_notes", "reviewer_integrated_findings"):
                 if field in payload and not isinstance(payload.get(field), list):
                     messages.append(f"selected_plan.json.{field} must be a list when present")
-            messages.extend(validate_acceptance_oracles(payload))
+            messages.extend(validate_acceptance_oracles(payload, require_numeric_codes=True))
         elif artifact_name == "tester_result.json":
             messages.extend(self.validate_tester_result_json(payload))
-            messages.extend(validate_tester_oracle_results(payload))
+            messages.extend(validate_tester_oracle_result_shape(payload, require_numeric_codes=True))
         elif artifact_name in CONTRACT_ARTIFACTS:
             messages.extend(self.validate_contract_json(payload, artifact_name))
         elif artifact_name == "merged_patch_metadata.json":
@@ -346,6 +367,26 @@ class ArtifactValidator:
                 messages.append(f"{artifact_name}.pass_criteria must be an object")
             elif not self._non_empty_string(pass_criteria.get("type")):
                 messages.append(f"{artifact_name}.pass_criteria.type must be a non-empty string")
+            final_check = payload.get("final_check")
+            if final_check is not None:
+                if not isinstance(final_check, dict):
+                    messages.append(f"{artifact_name}.final_check must be an object when present")
+                else:
+                    messages.extend(self.validate_command_section(final_check, f"{artifact_name}.final_check"))
+                    if "authority" in final_check and not isinstance(final_check.get("authority"), str):
+                        messages.append(f"{artifact_name}.final_check.authority must be a string when present")
+                    if "required_result" in final_check and not isinstance(final_check.get("required_result"), dict):
+                        messages.append(f"{artifact_name}.final_check.required_result must be an object when present")
+                    if "result_json_path" in final_check and not isinstance(final_check.get("result_json_path"), str):
+                        messages.append(f"{artifact_name}.final_check.result_json_path must be a string when present")
+                    if "pass_json_path" in final_check and not isinstance(final_check.get("pass_json_path"), str):
+                        messages.append(f"{artifact_name}.final_check.pass_json_path must be a string when present")
+                    failure_type = self._normalized_string(final_check.get("failure_type"))
+                    if failure_type and failure_type not in TESTER_FAILURE_TYPES:
+                        messages.append(
+                            f"{artifact_name}.final_check.failure_type must be one of: "
+                            + ", ".join(sorted(TESTER_FAILURE_TYPES))
+                        )
             if not isinstance(payload.get("acceptance_oracle_ids", []), list):
                 messages.append(f"{artifact_name}.acceptance_oracle_ids must be a list")
 
@@ -370,11 +411,60 @@ class ArtifactValidator:
 
     def validate_tester_result_json(self, payload: dict[str, object]) -> list[str]:
         messages: list[str] = []
+        status_code = numeric_code(payload, "tester_status_code")
+        if status_code is None:
+            messages.append(
+                "tester_result.json.tester_status_code must be an integer code: "
+                + allowed_codes(VALID_TESTER_STATUS_CODES)
+            )
+        elif status_code not in VALID_TESTER_STATUS_CODES:
+            messages.append(
+                "tester_result.json.tester_status_code must be one of: "
+                + allowed_codes(VALID_TESTER_STATUS_CODES)
+            )
+        next_action_code = numeric_code(payload, "next_action_code")
+        if next_action_code is None:
+            messages.append(
+                "tester_result.json.next_action_code must be an integer code: "
+                + allowed_codes(VALID_NEXT_ACTION_CODES)
+            )
+        elif next_action_code not in VALID_NEXT_ACTION_CODES:
+            messages.append(
+                "tester_result.json.next_action_code must be one of: "
+                + allowed_codes(VALID_NEXT_ACTION_CODES)
+            )
+        if status_code in TESTER_STATUS_CODE_TO_STATUS and next_action_code in NEXT_ACTION_CODE_TO_ACTION:
+            status = TESTER_STATUS_CODE_TO_STATUS[status_code]
+            expected_next_action_code = NEXT_ACTION_TO_CODE[
+                {"tests_passed": "continue", "source_bug": "fix_code", "environment_blocked": "block_task"}[status]
+            ]
+            if next_action_code != expected_next_action_code:
+                messages.append(
+                    f"tester_result.json.next_action_code must be {expected_next_action_code} "
+                    f"when tester_status_code is {status_code}"
+                )
+        status = self._normalized_string(payload.get("status"))
+        if status and status_code in TESTER_STATUS_CODE_TO_STATUS and status != TESTER_STATUS_CODE_TO_STATUS[status_code]:
+            messages.append("tester_result.json.status must match tester_status_code when present")
+        next_action = self._normalized_string(payload.get("next_action"))
+        if (
+            next_action
+            and next_action_code in NEXT_ACTION_CODE_TO_ACTION
+            and next_action != NEXT_ACTION_CODE_TO_ACTION[next_action_code]
+        ):
+            messages.append("tester_result.json.next_action must match next_action_code when present")
         failure_type = self._normalized_string(payload.get("failure_type"))
         if failure_type and failure_type not in TESTER_FAILURE_TYPES:
             messages.append(
                 "tester_result.json.failure_type must be one of: "
                 + ", ".join(sorted(TESTER_FAILURE_TYPES))
+            )
+        status = self._normalized_string(payload.get("status"))
+        environment_dependency_issue = payload.get("environment_dependency_issue")
+        if failure_type in RUNTIME_BLOCKER_FAILURE_TYPES and environment_dependency_issue is not True:
+            messages.append(
+                "tester_result.json.environment_dependency_issue must be true when failure_type is a runtime, "
+                "environment, command, infra, or contract blocker"
             )
         if "environment_ready" in payload and not isinstance(payload.get("environment_ready"), bool):
             messages.append("tester_result.json.environment_ready must be a boolean when present")
@@ -397,7 +487,21 @@ class ArtifactValidator:
         return payload if isinstance(payload, dict) else None
 
     def repair_trivial_contract_issues(self, output_dir: Path, validation_result: ValidationResult) -> list[str]:
-        repaired = self.repair_trivial_json_enum_aliases(output_dir, validation_result)
+        repairs = self.repair_trivial_contract_issues_detailed(output_dir, validation_result)
+        repaired: list[str] = []
+        for repair in repairs:
+            if repair.artifact not in repaired:
+                repaired.append(repair.artifact)
+        return repaired
+
+    def repair_trivial_contract_issues_detailed(
+        self,
+        output_dir: Path,
+        validation_result: ValidationResult,
+    ) -> list[ValidationRepair]:
+        repaired: list[ValidationRepair] = []
+        repaired.extend(self.repair_template_markers(output_dir, validation_result))
+        repaired.extend(self.repair_trivial_json_enum_aliases_detailed(output_dir, validation_result))
         for issue in validation_result.issues:
             if issue.severity == "error" and issue.code != "missing_artifact_result_code":
                 continue
@@ -410,24 +514,102 @@ class ArtifactValidator:
             if self.parse_markdown_artifact_result_code(path) is not None:
                 continue
             path.write_text(f"artifact_result_code: {DELIVERY_SUCCESS_RETURN_CODE}\n\n{content}", encoding="utf-8")
-            repaired.append(issue.artifact)
+            repaired.append(
+                ValidationRepair(
+                    issue.artifact,
+                    "artifact_result_code",
+                    None,
+                    DELIVERY_SUCCESS_RETURN_CODE,
+                    "missing_markdown_result_code",
+                )
+            )
         return repaired
+
+    def repair_template_markers(self, output_dir: Path, validation_result: ValidationResult) -> list[ValidationRepair]:
+        repairs: list[ValidationRepair] = []
+        candidate_artifacts = {
+            issue.artifact
+            for issue in validation_result.issues
+            if issue.code == "template_not_completed"
+        }
+        for artifact in sorted(candidate_artifacts):
+            path = output_dir / artifact
+            if not path.exists() or not path.is_file():
+                continue
+            if path.suffix == ".json" or path.name == "delivery.md":
+                payload = self.load_json_object(path)
+                if payload is None or payload.get(TEMPLATE_STATUS_FIELD) != TEMPLATE_PENDING_VALUE:
+                    continue
+                del payload[TEMPLATE_STATUS_FIELD]
+                self.add_canonicalization_note(
+                    payload,
+                    f"{TEMPLATE_STATUS_FIELD} {TEMPLATE_PENDING_VALUE!r} -> removed",
+                )
+                self.write_json_object(path, payload)
+                repairs.append(
+                    ValidationRepair(
+                        artifact,
+                        TEMPLATE_STATUS_FIELD,
+                        TEMPLATE_PENDING_VALUE,
+                        None,
+                        "template_marker_removed",
+                    )
+                )
+                continue
+            content = path.read_text(encoding="utf-8", errors="replace")
+            repaired_content, count = TEMPLATE_PENDING_LINE_PATTERN.subn("", content)
+            if count <= 0:
+                continue
+            path.write_text(repaired_content.lstrip("\n"), encoding="utf-8")
+            repairs.append(
+                ValidationRepair(
+                    artifact,
+                    TEMPLATE_STATUS_FIELD,
+                    TEMPLATE_PENDING_VALUE,
+                    None,
+                    "template_marker_removed",
+                )
+            )
+        return repairs
 
     def repair_trivial_json_enum_aliases(self, output_dir: Path, validation_result: ValidationResult) -> list[str]:
-        repaired: list[str] = []
-        if any(issue.artifact == "selected_plan.json" and ".kind must be one of" in issue.message for issue in validation_result.issues):
-            if self.repair_selected_plan_oracle_kind_aliases(output_dir / "selected_plan.json"):
-                repaired.append("selected_plan.json")
-        return repaired
+        artifact_names: list[str] = []
+        for repair in self.repair_trivial_json_enum_aliases_detailed(output_dir, validation_result):
+            if repair.artifact not in artifact_names:
+                artifact_names.append(repair.artifact)
+        return artifact_names
+
+    def repair_trivial_json_enum_aliases_detailed(
+        self,
+        output_dir: Path,
+        validation_result: ValidationResult,
+    ) -> list[ValidationRepair]:
+        repairs: list[ValidationRepair] = []
+        selected_plan_has_kind_issue = any(
+            issue.artifact == "selected_plan.json" and ".kind must be one of" in issue.message
+            for issue in validation_result.issues
+        )
+        if selected_plan_has_kind_issue:
+            repairs.extend(self.repair_selected_plan_oracle_kind_aliases_detailed(output_dir / "selected_plan.json"))
+        for artifact in sorted(CONTRACT_ARTIFACTS):
+            path = output_dir / artifact
+            if not path.exists() or not path.is_file():
+                continue
+            repairs.extend(self.repair_contract_mode_aliases(path, artifact))
+        return repairs
 
     def repair_selected_plan_oracle_kind_aliases(self, path: Path) -> bool:
+        return bool(self.repair_selected_plan_oracle_kind_aliases_detailed(path))
+
+    def repair_selected_plan_oracle_kind_aliases_detailed(self, path: Path) -> list[ValidationRepair]:
+        artifact = path.name
         payload = self.load_json_object(path)
         if payload is None or output_has_pending_template_marker(path):
-            return False
+            return []
         oracles = payload.get("acceptance_oracles")
         if not isinstance(oracles, list):
-            return False
-        notes: list[str] = []
+            return []
+        repairs: list[ValidationRepair] = []
         for index, oracle in enumerate(oracles):
             if not isinstance(oracle, dict):
                 continue
@@ -435,13 +617,60 @@ class ArtifactValidator:
             canonical = ORACLE_KIND_ALIASES.get(kind)
             if canonical and canonical != kind:
                 oracle["kind"] = canonical
-                notes.append(f"acceptance_oracles[{index}].kind {kind!r} -> {canonical!r}")
-        if not notes:
-            return False
-        for note in notes:
-            self.add_canonicalization_note(payload, note)
+                field_path = f"acceptance_oracles[{index}].kind"
+                repairs.append(ValidationRepair(artifact, field_path, kind, canonical, "oracle_kind_alias"))
+                self.add_canonicalization_note(payload, f"{field_path} {kind!r} -> {canonical!r}")
+        if not repairs:
+            return []
         self.write_json_object(path, payload)
-        return True
+        return repairs
+
+    def repair_contract_mode_aliases(self, path: Path, artifact: str) -> list[ValidationRepair]:
+        payload = self.load_json_object(path)
+        if payload is None:
+            return []
+        repairs: list[ValidationRepair] = []
+        self._repair_contract_mode_aliases_in_mapping(payload, "", artifact, repairs)
+        if not repairs:
+            return []
+        for repair in repairs:
+            self.add_canonicalization_note(
+                payload,
+                f"{repair.field_path} {repair.before!r} -> {repair.after!r}",
+            )
+        self.write_json_object(path, payload)
+        return repairs
+
+    def _repair_contract_mode_aliases_in_mapping(
+        self,
+        value: object,
+        prefix: str,
+        artifact: str,
+        repairs: list[ValidationRepair],
+    ) -> None:
+        if isinstance(value, dict):
+            if "mode" in value:
+                mode = self._normalized_string(value.get("mode"))
+                canonical = CONTRACT_MODE_ALIASES.get(mode)
+                if canonical:
+                    value["mode"] = canonical
+                    field_path = f"{prefix}.mode" if prefix else "mode"
+                    repairs.append(
+                        ValidationRepair(
+                            artifact,
+                            field_path,
+                            mode,
+                            canonical,
+                            "contract_mode_alias",
+                        )
+                    )
+            for key, child in value.items():
+                child_prefix = f"{prefix}.{key}" if prefix else str(key)
+                self._repair_contract_mode_aliases_in_mapping(child, child_prefix, artifact, repairs)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                child_prefix = f"{prefix}[{index}]" if prefix else f"[{index}]"
+                self._repair_contract_mode_aliases_in_mapping(child, child_prefix, artifact, repairs)
 
     def add_canonicalization_note(self, payload: dict[str, object], note: str) -> None:
         notes = payload.get("harness_canonicalizations")

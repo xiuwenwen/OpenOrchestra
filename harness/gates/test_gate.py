@@ -219,12 +219,12 @@ class TestGateService:
 
     def resolve_test_runtime_with_diagnostics(self, task_id: str, repo_dir: Path | None) -> tuple[str, dict[str, Any]]:
         testing = self.config.get("testing", {})
-        runtime = str(testing.get("runtime") or "auto").strip().lower() if isinstance(testing, dict) else "auto"
+        runtime = str(testing.get("runtime") or "docker").strip().lower() if isinstance(testing, dict) else "docker"
         if runtime in {"native", "docker", "swebench"}:
             if runtime == "docker":
                 docker = testing.get("docker", {}) if isinstance(testing, dict) else {}
                 if isinstance(docker, dict) and docker.get("enabled") is False:
-                    return "native", self.runtime_diagnostics(runtime, "native", "docker_disabled")
+                    return "docker", self.runtime_diagnostics(runtime, "docker", "docker_disabled")
             return runtime, self.runtime_diagnostics(runtime, runtime, "explicit_runtime")
         if runtime == "auto":
             docker = testing.get("docker", {}) if isinstance(testing, dict) else {}

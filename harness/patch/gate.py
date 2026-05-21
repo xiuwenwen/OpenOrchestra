@@ -10,9 +10,11 @@ from pathlib import Path
 from typing import Callable
 
 from harness.adapters.command_runner import CommandRunner
+from harness.runtime.spec import RuntimeSpec
 from harness.workspace.manager import WorkspaceManager
 
 
+MATERIALIZED_SUCCESS_MARKER = ".harness_materialized_success.json"
 FORBIDDEN_PATCH_TOP_LEVEL_NAMES = {"artifacts", "deliver", "deliveries", "workspaces"}
 FORBIDDEN_PATCH_PATH_PARTS = {
     ".git",
@@ -36,11 +38,12 @@ FORBIDDEN_PATCH_FILE_NAMES = {
     "id_ed25519",
 }
 FORBIDDEN_PATCH_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
+ALLOWED_PATCH_FILE_MODES = {"100644", "100755"}
+PATCH_FILE_MODE_PATTERN = re.compile(r"^(?:new file mode|deleted file mode|old mode|new mode) ([0-7]{6})$")
 SENSITIVE_NAME_PATTERN = re.compile(
     r"(^|[._-])(api[_-]?key|auth|credential|credentials|secret|token)([._-]|$)",
     re.IGNORECASE,
 )
-
 
 CopySourceFn = Callable[[Path, Path], None]
 _COMMAND_RUNNER = CommandRunner()
@@ -101,6 +104,17 @@ class PatchGateResult:
     apply_check: CommandResult
     materialize: CommandResult
     diff_check: CommandResult
+    export_base_repo: Path | None = None
+    cumulative_patch_path: Path | None = None
+    cumulative_check: CommandResult = field(
+        default_factory=lambda: CommandResult(
+            "skipped",
+            "git diff --cached --binary --no-ext-diff",
+            None,
+            "",
+            "Cumulative patch export was not requested.",
+        )
+    )
 
     @property
     def status(self) -> str:
@@ -111,6 +125,7 @@ class PatchGateResult:
             and self.apply_check.status == "pass"
             and self.materialize.status == "success"
             and self.diff_check.status == "pass"
+            and self.cumulative_check.status in {"pass", "skipped"}
         ):
             return "pass"
         return "fail"
@@ -125,13 +140,15 @@ def run_patch_gate(
     patch_path: Path,
     source_repo: Path | None,
     materialized_repo_dir: Path,
+    export_base_repo: Path | None = None,
     policy: PatchGatePolicy | None = None,
     copy_source: CopySourceFn | None = None,
+    runtime_spec: RuntimeSpec | None = None,
 ) -> PatchGateResult:
     policy = policy or PatchGatePolicy()
     patch_text = patch_path.read_text(encoding="utf-8", errors="replace") if patch_path.exists() else ""
     stats = analyze_unified_diff(patch_text, policy)
-    apply_check = _run_apply_check(patch_path, source_repo, copy_source)
+    apply_check = _run_apply_check(patch_path, source_repo, copy_source, runtime_spec)
     materialized_repo: Path | None = None
     materialize = CommandResult(
         status="skipped",
@@ -147,6 +164,14 @@ def run_patch_gate(
         stdout="",
         stderr="Materialization was not run.",
     )
+    cumulative_patch_path: Path | None = None
+    cumulative_check = CommandResult(
+        status="skipped",
+        command="git diff --cached --binary --no-ext-diff",
+        exit_code=None,
+        stdout="",
+        stderr="Cumulative patch export was not requested.",
+    )
     if stats.legal_unified_diff and stats.scope_ok and stats.size_ok and apply_check.status == "pass":
         materialized_repo, materialize, diff_check = _materialize_and_diff_check(
             patch_path,
@@ -154,7 +179,17 @@ def run_patch_gate(
             materialized_repo_dir,
             stats.changed_files,
             copy_source,
+            runtime_spec,
         )
+        if materialized_repo and export_base_repo:
+            cumulative_patch_path = materialized_repo_dir.parent / "cumulative_patch.diff"
+            cumulative_check = _generate_and_check_cumulative_patch(
+                export_base_repo=export_base_repo,
+                materialized_repo=materialized_repo,
+                output_path=cumulative_patch_path,
+                copy_source=copy_source,
+                runtime_spec=runtime_spec,
+            )
     return PatchGateResult(
         patch_path=patch_path,
         source_repo=source_repo,
@@ -163,6 +198,9 @@ def run_patch_gate(
         apply_check=apply_check,
         materialize=materialize,
         diff_check=diff_check,
+        export_base_repo=export_base_repo,
+        cumulative_patch_path=cumulative_patch_path,
+        cumulative_check=cumulative_check,
     )
 
 
@@ -219,12 +257,19 @@ def analyze_unified_diff(patch_text: str, policy: PatchGatePolicy | None = None)
             if current_new_path == Path("/dev/null") and current_old_path and current_old_path not in deleted_files:
                 deleted_files.append(current_old_path)
             continue
-        if line.startswith("deleted file mode ") and current_old_path and current_old_path not in deleted_files:
+        if line.startswith("deleted file mode "):
             current_has_metadata_only_change = True
-            deleted_files.append(current_old_path)
+            mode_error = _unsupported_patch_file_mode_error(line)
+            if mode_error:
+                legal_errors.append(mode_error)
+            if current_old_path and current_old_path not in deleted_files:
+                deleted_files.append(current_old_path)
             continue
         if line.startswith(("new file mode ", "old mode ", "new mode ", "rename from ", "rename to ")):
             current_has_metadata_only_change = True
+            mode_error = _unsupported_patch_file_mode_error(line)
+            if mode_error:
+                legal_errors.append(mode_error)
             continue
         if line.startswith("@@ "):
             current_has_hunk = True
@@ -268,6 +313,15 @@ def analyze_unified_diff(patch_text: str, policy: PatchGatePolicy | None = None)
     )
 
 
+def _unsupported_patch_file_mode_error(line: str) -> str | None:
+    if not (match := PATCH_FILE_MODE_PATTERN.match(line)):
+        return None
+    mode = match.group(1)
+    if mode in ALLOWED_PATCH_FILE_MODES:
+        return None
+    return f"unsupported patch file mode {mode}: only regular file modes 100644 and 100755 are allowed"
+
+
 def patch_validation_markdown(result: PatchGateResult) -> str:
     return "\n".join(
         [
@@ -282,6 +336,9 @@ def patch_validation_markdown(result: PatchGateResult) -> str:
             f"patch_apply_status: {result.apply_check.status}",
             f"materialize_status: {result.materialize.status}",
             f"diff_check_status: {result.diff_check.status}",
+            f"cumulative_patch_status: {result.cumulative_check.status}",
+            f"export_base_repo: {_source_repo_label(result.export_base_repo)}",
+            f"cumulative_patch: {result.cumulative_patch_path or 'none'}",
             f"changed_line_count: {result.stats.changed_line_count}",
             f"deleted_file_count: {len(result.stats.deleted_files)}",
             f"command: {result.apply_check.command}",
@@ -315,6 +372,9 @@ def materialized_repo_markdown(result: PatchGateResult, task_id: str, round_id: 
             f"patch: {result.patch_path}",
             f"source_repo: {_source_repo_label(result.source_repo)}",
             f"diff_check_status: {result.diff_check.status}",
+            f"export_base_repo: {_source_repo_label(result.export_base_repo)}",
+            f"cumulative_patch_status: {result.cumulative_check.status}",
+            f"cumulative_patch: {result.cumulative_patch_path or 'none'}",
             f"command: {result.materialize.command}",
             f"exit_code: {result.materialize.exit_code if result.materialize.exit_code is not None else 'n/a'}",
             f"diff_check_command: {result.diff_check.command}",
@@ -344,6 +404,12 @@ def materialized_repo_markdown(result: PatchGateResult, task_id: str, round_id: 
             result.diff_check.stderr.strip(),
             "```",
             "",
+            "## cumulative patch stderr",
+            "",
+            "```text",
+            result.cumulative_check.stderr.strip(),
+            "```",
+            "",
         ]
     )
 
@@ -353,6 +419,7 @@ def objective_gate_markdown(result: PatchGateResult, task_id: str, round_id: int
         "patch_apply_check": result.apply_check.status == "pass",
         "materialize_status": result.materialize.status,
         "diff_check": result.diff_check.status == "pass",
+        "cumulative_patch_check": result.cumulative_check.status in {"pass", "skipped"},
         "legal_unified_diff": result.stats.legal_unified_diff,
         "scope_ok": result.stats.scope_ok,
         "size_ok": result.stats.size_ok,
@@ -376,6 +443,9 @@ def objective_gate_markdown(result: PatchGateResult, task_id: str, round_id: int
             f"patch_apply_status: {result.apply_check.status}",
             f"materialize_status: {result.materialize.status}",
             f"diff_check_status: {result.diff_check.status}",
+            f"cumulative_patch_status: {result.cumulative_check.status}",
+            f"export_base_repo: {_source_repo_label(result.export_base_repo)}",
+            f"cumulative_patch: {result.cumulative_patch_path or 'none'}",
             f"changed_line_count: {result.stats.changed_line_count}",
             f"deleted_file_count: {len(result.stats.deleted_files)}",
             "",
@@ -416,14 +486,17 @@ def patch_gate_result_payload(result: PatchGateResult, task_id: str, round_id: i
         "next_action": "continue" if result.status == "pass" else "regenerate_patch",
         "executor_message": patch_gate_executor_message(result, failure_type),
         "apply_base": _source_repo_label(result.source_repo),
+        "export_base": _source_repo_label(result.export_base_repo),
         "patch_path": str(result.patch_path),
         "materialized_repo": str(result.materialized_repo) if result.materialized_repo else None,
+        "cumulative_patch_path": str(result.cumulative_patch_path) if result.cumulative_patch_path else None,
         "legal_unified_diff": result.stats.legal_unified_diff,
         "scope_status": "pass" if result.stats.scope_ok else "fail",
         "size_status": "pass" if result.stats.size_ok else "fail",
         "patch_apply_status": result.apply_check.status,
         "materialize_status": result.materialize.status,
         "diff_check_status": result.diff_check.status,
+        "cumulative_patch_status": result.cumulative_check.status,
         "changed_files": [str(path) for path in result.stats.changed_files],
         "deleted_files": [str(path) for path in result.stats.deleted_files],
         "changed_line_count": result.stats.changed_line_count,
@@ -433,6 +506,7 @@ def patch_gate_result_payload(result: PatchGateResult, task_id: str, round_id: i
             "apply_check": command_result_payload(result.apply_check),
             "materialize": command_result_payload(result.materialize),
             "diff_check": command_result_payload(result.diff_check),
+            "cumulative_check": command_result_payload(result.cumulative_check),
         },
     }
 
@@ -464,6 +538,8 @@ def patch_gate_failure_type(result: PatchGateResult) -> str:
         return "patch_materialize"
     if result.diff_check.status == "fail":
         return "diff_check"
+    if result.cumulative_check.status == "fail":
+        return "cumulative_patch"
     return "patch_gate"
 
 
@@ -481,6 +557,11 @@ def patch_gate_executor_message(result: PatchGateResult, failure_type: str) -> s
         return "Patch apply-check passed but materialization failed; inspect commands.materialize.stderr and regenerate the patch."
     if failure_type == "diff_check":
         return "Patch materialized but failed whitespace/conflict checks; inspect commands.diff_check output."
+    if failure_type == "cumulative_patch":
+        return (
+            "Patch materialized on the current repository state but could not be exported as a cumulative patch "
+            "against the original source baseline; inspect commands.cumulative_check.stderr."
+        )
     return "Patch gate failed; inspect structured command outputs before retrying."
 
 
@@ -488,17 +569,27 @@ def _json_dumps(payload: dict[str, object]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
 
-def _run_apply_check(patch_path: Path, source_repo: Path | None, copy_source: CopySourceFn | None) -> CommandResult:
+def _run_apply_check(
+    patch_path: Path,
+    source_repo: Path | None,
+    copy_source: CopySourceFn | None,
+    runtime_spec: RuntimeSpec | None,
+) -> CommandResult:
     command = "git apply --check --whitespace=nowarn <merged_patch.diff>"
-    if not shutil.which("git"):
+    if not _runtime_has_command("git", runtime_spec):
         return CommandResult("skipped", command, None, "", "git executable was not found on PATH.")
     with tempfile.TemporaryDirectory(prefix="harness-patch-check-") as tmp:
         check_dir = Path(tmp) / "repo"
         _prepare_source_tree(source_repo, check_dir, copy_source)
-        completed = _COMMAND_RUNNER.run_capture(
-            ["git", "apply", "--check", "--whitespace=nowarn", str(patch_path)],
-            cwd=check_dir,
-        )
+        runtime_patch = _copy_patch_for_runtime(patch_path, check_dir, runtime_spec)
+        try:
+            completed = _COMMAND_RUNNER.run_capture(
+                ["git", "apply", "--check", "--whitespace=nowarn", _patch_command_arg(patch_path, runtime_patch)],
+                cwd=check_dir,
+                runtime_spec=runtime_spec,
+            )
+        finally:
+            _remove_runtime_patch(runtime_patch)
         return CommandResult(
             "pass" if completed.returncode == 0 else "fail",
             command,
@@ -514,10 +605,11 @@ def _materialize_and_diff_check(
     repo_dir: Path,
     changed_files: list[Path],
     copy_source: CopySourceFn | None,
+    runtime_spec: RuntimeSpec | None,
 ) -> tuple[Path | None, CommandResult, CommandResult]:
     materialize_command = "git apply --whitespace=nowarn <merged_patch.diff>"
     diff_check_command = "git diff --check"
-    if not shutil.which("git"):
+    if not _runtime_has_command("git", runtime_spec):
         return (
             None,
             CommandResult("skipped", materialize_command, None, "", "git executable was not found on PATH."),
@@ -528,11 +620,16 @@ def _materialize_and_diff_check(
     if repo_dir.exists():
         shutil.rmtree(repo_dir)
     _prepare_source_tree(source_repo, tmp_repo_dir, copy_source)
-    _initialize_diff_check_repo(tmp_repo_dir)
-    completed = _COMMAND_RUNNER.run_capture(
-        ["git", "apply", "--whitespace=nowarn", str(patch_path)],
-        cwd=tmp_repo_dir,
-    )
+    _initialize_diff_check_repo(tmp_repo_dir, runtime_spec)
+    runtime_patch = _copy_patch_for_runtime(patch_path, tmp_repo_dir, runtime_spec)
+    try:
+        completed = _COMMAND_RUNNER.run_capture(
+            ["git", "apply", "--whitespace=nowarn", _patch_command_arg(patch_path, runtime_patch)],
+            cwd=tmp_repo_dir,
+            runtime_spec=runtime_spec,
+        )
+    finally:
+        _remove_runtime_patch(runtime_patch)
     materialize = CommandResult(
         "success" if completed.returncode == 0 else "failed",
         materialize_command,
@@ -543,10 +640,11 @@ def _materialize_and_diff_check(
     if completed.returncode != 0:
         shutil.rmtree(tmp_repo_dir, ignore_errors=True)
         return None, materialize, CommandResult("skipped", diff_check_command, None, "", "Materialization failed.")
-    _stage_new_files_for_diff_check(tmp_repo_dir, changed_files)
+    _stage_new_files_for_diff_check(tmp_repo_dir, changed_files, runtime_spec)
     diff_check_completed = _COMMAND_RUNNER.run_capture(
         ["git", "diff", "--check"],
         cwd=tmp_repo_dir,
+        runtime_spec=runtime_spec,
     )
     diff_check = CommandResult(
         "pass" if diff_check_completed.returncode == 0 else "fail",
@@ -567,6 +665,96 @@ def _materialize_and_diff_check(
         return None, failed_materialize, diff_check
     tmp_repo_dir.rename(repo_dir)
     return repo_dir, materialize, diff_check
+
+
+def _generate_and_check_cumulative_patch(
+    *,
+    export_base_repo: Path,
+    materialized_repo: Path,
+    output_path: Path,
+    copy_source: CopySourceFn | None,
+    runtime_spec: RuntimeSpec | None,
+) -> CommandResult:
+    command = "git diff --cached --binary --no-ext-diff"
+    if not _runtime_has_command("git", None):
+        return CommandResult("fail", command, None, "", "git executable was not found on host PATH.")
+    with tempfile.TemporaryDirectory(prefix="harness-cumulative-patch-") as tmp:
+        export_repo = Path(tmp) / "repo"
+        _prepare_source_tree(export_base_repo, export_repo, copy_source)
+        _initialize_cumulative_export_repo(export_repo)
+        _clear_tree_except_git(export_repo)
+        _copy_materialized_tree_for_export(materialized_repo, export_repo)
+        add_completed = _COMMAND_RUNNER.run_capture(["git", "add", "-A"], cwd=export_repo)
+        if add_completed.returncode != 0:
+            return CommandResult("fail", command, add_completed.returncode, add_completed.stdout, add_completed.stderr)
+        diff_completed = _COMMAND_RUNNER.run_capture(
+            [
+                "git",
+                "diff",
+                "--cached",
+                "--binary",
+                "--no-ext-diff",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+            ],
+            cwd=export_repo,
+        )
+        if diff_completed.returncode != 0:
+            return CommandResult("fail", command, diff_completed.returncode, diff_completed.stdout, diff_completed.stderr)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(diff_completed.stdout, encoding="utf-8")
+    apply_check = _run_apply_check(output_path, export_base_repo, copy_source, runtime_spec)
+    if apply_check.status != "pass":
+        return CommandResult(
+            "fail",
+            apply_check.command,
+            apply_check.exit_code,
+            apply_check.stdout,
+            apply_check.stderr,
+        )
+    return CommandResult(
+        "pass",
+        f"{command}; {apply_check.command}",
+        apply_check.exit_code,
+        apply_check.stdout,
+        apply_check.stderr,
+    )
+
+
+def _clear_tree_except_git(repo_dir: Path) -> None:
+    for child in repo_dir.iterdir():
+        if child.name == ".git":
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def _initialize_cumulative_export_repo(repo_dir: Path) -> None:
+    existing_git = repo_dir / ".git"
+    if existing_git.exists():
+        shutil.rmtree(existing_git)
+    WorkspaceManager.initialize_git_baseline(repo_dir)
+
+
+def _copy_materialized_tree_for_export(materialized_repo: Path, destination: Path) -> None:
+    shutil.copytree(
+        materialized_repo,
+        destination,
+        dirs_exist_ok=True,
+        ignore=_ignore_materialized_export_items,
+        copy_function=WorkspaceManager.copy_file_fast,
+    )
+
+
+def _ignore_materialized_export_items(directory: str, names: list[str]) -> set[str]:
+    return {
+        name
+        for name in names
+        if name in {".git", MATERIALIZED_SUCCESS_MARKER}
+        or WorkspaceManager.is_generated_runtime_artifact((Path(directory) / name).resolve())
+    }
 
 
 def _materialization_skip_reason(stats: PatchStats, apply_check: CommandResult) -> str:
@@ -593,21 +781,53 @@ def _prepare_source_tree(source_repo: Path | None, destination: Path, copy_sourc
         destination.mkdir(parents=True, exist_ok=True)
 
 
-def _initialize_diff_check_repo(repo_dir: Path) -> None:
-    if not shutil.which("git"):
+def _initialize_diff_check_repo(repo_dir: Path, runtime_spec: RuntimeSpec | None = None) -> None:
+    if not _runtime_has_command("git", runtime_spec):
         return
-    _COMMAND_RUNNER.run_capture(["git", "init", "-q"], cwd=repo_dir)
-    _COMMAND_RUNNER.run_capture(["git", "add", "-A"], cwd=repo_dir)
+    _COMMAND_RUNNER.run_capture(["git", "init", "-q"], cwd=repo_dir, runtime_spec=runtime_spec)
+    _COMMAND_RUNNER.run_capture(["git", "add", "-A"], cwd=repo_dir, runtime_spec=runtime_spec)
 
 
-def _stage_new_files_for_diff_check(repo_dir: Path, changed_files: list[Path]) -> None:
+def _stage_new_files_for_diff_check(
+    repo_dir: Path,
+    changed_files: list[Path],
+    runtime_spec: RuntimeSpec | None = None,
+) -> None:
     safe_paths = [str(path) for path in changed_files if _is_safe_relative_path(path)]
     if not safe_paths:
         return
     _COMMAND_RUNNER.run_capture(
         ["git", "add", "-N", "--", *safe_paths],
         cwd=repo_dir,
+        runtime_spec=runtime_spec,
     )
+
+
+def _runtime_has_command(command: str, runtime_spec: RuntimeSpec | None) -> bool:
+    # Docker images own their PATH; command availability is verified by the command result there.
+    return bool(runtime_spec and runtime_spec.is_docker) or bool(shutil.which(command))
+
+
+def _copy_patch_for_runtime(patch_path: Path, repo_dir: Path, runtime_spec: RuntimeSpec | None) -> Path | None:
+    if not runtime_spec or not runtime_spec.is_docker:
+        return None
+    runtime_patch = repo_dir / ".openorchestra_merged_patch.diff"
+    if patch_path.exists():
+        shutil.copy2(patch_path, runtime_patch)
+    else:
+        runtime_patch.write_text("", encoding="utf-8")
+    return runtime_patch
+
+
+def _patch_command_arg(patch_path: Path, runtime_patch: Path | None) -> str:
+    if runtime_patch is None:
+        return str(patch_path)
+    return runtime_patch.name
+
+
+def _remove_runtime_patch(runtime_patch: Path | None) -> None:
+    if runtime_patch is not None:
+        runtime_patch.unlink(missing_ok=True)
 
 
 def _git_diff_paths(line: str) -> tuple[Path, Path] | None:

@@ -19,7 +19,7 @@ from harness.ui.api import (
     require_string_field,
     validate_runtime_config_payload,
 )
-from harness.ui.server import _html
+from harness.ui.server import QuietClientDisconnectHTTPServer, _html
 from harness.ui.state_view import HarnessStateView, UiEventStore
 from harness.ui.translation import DisplayTranslator
 
@@ -120,6 +120,19 @@ def test_ui_event_store_preserves_trace_fields() -> None:
     assert event["parent_span_id"] == "parent-1"
 
 
+def test_ui_server_suppresses_client_disconnect_tracebacks(capsys) -> None:
+    server = object.__new__(QuietClientDisconnectHTTPServer)
+
+    try:
+        raise ConnectionResetError("connection reset by peer")
+    except ConnectionResetError:
+        server.handle_error(None, ("127.0.0.1", 49325))
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == ""
+
+
 def test_ui_snapshot_preserves_workflow_loops(tmp_path: Path) -> None:
     config = _config(tmp_path)
     repo = StateRepository(StateDB(config["system"]["state_db"]))
@@ -168,6 +181,22 @@ def test_ui_snapshot_groups_followup_workflow_runs(tmp_path: Path) -> None:
     assert runs[1]["prompt"] == "add export"
     assert runs[1]["workflow_type"] == "feature_change"
     assert [phase["phase_type"] for phase in runs[1]["phases"]] == [FIXING]
+
+
+def test_ui_task_history_includes_task_start_time(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    repo = StateRepository(StateDB(config["system"]["state_db"]))
+    store = UiEventStore()
+    task_id = repo.create_task("show start time", workflow_type="new_project")
+    event_id = repo.record_event(event_type="task_started", task_id=task_id, status="RUNNING")
+    started_at = "2026-05-20T07:08:09+00:00"
+    with repo.db.connect() as conn:
+        conn.execute("UPDATE events SET created_at = ? WHERE event_id = ?", (started_at, event_id))
+
+    tasks = HarnessStateView(config, repo, store).tasks()
+
+    assert tasks[0]["task_id"] == task_id
+    assert tasks[0]["started_at"] == started_at
 
 
 def test_ui_snapshot_exposes_backend_health_events(tmp_path: Path) -> None:
@@ -437,6 +466,14 @@ def test_ui_html_auto_follows_running_latest_task() -> None:
 
     assert 'lt.status==="RUNNING"' in html
     assert "currentTask!==tl.latest_task_id" in html
+
+
+def test_ui_html_shows_task_start_time_in_history() -> None:
+    html = _html()
+
+    assert "formatTaskStart" in html
+    assert "tsk-start" in html
+    assert 'uiLanguage==="en"?"Start":"开始"' in html
 
 
 def test_display_translator_fallback_translates_prompt_prose_and_keeps_paths(monkeypatch, tmp_path: Path) -> None:

@@ -59,8 +59,37 @@ def _project_context(tmp_path: Path) -> dict:
     }
 
 
+def _resolved_runtime(tmp_path: Path) -> dict:
+    path = tmp_path / "resolved_runtime.json"
+    path.write_text('{"schema_version":"resolved_runtime.v1"}\n', encoding="utf-8")
+    return {
+        "artifact_id": "resolved-runtime",
+        "phase_id": None,
+        "role": "orchestrator",
+        "agent_id": "runtime-resolver",
+        "artifact_type": "resolved_runtime.json",
+        "path": str(path),
+        "version": 1,
+    }
+
+
 def _names(artifacts: list[dict]) -> set[str]:
     return {Path(artifact["path"]).name for artifact in artifacts}
+
+
+def test_resolved_runtime_is_visible_to_all_roles(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    artifacts = [_resolved_runtime(tmp_path)]
+
+    for role, phase in (
+        ("planner", PLANNING_DRAFT),
+        ("executor", EXECUTION),
+        ("tester", TESTING),
+        ("reviewer", REVIEWING),
+        ("communicator", DELIVERY),
+    ):
+        visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, role, phase, 0)
+        assert _names(visible) == {"resolved_runtime.json"}
 
 
 def test_tester_visibility_is_empty(tmp_path: Path) -> None:

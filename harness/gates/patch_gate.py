@@ -17,6 +17,7 @@ from harness.patch.gate import (
     patch_validation_markdown,
     run_patch_gate,
 )
+from harness.runtime.resolver import RuntimeResolver
 from harness.state.repository import StateRepository
 from harness.testing.tester_result import TesterResultError, load_tester_result
 
@@ -24,9 +25,10 @@ from harness.testing.tester_result import TesterResultError, load_tester_result
 EmitProgress = Callable[[ProgressEvent], None]
 PositiveInt = Callable[[Any, int, str], int]
 SourceRepoProvider = Callable[[str], Path | None]
+PatchApplyBaseProvider = Callable[[str, int], Path | None]
 MaterializedRepoDirProvider = Callable[[str, int], Path]
 CopySource = Callable[[Path, Path], None]
-MarkerWriter = Callable[[Path, str, int, Path], None]
+MarkerWriter = Callable[..., None]
 
 
 class PatchGateService:
@@ -37,6 +39,7 @@ class PatchGateService:
         repository: StateRepository,
         artifact_manager: ArtifactManager,
         source_repo_for_task: SourceRepoProvider,
+        patch_apply_base_for_task: PatchApplyBaseProvider,
         materialized_repo_dir: MaterializedRepoDirProvider,
         copy_source: CopySource,
         write_success_marker: MarkerWriter,
@@ -47,6 +50,7 @@ class PatchGateService:
         self.repository = repository
         self.artifact_manager = artifact_manager
         self.source_repo_for_task = source_repo_for_task
+        self.patch_apply_base_for_task = patch_apply_base_for_task
         self.materialized_repo_dir = materialized_repo_dir
         self.copy_source = copy_source
         self.write_success_marker = write_success_marker
@@ -492,16 +496,37 @@ class PatchGateService:
         patch_path = Path(latest["path"])
         if not patch_path.exists():
             return False
-        source_repo = self.source_repo_for_task(task_id)
+        export_base_repo = self.source_repo_for_task(task_id)
+        source_repo = self.patch_apply_base_for_task(task_id, round_id) or export_base_repo
         gate_result = run_patch_gate(
             patch_path=patch_path,
             source_repo=source_repo,
             materialized_repo_dir=self.materialized_repo_dir(task_id, round_id),
+            export_base_repo=export_base_repo,
             policy=self.policy(),
             copy_source=self.copy_source,
+            runtime_spec=RuntimeResolver(self.config).resolve(context="patch_gate"),
         )
-        if gate_result.materialized_repo:
-            self.write_success_marker(gate_result.materialized_repo, task_id, round_id, patch_path)
+        cumulative_ref = None
+        if gate_result.cumulative_patch_path and gate_result.cumulative_patch_path.exists():
+            cumulative_ref = self.artifact_manager.create_text_artifact(
+                task_id,
+                "cumulative_patch.diff",
+                gate_result.cumulative_patch_path.read_text(encoding="utf-8", errors="replace"),
+                phase_id=latest.get("phase_id"),
+                role="orchestrator",
+                agent_id="patch-validator",
+            )
+        if gate_result.materialized_repo and gate_result.status == "pass":
+            self.write_success_marker(
+                gate_result.materialized_repo,
+                task_id,
+                round_id,
+                patch_path,
+                cumulative_patch_path=cumulative_ref.path if cumulative_ref else gate_result.cumulative_patch_path,
+                apply_base_repo=source_repo,
+                export_base_repo=export_base_repo,
+            )
         report = patch_validation_markdown(gate_result)
         materialize_report = materialized_repo_markdown(gate_result, task_id, round_id)
         objective_report = objective_gate_markdown(gate_result, task_id, round_id)
@@ -549,12 +574,13 @@ class PatchGateService:
                 status=gate_result.status.upper(),
                 message=f"Objective patch gate {gate_result.status}",
                 data={
-                    "artifacts": 4,
+                    "artifacts": 5 if cumulative_ref else 4,
                     "patch_validation": str(ref.path),
                     "materialized_repo_report": str(materialized_ref.path),
                     "objective_gate": str(objective_ref.path),
                     "patch_gate_result": str(patch_gate_result_ref.path),
                     "materialized_repo": str(gate_result.materialized_repo) if gate_result.materialized_repo else "-",
+                    "cumulative_patch": str(cumulative_ref.path) if cumulative_ref else "-",
                 },
             )
         )

@@ -54,6 +54,8 @@ def test_prompt_builder_outputs_precise_english_contract(tmp_path: Path) -> None
     prompt = PromptBuilder().build(context)
 
     assert "# Harness Agent Contract" in prompt
+    assert "## Role Boundary" in prompt
+    assert "Source access: writable for implementation phases" in prompt
     assert "## Output Contract" in prompt
     assert "## Required Output Paths" in prompt
     assert f"`patch.diff`: `{tmp_path / 'workspace' / 'output' / 'patch.diff'}`" in prompt
@@ -99,7 +101,7 @@ def test_prompt_builder_hides_generic_error_code_tables_from_tester(tmp_path: Pa
     assert "Return code meanings:" not in prompt
     assert "Markdown artifact result code meanings:" not in prompt
     assert "`bug_report.md` must contain `artifact_result_code: 0` somewhere in the file" in prompt
-    assert "tester_result.json.status" in prompt
+    assert "tester_result.json.tester_status_code" in prompt
     assert "single tester report" in prompt
     assert "line 1 must be `artifact_result_code: 0`" not in prompt
     assert "put headings such as `# Report` only after that line" not in prompt
@@ -373,6 +375,27 @@ def test_prompt_builder_has_plan_review_merge_contract(tmp_path: Path) -> None:
     assert "reviewer_integrated_findings" in prompt
     assert "review_status`, `decision`, or `status`" in prompt
     assert 'acceptance_oracles[*].kind` must be exactly one of `"manual"`, `"runtime"`, `"static"`, or `"test"`' in prompt
+    assert "acceptance_oracles[*].verification_mode_code" in prompt
+    assert 'acceptance_oracles[*].owner` must be exactly one of `"tester"`, `"reviewer"`, `"external_evaluator"`, `"harness"`, or `"manual"`' in prompt
+    assert 'Do not use `"executor"` as an acceptance oracle owner' in prompt
+    assert 'acceptance_oracles[*].stage` must be exactly one of `"pre_delivery"`, `"post_delivery"`, `"runtime_readiness"`, `"regression"`, or `"manual"`' in prompt
+
+
+def test_prompt_builder_includes_retry_feedback(tmp_path: Path) -> None:
+    context = make_context(tmp_path, role="reviewer", agent_id="reviewer-1", role_count=1)
+    context = AgentRunContext(
+        **{
+            **context.__dict__,
+            "phase": "PLAN_REVIEW",
+            "retry_feedback": ["selected_plan.json.acceptance_oracles[0].owner must be one of: external_evaluator, harness, manual, reviewer, tester"],
+        }
+    )
+
+    prompt = PromptBuilder().build(context)
+
+    assert "## Previous Attempt Feedback" in prompt
+    assert "Harness rejected the previous attempt" in prompt
+    assert "selected_plan.json.acceptance_oracles[0].owner" in prompt
 
 
 def test_tester_prompt_uses_environment_and_validation_contracts(tmp_path: Path) -> None:

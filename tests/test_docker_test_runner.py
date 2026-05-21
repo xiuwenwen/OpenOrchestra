@@ -21,15 +21,21 @@ def _repo(tmp_path: Path) -> Path:
     repo.mkdir()
     return repo
 
-def _request(tmp_path: Path, repo: Path, commands: tuple[str, ...], profile: ProjectProfile | None = None) -> TestRunRequest:
+def _request(
+    tmp_path: Path,
+    repo: Path,
+    commands: tuple[str, ...],
+    profile: ProjectProfile | None = None,
+    setup_commands: tuple[str, ...] = (),
+) -> TestRunRequest:
     return TestRunRequest(
         repo_dir=repo,
         commands=commands,
-        setup_commands=(),
+        setup_commands=setup_commands,
         log_dir=tmp_path / "logs",
         timeout_seconds=5,
         profile=profile or ProjectProfile("python", "python:3.11-bookworm"),
-        config={"testing": {"docker": {"network": "none", "cache_root": str(tmp_path / "cache")}}},
+        config={"testing": {"docker": {"test_network": "none", "cache_root": str(tmp_path / "cache")}}},
     )
 
 def test_docker_runner_executes_commands_without_shell(monkeypatch, tmp_path: Path) -> None:
@@ -86,3 +92,24 @@ def test_docker_runner_builds_project_dockerfile_before_exec(monkeypatch, tmp_pa
     assert evidence.status == "pass"
     assert build_commands
     assert any(part.startswith("oo-test-image-") for part in create_commands[0])
+
+
+def test_docker_runner_switches_from_setup_network_to_test_network(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("harness.testing.runners.docker.shutil.which", lambda name: "/usr/bin/docker")
+    repo = _repo(tmp_path)
+    runner = FakeCommandRunner()
+
+    evidence = DockerTestRunner(runner).run(
+        _request(
+            tmp_path,
+            repo,
+            ("python -m pytest -q",),
+            setup_commands=("python -m pip install -e .",),
+        )
+    )
+
+    create_command = next(command for command in runner.commands if command[:2] == ["docker", "create"])
+    switch_command = next(command for command in runner.commands if command[:2] == ["sh", "-lc"])
+    assert evidence.status == "pass"
+    assert "--network" in create_command and "bridge" in create_command
+    assert "docker network disconnect bridge" in switch_command[-1]

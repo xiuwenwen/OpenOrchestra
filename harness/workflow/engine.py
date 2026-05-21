@@ -37,6 +37,7 @@ from harness.core.state_machine import (
     REVIEWING,
     TESTING,
 )
+from harness.core.taxonomy import RUNTIME_BLOCKER_FAILURE_TYPES
 from harness.core.workflow_type import BUGFIX, FEATURE_CHANGE, MISC, NEW_PROJECT
 from harness.testing.tester_result import (
     ENVIRONMENT_BLOCKED,
@@ -55,6 +56,7 @@ from harness.workflow.routing import (
     route_review_payload,
     route_tester_decision,
 )
+from harness.workflow.saga_adapter import BugfixSagaAdapter
 
 
 class PhaseRunner(Protocol):
@@ -96,10 +98,14 @@ class WorkflowRuntime(PhaseRunner, GateRunner, DeliveryService, Protocol):
     def emit_progress(self, event: ProgressEvent) -> None:
         ...
 
+    def run_final_validation_gate(self, task_id: str, round_id: int) -> Any:
+        ...
+
 
 class WorkflowEngine:
     def __init__(self, runtime: WorkflowRuntime):
         self.runtime = runtime
+        self.bugfix_saga = BugfixSagaAdapter(runtime)
 
     def run(self, task_id: str, workflow_type: str, user_prompt: str) -> Path:
         if workflow_type == BUGFIX:
@@ -114,14 +120,17 @@ class WorkflowEngine:
         self.run_initial_planning_block(task_id, NEW_PROJECT, user_prompt)
         self.run_execution_test_loop(task_id, user_prompt)
         self.run_review_loop(task_id, user_prompt)
+        self.run_final_validation_loop(task_id, user_prompt)
         return self.run_delivery(task_id, user_prompt)
 
     def run_bugfix_flow(self, task_id: str, user_prompt: str) -> Path:
         o = self.runtime
         max_rounds = self.max_test_fix_rounds()
         start_round = self.bugfix_resume_start_round(task_id)
+        self.bugfix_saga.emit_started(task_id)
         if self.bugfix_needs_initial_planning(task_id, start_round):
             self.run_initial_planning_block(task_id, BUGFIX, user_prompt)
+            self.bugfix_saga.record_route(task_id, "plan", "DecisionAccepted", phase=PLANNING_DRAFT, round_id=0)
         round_id = start_round
         attempts = 0
         fix_attempts_since_plan_recheck = 0
@@ -134,13 +143,47 @@ class WorkflowEngine:
                     failed_fix_attempts=fix_attempts_since_plan_recheck,
                 )
                 o.run_role_phase("executor", FIXING, round_id, required_outputs_for("executor", FIXING), user_prompt)
+                self.bugfix_saga.record_route(
+                    task_id,
+                    "execute_patch",
+                    "ArtifactCanonicalized",
+                    phase=FIXING,
+                    round_id=round_id,
+                )
                 merge_ok = o.run_patch_merge(task_id, round_id, user_prompt)
                 if merge_ok:
+                    self.bugfix_saga.record_route(
+                        task_id,
+                        "materialize",
+                        self.bugfix_saga.materialized_event_type(task_id, round_id),
+                        phase=PATCH_MERGE,
+                        round_id=round_id,
+                    )
                     tester_decision = self.run_testing_until_tester_decision(task_id, TESTING, round_id, user_prompt)
+                    self.bugfix_saga.record_route(
+                        task_id,
+                        "tester_verify",
+                        self.bugfix_saga.tester_event_type(tester_decision),
+                        phase=TESTING,
+                        round_id=round_id,
+                        payload={
+                            "tester_status": tester_decision.status,
+                            "failure_type": tester_decision.failure_type,
+                            "artifact": str(tester_decision.artifact_path),
+                        },
+                    )
                     if tester_decision.tests_passed:
                         break
                     if tester_decision.environment_blocked:
                         self.raise_tester_environment_blocked(tester_decision)
+                else:
+                    self.bugfix_saga.record_route(
+                        task_id,
+                        "materialize",
+                        "SnapshotInvalid",
+                        phase=PATCH_MERGE,
+                        round_id=round_id,
+                    )
                 round_id += 1
                 attempts += 1
                 fix_attempts_since_plan_recheck += 1
@@ -153,6 +196,7 @@ class WorkflowEngine:
                 continue
             break
         self.run_review_loop(task_id, user_prompt)
+        self.run_final_validation_loop(task_id, user_prompt)
         return self.run_delivery(task_id, user_prompt)
 
     def bugfix_needs_initial_planning(self, task_id: str, start_round: int) -> bool:
@@ -188,6 +232,7 @@ class WorkflowEngine:
         self.run_initial_planning_block(task_id, FEATURE_CHANGE, user_prompt)
         self.run_execution_test_loop(task_id, user_prompt)
         self.run_review_loop(task_id, user_prompt)
+        self.run_final_validation_loop(task_id, user_prompt)
         return self.run_delivery(task_id, user_prompt)
 
     def run_misc_flow(self, task_id: str, user_prompt: str) -> Path:
@@ -542,6 +587,71 @@ class WorkflowEngine:
             return route.reason or "reviewer reported a blocked runtime environment with no reason"
         return None
 
+    def run_final_validation_loop(self, task_id: str, user_prompt: str) -> None:
+        o = self.runtime
+        max_rounds = self.max_test_fix_rounds()
+        attempts = 0
+        fix_attempts_since_plan_recheck = 0
+        round_id = self.next_phase_round_id(task_id)
+        while True:
+            result = o.run_final_validation_gate(task_id, round_id)
+            if getattr(result, "passed", False) or getattr(result, "skipped", False):
+                return
+            failure_type = str(getattr(result, "failure_type", "") or "inconclusive")
+            summary = str(getattr(result, "summary", "") or "final validation failed")
+            if failure_type in {"contract_bug", "contract_invalid"}:
+                raise TaskFailedError(f"Final validation contract error: {summary}")
+            if max_rounds is not None and attempts >= max_rounds:
+                updated_max_rounds = self.resolve_test_fix_round_limit(task_id, max_rounds)
+                if updated_max_rounds == max_rounds:
+                    raise TaskFailedError("Final validation did not pass within max_test_fix_rounds")
+                max_rounds = updated_max_rounds
+                continue
+            if failure_type in RUNTIME_BLOCKER_FAILURE_TYPES:
+                tester_decision = self.run_testing_until_tester_decision(
+                    task_id,
+                    REGRESSION_TESTING,
+                    round_id,
+                    user_prompt,
+                    phase_scope=self.phase_scope(
+                        "final_validation_environment_repair",
+                        parent_round_id=round_id,
+                        iteration_id=attempts,
+                    ),
+                )
+                if tester_decision.environment_blocked:
+                    self.raise_tester_environment_blocked(tester_decision)
+                attempts += 1
+                round_id = self.next_phase_round_id(task_id)
+                continue
+
+            fix_round_id = self.next_phase_round_id(task_id)
+            fix_attempts_since_plan_recheck = self.maybe_run_fix_tester_plan_recheck(
+                task_id,
+                user_prompt,
+                parent_round_id=round_id,
+                failed_fix_attempts=fix_attempts_since_plan_recheck,
+            )
+            fix_round_id = max(fix_round_id, self.next_phase_round_id(task_id))
+            o.run_role_phase(
+                "executor",
+                REVIEW_FIXING,
+                fix_round_id,
+                required_outputs_for("executor", REVIEW_FIXING),
+                user_prompt,
+                phase_scope=self.phase_scope(
+                    "final_validation_fix",
+                    parent_round_id=round_id,
+                    iteration_id=attempts,
+                ),
+            )
+            merge_ok = o.run_patch_merge(task_id, fix_round_id, user_prompt)
+            self.run_regression_test_fix_loop(task_id, user_prompt, fix_round_id, merge_ok)
+            self.run_review_loop(task_id, user_prompt)
+            attempts += 1
+            fix_attempts_since_plan_recheck += 1
+            round_id = self.next_phase_round_id(task_id)
+
     def run_review_environment_repair(
         self,
         task_id: str,
@@ -688,6 +798,7 @@ class WorkflowEngine:
         max_repairs = self.max_tester_environment_repair_rounds()
         last_error = "missing tester_result.json"
         next_loop_type = "tester_result_retry"
+        retry_feedback: list[str] | None = None
         for repair_attempt in range(max_repairs + 1):
             scoped_phase = self.tester_result_retry_scope(phase_scope, repair_attempt, loop_type=next_loop_type)
             results = o.run_role_phase(
@@ -697,12 +808,14 @@ class WorkflowEngine:
                 required_outputs_for("tester", phase),
                 user_prompt,
                 phase_scope=scoped_phase,
+                retry_feedback=retry_feedback,
             )
             try:
                 decision = self.tester_decision_from_results(task_id, results)
             except TesterResultError as exc:
                 last_error = str(exc)
                 next_loop_type = "tester_result_retry"
+                retry_feedback = self.tester_retry_feedback(last_error)
                 self.emit_tester_result_invalid(task_id, phase, round_id, repair_attempt, last_error)
                 continue
             self.emit_tester_decision(task_id, phase, round_id, decision)
@@ -710,6 +823,7 @@ class WorkflowEngine:
             if route.action == WorkflowRouteAction.TESTER_ENVIRONMENT_REPAIR:
                 last_error = route.reason
                 next_loop_type = "tester_environment_repair"
+                retry_feedback = self.tester_environment_retry_feedback(route.reason)
                 self.emit_tester_environment_repair_requested(task_id, phase, round_id, repair_attempt, decision)
                 continue
             return decision
@@ -765,7 +879,19 @@ class WorkflowEngine:
                     f"{SELECTED_PLAN_ARTIFACT} acceptance contract invalid: {'; '.join(oracle_errors)}"
                 )
             return acceptance_oracles_from_payload(payload)
-        return ()
+        return None
+
+    def tester_retry_feedback(self, error: str) -> list[str]:
+        return [
+            "Previous tester_result.json was rejected by Harness validation: "
+            f"{error}. Fix the machine-readable numeric codes and evidence; do not change only summary text."
+        ]
+
+    def tester_environment_retry_feedback(self, reason: str) -> list[str]:
+        return [
+            "Previous tester_result.json reported an environment dependency issue: "
+            f"{reason}. Repair the environment if safe, rerun the needed verification, then update numeric codes."
+        ]
 
     def emit_tester_result_invalid(
         self,

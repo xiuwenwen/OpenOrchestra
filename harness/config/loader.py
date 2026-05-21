@@ -59,7 +59,14 @@ def _minimal_yaml_load(text: str) -> dict[str, Any]:
         if line.startswith("- "):
             if not isinstance(parent, list):
                 raise ValueError(f"Invalid config list item: {raw_line!r}")
-            parent.append(_parse_scalar(line[2:]))
+            item = line[2:].strip()
+            if ":" in item and not item.startswith(("'", '"')):
+                key, value = item.split(":", 1)
+                parsed_item: dict[str, Any] = {key.strip(): _parse_scalar(value)}
+                parent.append(parsed_item)
+                stack.append((indent, parsed_item))
+            else:
+                parent.append(_parse_scalar(item))
             continue
         if ":" not in line:
             raise ValueError(f"Invalid config line: {raw_line!r}")
@@ -120,9 +127,30 @@ def _dump_mapping(mapping: dict[str, Any], indent: int) -> list[str]:
                 lines.append(f"{prefix}{key}:")
                 item_prefix = " " * (indent + 2)
                 for item in value:
-                    lines.append(f"{item_prefix}- {_dump_scalar(item)}")
+                    lines.extend(_dump_list_item(item, item_prefix))
         else:
             lines.append(f"{prefix}{key}: {_dump_scalar(value)}")
+    return lines
+
+
+def _dump_list_item(item: Any, prefix: str) -> list[str]:
+    if not isinstance(item, dict):
+        return [f"{prefix}- {_dump_scalar(item)}"]
+    if not item:
+        return [f"{prefix}- {{}}"]
+    first_key, first_value = next(iter(item.items()))
+    lines = [f"{prefix}- {first_key}: {_dump_scalar(first_value)}"]
+    nested_prefix = prefix + "  "
+    for key, value in list(item.items())[1:]:
+        if isinstance(value, dict):
+            lines.append(f"{nested_prefix}{key}:")
+            lines.extend(_dump_mapping(value, len(nested_prefix) + 2))
+        elif isinstance(value, list):
+            lines.append(f"{nested_prefix}{key}:")
+            for nested_item in value:
+                lines.extend(_dump_list_item(nested_item, nested_prefix + "  "))
+        else:
+            lines.append(f"{nested_prefix}{key}: {_dump_scalar(value)}")
     return lines
 
 

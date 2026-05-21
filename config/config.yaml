@@ -13,6 +13,36 @@ agent_backend:
   reviewer: "codex"
   communicator: "codex"
 
+runtime:
+  mode: docker
+  docker:
+    enabled: true
+    image: openorchestra-agent-runtime:latest
+    workdir: /workspace
+    network: bridge
+    cache_root: ~/.openorchestra/cache/docker
+    env_allowlist: []
+    bootstrap:
+      enabled: true
+      auto_build: true
+      build_context: docker/agent-runtime
+      install_agent_clis: true
+      require_backend_cli: true
+      build_timeout_seconds: 1800
+    backend_config_mounts:
+      claude:
+        - host: ~/.claude
+          container: /home/openorchestra/.claude
+          read_only: true
+          writable_subpaths: ["session-env"]
+        - host: ~/.claude.json
+          container: /home/openorchestra/.claude.json
+          read_only: true
+      codex:
+        - host: ~/.codex
+          container: /home/openorchestra/.codex
+          read_only: true
+
 roles:
   planner:
     count: 2
@@ -72,7 +102,7 @@ artifact_input:
   max_total_bytes: 1048576
 
 testing:
-  runtime: auto
+  runtime: docker
   timeout_seconds: 120
   docker:
     enabled: true
@@ -80,7 +110,8 @@ testing:
     default_node_image: node:20-bookworm
     default_go_image: golang:1.22-bookworm
     default_rust_image: rust:1.78-bookworm
-    network: install_only
+    setup_network: bridge
+    test_network: none
     timeout_seconds: 1800
     cache_mounts: true
     cache_root: ~/.openorchestra/cache/docker
@@ -92,6 +123,18 @@ testing:
 
 runtime_readiness:
   require_commands: false
+
+final_validation:
+  enabled: true
+  allow_contract_commands: false
+  require_executable: false
+  timeout_seconds: 1800
+  docker:
+    network: none
+
+patch_gate:
+  docker:
+    network: none
 
 policy:
   same_role_can_run_concurrently: true

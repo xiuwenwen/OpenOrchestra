@@ -173,15 +173,29 @@ class MaterializedRepoService:
         latest_success_round = self.latest_successful_materialized_round_from_artifacts(task_id)
         if latest_success_round is None:
             return None
+        return self.materialized_repo_for_successful_round(task_id, latest_success_round)
+
+    def latest_materialized_repo_before_round(self, task_id: str, round_id: int) -> Path | None:
+        latest_success_round = self.latest_successful_materialized_round_from_artifacts(task_id, before_round=round_id)
+        if latest_success_round is None:
+            return None
+        return self.materialized_repo_for_successful_round(task_id, latest_success_round)
+
+    def materialized_repo_for_successful_round(self, task_id: str, round_id: int) -> Path | None:
         root = self.materialized_root(task_id)
         if not root.exists():
             return None
-        candidate = self.materialized_repo_dir(task_id, latest_success_round)
-        if not self.materialized_success_marker_ok(candidate, task_id, latest_success_round):
+        candidate = self.materialized_repo_dir(task_id, round_id)
+        if not self.materialized_success_marker_ok(candidate, task_id, round_id):
             return None
         return candidate
 
-    def latest_successful_materialized_round_from_artifacts(self, task_id: str) -> int | None:
+    def latest_successful_materialized_round_from_artifacts(
+        self,
+        task_id: str,
+        *,
+        before_round: int | None = None,
+    ) -> int | None:
         artifacts = self.repository.list_artifacts(task_id, "materialized_repo.md")
         for artifact in reversed(artifacts):
             path = Path(artifact["path"])
@@ -191,7 +205,7 @@ class MaterializedRepoService:
             if self.materialized_repo_status(text) != "success":
                 continue
             round_id = self.extract_materialized_report_round(text)
-            if round_id is not None:
+            if round_id is not None and (before_round is None or round_id < before_round):
                 return round_id
         return None
 
@@ -228,13 +242,59 @@ class MaterializedRepoService:
             and int(payload.get("round_id", -1)) == round_id
         )
 
-    def write_materialized_success_marker(self, repo_dir: Path, task_id: str, round_id: int, patch_path: Path) -> None:
+    def latest_cumulative_patch(self, task_id: str) -> Path | None:
+        repo_dir = self.latest_materialized_repo(task_id)
+        if not repo_dir:
+            return None
+        marker = self.read_materialized_success_marker(repo_dir)
+        if not marker:
+            return None
+        for field in ("cumulative_patch_path", "patch_path"):
+            value = marker.get(field)
+            if not value:
+                continue
+            path = Path(str(value))
+            if path.exists() and path.is_file():
+                return path
+        return None
+
+    def read_materialized_success_marker(self, repo_dir: Path) -> dict[str, Any] | None:
+        marker_path = repo_dir / MATERIALIZED_SUCCESS_MARKER
+        if not marker_path.is_file():
+            return None
+        try:
+            payload = json.loads(marker_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def write_materialized_success_marker(
+        self,
+        repo_dir: Path,
+        task_id: str,
+        round_id: int,
+        patch_path: Path,
+        *,
+        cumulative_patch_path: Path | None = None,
+        apply_base_repo: Path | None = None,
+        export_base_repo: Path | None = None,
+    ) -> None:
         marker = {
             "status": "success",
             "task_id": task_id,
             "round_id": round_id,
             "patch_path": str(patch_path),
             "patch_hash": sha256_file(patch_path) if patch_path.exists() else None,
+            "delta_patch_path": str(patch_path),
+            "delta_patch_hash": sha256_file(patch_path) if patch_path.exists() else None,
+            "cumulative_patch_path": str(cumulative_patch_path) if cumulative_patch_path else None,
+            "cumulative_patch_hash": (
+                sha256_file(cumulative_patch_path)
+                if cumulative_patch_path and cumulative_patch_path.exists()
+                else None
+            ),
+            "apply_base_repo": str(apply_base_repo) if apply_base_repo else None,
+            "export_base_repo": str(export_base_repo) if export_base_repo else None,
         }
         (repo_dir / MATERIALIZED_SUCCESS_MARKER).write_text(json.dumps(marker, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -246,22 +306,34 @@ class MaterializedRepoService:
         return resolved if resolved.exists() and resolved.is_dir() else None
 
     def copy_source_for_patch_validation(self, source_repo: Path, destination: Path) -> None:
+        source_root = source_repo.resolve()
+        source_is_inside_workspace = self.is_relative_to(source_root, self.workspace_manager.workspace_root.resolve())
         self.workspace_manager.copytree(
             source_repo,
             destination,
             ignore=lambda directory, names: {
                 name
                 for name in names
-                if self.should_ignore_copied_source_item(directory, name)
+                if self.should_ignore_copied_source_item(
+                    directory,
+                    name,
+                    source_is_inside_workspace=source_is_inside_workspace,
+                )
             },
         )
 
-    def should_ignore_copied_source_item(self, directory: str, name: str) -> bool:
+    def should_ignore_copied_source_item(
+        self,
+        directory: str,
+        name: str,
+        *,
+        source_is_inside_workspace: bool = False,
+    ) -> bool:
         path = (Path(directory) / name).resolve()
         return (
             name in WorkspaceManager.DEFAULT_COPY_IGNORE_NAMES
             or WorkspaceManager.is_generated_runtime_artifact(path)
-            or self.is_relative_to(path, self.workspace_manager.workspace_root)
+            or (not source_is_inside_workspace and self.is_relative_to(path, self.workspace_manager.workspace_root))
         )
 
     def copy_ignore_for_materialized_workspace(self, directory: str, names: list[str]) -> set[str]:

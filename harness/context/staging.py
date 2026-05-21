@@ -61,6 +61,7 @@ class InputStagingService:
         staged_dir.mkdir(parents=True, exist_ok=True)
         staged_paths: list[Path] = []
         manifest_lines = ["# Input Artifact Manifest", ""]
+        handoff_entries: list[dict[str, Any]] = []
         manifest_lines.extend(self.test_target_manifest_lines(task_id, role, phase, round_id, repo_dir))
         limits = self.artifact_input_limits(role, phase)
         staged_file_count = 0
@@ -93,6 +94,10 @@ class InputStagingService:
             if not source.exists():
                 continue
             source_size = source.stat().st_size
+            safe_type = artifact["artifact_type"].replace("/", "__").replace(" ", "_")
+            artifact_role = artifact["role"] or "unknown"
+            agent_id = artifact["agent_id"] or "unknown"
+            version = artifact["version"]
             staging_mode = self.artifact_staging_mode(
                 role,
                 phase,
@@ -100,7 +105,20 @@ class InputStagingService:
                 source,
                 large_artifact_mode=str(limits["large_artifact_mode"]),
             )
+            handoff_entry = {
+                "artifact_id": artifact["artifact_id"],
+                "artifact_type": artifact["artifact_type"],
+                "version": version,
+                "hash": artifact["hash"],
+                "role": artifact_role,
+                "agent_id": agent_id,
+                "phase_id": artifact["phase_id"],
+                "source_path": str(source),
+                "source_bytes": source_size,
+                "staging_mode": staging_mode,
+            }
             if staging_mode == "path_only":
+                handoff_entries.append({**handoff_entry, "status": "path_only", "staged_path": None})
                 self.append_path_only_artifact_manifest(
                     manifest_lines,
                     index,
@@ -110,16 +128,14 @@ class InputStagingService:
                 )
                 continue
             if staged_file_count >= limits["max_files"]:
+                handoff_entries.append({**handoff_entry, "status": "skipped", "reason": "max_files exceeded"})
                 self.append_skipped_artifact_manifest(manifest_lines, index, artifact, source, "max_files exceeded")
                 continue
             remaining_total_bytes = limits["max_total_bytes"] - staged_total_bytes
             if remaining_total_bytes <= 0:
+                handoff_entries.append({**handoff_entry, "status": "skipped", "reason": "max_total_bytes exceeded"})
                 self.append_skipped_artifact_manifest(manifest_lines, index, artifact, source, "max_total_bytes exceeded")
                 continue
-            safe_type = artifact["artifact_type"].replace("/", "__").replace(" ", "_")
-            artifact_role = artifact["role"] or "unknown"
-            agent_id = artifact["agent_id"] or "unknown"
-            version = artifact["version"]
             destination = staged_dir / f"{index:03d}_{artifact_role}_{agent_id}_{safe_type}_v{version}_{source.name}"
             copied_bytes, truncated = self.copy_artifact_with_budget(
                 source,
@@ -131,6 +147,15 @@ class InputStagingService:
             staged_total_bytes += copied_bytes
             staged_file_count += 1
             staged_paths.append(destination)
+            handoff_entries.append(
+                {
+                    **handoff_entry,
+                    "status": "staged",
+                    "staged_path": str(destination),
+                    "staged_bytes": copied_bytes,
+                    "truncated": truncated,
+                }
+            )
             manifest_lines.extend(
                 [
                     f"## {index}. {artifact['artifact_type']} v{version}",
@@ -147,7 +172,30 @@ class InputStagingService:
             )
         manifest_path = input_dir / "manifest.md"
         manifest_path.write_text("\n".join(manifest_lines), encoding="utf-8")
+        self.write_handoff_manifest(input_dir, task_id, role, phase, round_id, handoff_entries)
         return [manifest_path, *staged_paths]
+
+    def write_handoff_manifest(
+        self,
+        input_dir: Path,
+        task_id: str,
+        role: str,
+        phase: str,
+        round_id: int | None,
+        artifacts: list[dict[str, Any]],
+    ) -> Path:
+        path = input_dir / "handoff_manifest.json"
+        payload = {
+            "schema_version": "role_handoff_path_contract.v1",
+            "task_id": task_id,
+            "target_role": role,
+            "target_phase": phase,
+            "round_id": round_id,
+            "input_dir": str(input_dir),
+            "artifacts": artifacts,
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return path
 
     def test_target_manifest_lines(
         self,

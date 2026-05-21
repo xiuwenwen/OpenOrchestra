@@ -7,6 +7,7 @@ from typing import Any
 
 from harness.adapters.base import AgentAdapter
 from harness.adapters.claude_config import ClaudeContextBudgetError, claude_env_for_role, write_claude_invocation_settings
+from harness.adapters.runner_invocation import run_subprocess_runner
 from harness.adapters.subprocess_runner import SubprocessRunner
 from harness.agents.context import AgentRunContext
 from harness.agents.result import AgentRunResult
@@ -65,7 +66,8 @@ class ClaudeCodeAdapter(AgentAdapter):
             "\n".join(f"{key}={value}" for key, value in sorted(env_overrides.items())) + "\n",
             encoding="utf-8",
         )
-        exit_code = self.runner.run(
+        exit_code = run_subprocess_runner(
+            self.runner,
             command,
             context.repo_dir,
             context.timeout_seconds,
@@ -73,6 +75,7 @@ class ClaudeCodeAdapter(AgentAdapter):
             stderr_path,
             input_text=prompt,
             env=env_overrides,
+            runtime_spec=context.runtime_spec,
         )
         diagnostics_path = self._maybe_write_request_diagnostics(
             context=context,
@@ -99,7 +102,7 @@ class ClaudeCodeAdapter(AgentAdapter):
     def _extra_args(self, context: AgentRunContext, settings_path: Path | None = None) -> list[str]:
         args: list[str] = []
         if settings_path:
-            args.extend(["--settings", str(settings_path)])
+            args.extend(["--settings", context.runtime_path(settings_path)])
         permission_mode = context.config.get("claude", {}).get("permission_mode")
         if permission_mode:
             args.extend(["--permission-mode", str(permission_mode)])
@@ -108,8 +111,8 @@ class ClaudeCodeAdapter(AgentAdapter):
                 "--output-format",
                 "text",
                 "--add-dir",
-                str(context.input_dir),
-                str(context.output_dir),
+                context.runtime_input_dir or str(context.input_dir),
+                context.runtime_output_dir or str(context.output_dir),
             ]
         )
         return args

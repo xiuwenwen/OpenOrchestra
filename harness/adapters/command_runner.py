@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from harness.adapters.process_registry import kill_process_tree, register_process, supports_process_groups, unregister_process
+from harness.runtime.spec import RuntimeCommandRequest, RuntimeExecutor, RuntimeSpec
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,9 @@ class CapturedCommandResult:
 
 
 class CommandRunner:
+    def __init__(self, runtime_executor: RuntimeExecutor | None = None):
+        self.runtime_executor = runtime_executor
+
     def run_capture(
         self,
         command: list[str],
@@ -24,8 +28,31 @@ class CommandRunner:
         timeout_seconds: float | None = None,
         input_text: str | None = None,
         env: dict[str, str] | None = None,
+        runtime_spec: RuntimeSpec | None = None,
     ) -> CapturedCommandResult:
         self.validate_command(command)
+        runtime_executor = self.runtime_executor
+        if runtime_executor is None and runtime_spec is not None and runtime_spec.is_docker:
+            from harness.runtime.docker import DockerRuntimeExecutor
+
+            runtime_executor = DockerRuntimeExecutor()
+        if runtime_executor is not None:
+            result = runtime_executor.run_capture(
+                RuntimeCommandRequest(
+                    command=tuple(command),
+                    cwd=cwd,
+                    timeout_seconds=timeout_seconds,
+                    input_text=input_text,
+                    env=env,
+                    spec=runtime_spec or RuntimeSpec(),
+                )
+            )
+            return CapturedCommandResult(
+                returncode=result.returncode,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                timed_out=result.timed_out,
+            )
         timeout = timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
         process = subprocess.Popen(
             command,

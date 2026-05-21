@@ -5,7 +5,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from harness.artifacts.acceptance import ORACLE_RESULTS_FIELD, validate_tester_oracle_results
+from harness.artifacts.enums import (
+    NEXT_ACTION_CODE_TO_ACTION,
+    NEXT_ACTION_TO_CODE,
+    TESTER_STATUS_CODE_TO_STATUS,
+    TESTER_STATUS_TO_CODE,
+    VALID_NEXT_ACTION_CODES,
+    VALID_TESTER_STATUS_CODES,
+    allowed_codes,
+    numeric_code,
+)
+from harness.artifacts.acceptance import ORACLE_RESULTS_FIELD, validate_tester_oracle_result_shape
+from harness.core.taxonomy import FAILURE_TYPES, RUNTIME_BLOCKER_FAILURE_TYPES
 
 
 TESTER_RESULT_ARTIFACT = "tester_result.json"
@@ -66,16 +77,50 @@ def load_tester_result(path: Path) -> TesterResult:
     if not isinstance(payload, dict):
         raise TesterResultError(f"{path} must contain one JSON object")
 
-    status = _string_field(payload, "status").lower()
+    status_code = numeric_code(payload, "tester_status_code")
+    status_text = _string_field(payload, "status").lower()
+    if status_code is not None:
+        if status_code not in VALID_TESTER_STATUS_CODES:
+            raise TesterResultError(
+                f"{path} has invalid tester_status_code {status_code!r}; expected one of: "
+                f"{allowed_codes(VALID_TESTER_STATUS_CODES)}"
+            )
+        status = TESTER_STATUS_CODE_TO_STATUS[status_code]
+        if status_text and status_text != status:
+            raise TesterResultError(
+                f"{path} status {status_text!r} does not match tester_status_code {status_code}"
+            )
+    else:
+        status = status_text
     if status not in VALID_TESTER_STATUSES:
         allowed = ", ".join(sorted(VALID_TESTER_STATUSES))
         raise TesterResultError(f"{path} has invalid status {status!r}; expected one of: {allowed}")
 
     expected_action = NEXT_ACTION_BY_STATUS[status]
-    next_action = _string_field(payload, "next_action") or expected_action
+    next_action_code = numeric_code(payload, "next_action_code")
+    next_action_text = _string_field(payload, "next_action")
+    if next_action_code is not None:
+        if next_action_code not in VALID_NEXT_ACTION_CODES:
+            raise TesterResultError(
+                f"{path} has invalid next_action_code {next_action_code!r}; expected one of: "
+                f"{allowed_codes(VALID_NEXT_ACTION_CODES)}"
+            )
+        next_action = NEXT_ACTION_CODE_TO_ACTION[next_action_code]
+        if next_action_text and next_action_text != next_action:
+            raise TesterResultError(
+                f"{path} next_action {next_action_text!r} does not match next_action_code {next_action_code}"
+            )
+    else:
+        next_action = next_action_text or expected_action
     if next_action != expected_action:
         raise TesterResultError(
             f"{path} has next_action {next_action!r}, but status {status!r} requires {expected_action!r}"
+        )
+    expected_action_code = NEXT_ACTION_TO_CODE[expected_action]
+    if next_action_code is not None and next_action_code != expected_action_code:
+        raise TesterResultError(
+            f"{path} has next_action_code {next_action_code!r}, but tester_status_code "
+            f"{TESTER_STATUS_TO_CODE[status]!r} requires {expected_action_code!r}"
         )
 
     environment_dependency_issue = _required_bool_field(payload, "environment_dependency_issue", path)
@@ -86,8 +131,15 @@ def load_tester_result(path: Path) -> TesterResult:
         raise TesterResultError(f"{path} must set environment_dependency_issue=true for environment_blocked")
 
     failure_type = _string_field(payload, "failure_type") or DEFAULT_FAILURE_TYPE_BY_STATUS[status]
+    if failure_type not in FAILURE_TYPES:
+        allowed = ", ".join(sorted(FAILURE_TYPES))
+        raise TesterResultError(f"{path} has invalid failure_type {failure_type!r}; expected one of: {allowed}")
+    if failure_type in RUNTIME_BLOCKER_FAILURE_TYPES and not environment_dependency_issue:
+        raise TesterResultError(
+            f"{path} must set environment_dependency_issue=true for runtime, environment, command, infra, or contract failure_type"
+        )
     summary = _string_field(payload, "summary")
-    oracle_errors = validate_tester_oracle_results(payload)
+    oracle_errors = validate_tester_oracle_result_shape(payload)
     if oracle_errors:
         raise TesterResultError(f"{path} has invalid oracle_results: {'; '.join(oracle_errors)}")
     oracle_results = payload.get(ORACLE_RESULTS_FIELD)

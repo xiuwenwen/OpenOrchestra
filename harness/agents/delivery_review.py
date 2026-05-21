@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from harness.adapters.claude_config import claude_env_for_role, write_claude_invocation_settings
 from harness.adapters.headless_cli_adapter import SUPPORTED_HEADLESS_CLI_BACKENDS, headless_cli_command
+from harness.adapters.runner_invocation import run_subprocess_runner
 from harness.adapters.subprocess_runner import SubprocessRunner
 from harness.agents.context import AgentRunContext
 from harness.artifacts.validator import ValidationResult
@@ -78,14 +79,17 @@ class DeliveryContractReviewer:
         stderr_path = run_dir / "stderr.log"
         env = claude_env_for_role(context.config, "reviewer", prompt) if backend == "claude" else None
         settings_path = write_claude_invocation_settings(run_dir, env or {}) if backend == "claude" else None
-        command = self._command(backend, run_dir, settings_path)
+        runtime_settings_path = context.runtime_path(settings_path) if settings_path else None
+        runtime_run_dir = context.runtime_path(run_dir)
+        command = self._command(backend, run_dir, runtime_run_dir, runtime_settings_path)
         (run_dir / "command.txt").write_text(" ".join(command), encoding="utf-8")
         if env:
             (run_dir / "env_overrides.txt").write_text(
                 "\n".join(f"{key}={value}" for key, value in sorted(env.items())) + "\n",
                 encoding="utf-8",
             )
-        exit_code = self.runner.run(
+        exit_code = run_subprocess_runner(
+            self.runner,
             command,
             run_dir,
             context.timeout_seconds,
@@ -93,6 +97,7 @@ class DeliveryContractReviewer:
             stderr_path,
             input_text=prompt,
             env=env,
+            runtime_spec=context.runtime_spec,
         )
         if exit_code != 0:
             return DeliveryContractReview(
@@ -211,18 +216,24 @@ class DeliveryContractReviewer:
         }
         return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
-    def _command(self, backend: str, run_dir: Path, settings_path: Path | None = None) -> list[str]:
+    def _command(
+        self,
+        backend: str,
+        run_dir: Path,
+        runtime_run_dir: str,
+        settings_path: str | None = None,
+    ) -> list[str]:
         if backend == "claude":
             command = ["claude", "-p"]
             if settings_path:
-                command.extend(["--settings", str(settings_path)])
+                command.extend(["--settings", settings_path])
             command.extend(["--output-format", "text"])
             return command
         if backend == "codex":
-            return ["codex", "exec", "--skip-git-repo-check", "--cd", str(run_dir), "-"]
+            return ["codex", "exec", "--skip-git-repo-check", "--cd", runtime_run_dir or str(run_dir), "-"]
         if backend in SUPPORTED_HEADLESS_CLI_BACKENDS:
             return headless_cli_command(backend)
-        return ["codex", "exec", "--skip-git-repo-check", "--cd", str(run_dir), "-"]
+        return ["codex", "exec", "--skip-git-repo-check", "--cd", runtime_run_dir or str(run_dir), "-"]
 
     def _parse_review(
         self,

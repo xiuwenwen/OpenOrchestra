@@ -45,6 +45,7 @@ from harness.core.workflow_type import MISC, NEW_PROJECT
 from harness.delivery.handoff import format_delivery_handoff, format_total_elapsed
 from harness.diagnostics.service import DiagnosticsService
 from harness.retention.service import RetentionService, format_bytes
+from harness.runtime.preflight import check_role_runtime_preflight
 from harness.ui.display import pad_display, truncate_display
 from harness.ui.launcher import start_ui_server
 from harness.ui.server import HarnessWebServer, UiEventStore
@@ -488,6 +489,12 @@ class InteractiveCLI:
                 f"difficulty={classification.difficulty_score} peer_review={str(peer_review).lower()}",
                 flush=True,
             )
+        runtime_preflight = check_role_runtime_preflight(self.config, self.backend)
+        if not runtime_preflight.ok:
+            print(runtime_preflight.message, file=sys.stderr)
+            return
+        if runtime_preflight.message:
+            print(runtime_preflight.message, flush=True)
         project_context_md = None
         if self.active_task_id:
             project_context_md = self._build_project_context_md(self.active_task_id)

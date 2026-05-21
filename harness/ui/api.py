@@ -27,7 +27,7 @@ def parse_json_object_body(raw: bytes, endpoint: str) -> dict[str, Any]:
 
 
 def validate_runtime_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    allowed_keys = {"agent_backend", "roles", "persist"}
+    allowed_keys = {"agent_backend", "roles", "runtime", "persist"}
     unknown_keys = sorted(set(payload) - allowed_keys)
     if unknown_keys:
         raise ValueError(f"/api/config request contains unsupported field(s): {', '.join(unknown_keys)}")

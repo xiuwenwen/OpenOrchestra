@@ -16,3 +16,4 @@ def test_output_policy_names_invalid_contract_status_explicitly() -> None:
 
     assert policy.invalid_output_status(validation_ok=False, agent_status="COMPLETED") == "OUTPUT_INVALID"
     assert policy.invalid_output_status(validation_ok=True, agent_status="FAILED") == "FAILED"
+    assert policy.invalid_output_status(validation_ok=False, agent_status="FAILED") == "FAILED"

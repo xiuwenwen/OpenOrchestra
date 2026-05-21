@@ -198,6 +198,63 @@ def test_uncompleted_json_template_is_output_invalid_not_file_error(monkeypatch,
     assert runs[-1]["status"] == "OUTPUT_INVALID"
     assert runs[-1]["error_message"] == "merged_patch_metadata.json still contains Harness output template marker"
 
+
+def test_agent_process_failure_reports_stderr_not_seeded_template_markers(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config["roles"]["planner"]["count"] = 1
+    config["limits"]["max_agent_retry"] = 0
+    config["runtime"] = {"mode": "docker", "docker": {"image": "agent:test", "workdir": "/workspace"}}
+    orchestrator = Orchestrator(config)
+    task_id = orchestrator.create_task("plan with broken runtime")
+
+    class BrokenRuntimeAdapter:
+        def run(self, context):
+            assert context.runtime_repo_dir == "/workspace"
+            assert context.runtime_log_dir == "/openorchestra/logs"
+            assert context.runtime_path(context.log_dir / "claude_invocation_settings.json") == (
+                "/openorchestra/logs/claude_invocation_settings.json"
+            )
+            context.log_dir.mkdir(parents=True, exist_ok=True)
+            stdout = context.log_dir / "stdout.log"
+            stderr = context.log_dir / "stderr.log"
+            stdout.write_text("", encoding="utf-8")
+            stderr.write_text(
+                "Error: Settings file not found: /openorchestra/logs/claude_invocation_settings.json\n",
+                encoding="utf-8",
+            )
+            return AgentRunResult(
+                task_id=context.task_id,
+                phase_id=context.phase_id,
+                role=context.role,
+                agent_id=context.agent_id,
+                status="FAILED",
+                exit_code=1,
+                stdout_path=stdout,
+                stderr_path=stderr,
+            )
+
+    monkeypatch.setattr(orchestrator, "_adapter_for_backend", lambda backend: BrokenRuntimeAdapter())
+
+    with pytest.raises(Exception) as exc_info:
+        orchestrator.run_role_phase(
+            "planner",
+            PLANNING_DRAFT,
+            0,
+            required_outputs_for("planner", PLANNING_DRAFT),
+            "plan with broken runtime",
+        )
+
+    assert "Settings file not found" in str(exc_info.value)
+    assert "still contains Harness output template marker" not in str(exc_info.value)
+    runs = orchestrator.repository.list_agent_runs(task_id)
+    assert runs[-1]["status"] == "FAILED"
+    assert "Settings file not found" in runs[-1]["error_message"]
+    manifest = next(Path(config["system"]["workspace_root"]).glob(f"{task_id}/*/planner/planner-1/round_0/attempt_0/logs/path_manifest.json"))
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["runtime"]["repo"] == "/workspace"
+    assert payload["runtime"]["logs"] == "/openorchestra/logs"
+
+
 def test_context_window_failure_is_not_retried(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     config["roles"]["executor"]["count"] = 1

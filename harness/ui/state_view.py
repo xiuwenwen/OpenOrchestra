@@ -88,7 +88,12 @@ class HarnessStateView:
         self.file_reader = HarnessFileReader(config)
 
     def tasks(self, limit: int = 20) -> list[dict[str, Any]]:
-        return [dict(task) for task in self.repository.list_tasks(limit)]
+        tasks = [dict(task) for task in self.repository.list_tasks(limit)]
+        start_times = self.repository.list_task_start_times([str(task["task_id"]) for task in tasks])
+        for task in tasks:
+            # Prefer the actual task_started event; old rows fall back to creation time.
+            task["started_at"] = start_times.get(str(task["task_id"])) or task.get("created_at")
+        return tasks
 
     def get_runtime_config(self) -> dict[str, Any]:
         return self.config_service.role_runtime_config()

@@ -36,11 +36,12 @@ def _service(config: dict, command_runner: DummyCommandRunner | None = None, emi
 @pytest.mark.parametrize(
     ("config", "docker_path", "docker_rc", "expected"),
     [
-        ({}, None, 0, "native"),
+        ({}, None, 0, "docker"),
         ({"testing": {"runtime": "auto", "docker": {"enabled": True}}}, "/usr/bin/docker", 0, "docker"),
         ({"testing": {"runtime": "auto", "docker": {"enabled": True}}}, "/usr/bin/docker", 1, "native"),
         ({"testing": {"runtime": "auto", "docker": {"enabled": False}}}, "/usr/bin/docker", 0, "native"),
         ({"testing": {"runtime": "docker", "docker": {"enabled": True}}}, None, 0, "docker"),
+        ({"testing": {"runtime": "docker", "docker": {"enabled": False}}}, None, 0, "docker"),
     ],
 )
 def test_runtime_selection(monkeypatch, config: dict, docker_path: str | None, docker_rc: int, expected: str) -> None:
@@ -101,7 +102,7 @@ def test_tester_setup_policy_allows_declared_or_minimal_dependencies(tmp_path) -
 def test_runtime_selection_event_is_prominent(monkeypatch) -> None:
     monkeypatch.setattr("harness.gates.test_gate.shutil.which", lambda name: None)
     events = []
-    runtime, diagnostics = _service({}, emit=events.append).resolve_test_runtime_with_diagnostics("task", None)
+    runtime, diagnostics = _service({"testing": {"runtime": "auto"}}, emit=events.append).resolve_test_runtime_with_diagnostics("task", None)
     _service({}, emit=events.append).emit_runtime_selection("task", 0, "test_gate.md", diagnostics)
     assert runtime == "native"
     assert events[-1].event_type == "test_runtime_selected"

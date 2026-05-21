@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from harness.runtime.network import normalize_docker_network
+
 from harness.config.loader import write_config_atomic
 from harness.config.user_env import USER_ENV_PATH, load_user_env, write_user_env
 from harness.state.repository import StateRepository
@@ -18,6 +20,11 @@ ROLE_COUNT_ENV_KEYS = {
     "tester": "OO_TESTER_COUNT",
     "reviewer": "OO_REVIEWER_COUNT",
     "communicator": "OO_COMMUNICATOR_COUNT",
+}
+RUNTIME_ENV_KEYS = {
+    "mode": "OO_RUNTIME",
+    "image": "OO_RUNTIME_DOCKER_IMAGE",
+    "network": "OO_RUNTIME_DOCKER_NETWORK",
 }
 MAX_ROLE_COUNT = 10
 
@@ -43,6 +50,7 @@ class RuntimeConfigService:
                 for role in CONFIGURABLE_ROLES
                 if role in self.config.get("roles", {})
             },
+            "runtime": copy.deepcopy(self.config.get("runtime", {"mode": "docker"})),
             "backend_options": list(CONFIGURABLE_BACKENDS),
             "max_role_count": MAX_ROLE_COUNT,
             "scope": "runtime",
@@ -56,6 +64,8 @@ class RuntimeConfigService:
         roles = self.config.setdefault("roles", {})
         for role, role_config in normalized["roles"].items():
             roles.setdefault(role, {})["count"] = role_config["count"]
+        if normalized["runtime"]:
+            self._deep_update(self.config.setdefault("runtime", {}), normalized["runtime"])
         if bool(payload.get("persist")):
             if not self.config_path:
                 raise ValueError("persist=true requires a config_path")
@@ -119,7 +129,37 @@ class RuntimeConfigService:
                 raise ValueError(f"Unsupported backend: {backend_value}")
             agent_backend[role] = backend_value
 
-        return {"roles": roles, "agent_backend": agent_backend}
+        runtime = self._normalize_runtime_payload(payload.get("runtime", {}))
+        return {"roles": roles, "agent_backend": agent_backend, "runtime": runtime}
+
+    def _normalize_runtime_payload(self, payload: Any) -> dict[str, Any]:
+        if payload in (None, {}):
+            return {}
+        if not isinstance(payload, dict):
+            raise ValueError("runtime must be an object")
+        normalized: dict[str, Any] = {}
+        mode = payload.get("mode")
+        if mode is not None:
+            mode_value = str(mode)
+            if mode_value not in {"host", "docker", "auto"}:
+                raise ValueError("runtime.mode must be host, docker, or auto")
+            normalized["mode"] = mode_value
+        docker = payload.get("docker")
+        if docker is not None:
+            if not isinstance(docker, dict):
+                raise ValueError("runtime.docker must be an object")
+            docker_normalized: dict[str, Any] = {}
+            if "image" in docker:
+                docker_normalized["image"] = str(docker["image"])
+            if "network" in docker:
+                docker_normalized["network"] = normalize_docker_network(
+                    docker["network"],
+                    field="runtime.docker.network",
+                    default="bridge",
+                )
+            if docker_normalized:
+                normalized["docker"] = docker_normalized
+        return normalized
 
     def _deep_update(self, target: dict[str, Any], updates: dict[str, Any]) -> None:
         for key, value in updates.items():
@@ -139,4 +179,12 @@ class RuntimeConfigService:
         default_backend = normalized["agent_backend"].get("default")
         if default_backend:
             values["OO_BACKEND"] = default_backend
+        runtime = normalized.get("runtime") or {}
+        if runtime.get("mode"):
+            values[RUNTIME_ENV_KEYS["mode"]] = str(runtime["mode"])
+        docker = runtime.get("docker") if isinstance(runtime.get("docker"), dict) else {}
+        if docker.get("image"):
+            values[RUNTIME_ENV_KEYS["image"]] = str(docker["image"])
+        if docker.get("network"):
+            values[RUNTIME_ENV_KEYS["network"]] = str(docker["network"])
         write_user_env(values, self.user_env_path)

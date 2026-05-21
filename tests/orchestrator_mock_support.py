@@ -42,6 +42,9 @@ def _config(tmp_path: Path) -> dict:
         "testing": {
             "runtime": "native",
         },
+        "runtime": {
+            "mode": "host",
+        },
         "policy": {
             "different_roles_can_run_concurrently": False,
             "same_role_can_run_concurrently": True,

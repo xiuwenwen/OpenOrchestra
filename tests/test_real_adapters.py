@@ -17,6 +17,7 @@ from harness.adapters.claude_config import (
 from harness.adapters.codex_cli_adapter import CodexCLIAdapter
 from harness.adapters.headless_cli_adapter import HeadlessCLIAdapter
 from harness.agents.context import AgentRunContext
+from harness.runtime.spec import RuntimeSpec
 
 
 class FakeRunner:
@@ -61,6 +62,26 @@ class RequestTooLargeRunner(FakeRunner):
         return 1
 
 
+class RuntimeAwareFakeRunner(FakeRunner):
+    def __init__(self):
+        super().__init__()
+        self.runtime_spec: RuntimeSpec | None = None
+
+    def run(
+        self,
+        command: list[str],
+        cwd: Path,
+        timeout_seconds: int | None,
+        stdout_path: Path,
+        stderr_path: Path,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        runtime_spec: RuntimeSpec | None = None,
+    ) -> int:
+        self.runtime_spec = runtime_spec
+        return super().run(command, cwd, timeout_seconds, stdout_path, stderr_path, input_text=input_text, env=env)
+
+
 def _ascii_prompt_for_estimated_tokens(token_count: int) -> str:
     return "x" * (token_count * 4)
 
@@ -97,6 +118,21 @@ def _context(tmp_path: Path, config: dict, role: str = "planner", user_prompt: s
     )
 
 
+def _docker_context(tmp_path: Path, config: dict, role: str = "planner") -> AgentRunContext:
+    context = _context(tmp_path, config, role=role)
+    return AgentRunContext(
+        **{
+            **context.__dict__,
+            "runtime_spec": RuntimeSpec(mode="docker", image="agent:latest", workdir="/workspace"),
+            "runtime_workspace_dir": "/openorchestra",
+            "runtime_repo_dir": "/workspace",
+            "runtime_input_dir": "/openorchestra/input",
+            "runtime_output_dir": "/openorchestra/output",
+            "runtime_log_dir": "/openorchestra/logs",
+        }
+    )
+
+
 def test_claude_adapter_does_not_force_permission_mode(tmp_path: Path) -> None:
     runner = FakeRunner()
 
@@ -110,6 +146,18 @@ def test_claude_adapter_does_not_force_permission_mode(tmp_path: Path) -> None:
     assert json.loads(settings_path.read_text(encoding="utf-8")) == {
         "env": {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"}
     }
+
+
+def test_claude_adapter_uses_runtime_paths_in_docker_mode(tmp_path: Path) -> None:
+    runner = RuntimeAwareFakeRunner()
+
+    ClaudeCodeAdapter(command=["claude", "-p"], runner=runner).run(_docker_context(tmp_path, config={}))
+
+    assert runner.command is not None
+    assert runner.runtime_spec is not None and runner.runtime_spec.is_docker
+    assert runner.command[runner.command.index("--settings") + 1].startswith("/openorchestra/logs/")
+    assert runner.command[runner.command.index("--add-dir") + 1] == "/openorchestra/input"
+    assert runner.command[runner.command.index("--add-dir") + 2] == "/openorchestra/output"
 
 
 def test_claude_adapter_accepts_configured_permission_mode(tmp_path: Path) -> None:
@@ -280,6 +328,18 @@ def test_codex_adapter_applies_context_window_and_max_output_config(tmp_path: Pa
     assert runner.env is None
 
 
+def test_codex_adapter_uses_runtime_paths_in_docker_mode(tmp_path: Path) -> None:
+    runner = RuntimeAwareFakeRunner()
+
+    CodexCLIAdapter(command=["codex", "exec"], runner=runner).run(_docker_context(tmp_path, config={}))
+
+    assert runner.command is not None
+    assert runner.runtime_spec is not None and runner.runtime_spec.is_docker
+    assert runner.command[runner.command.index("--cd") + 1] == "/workspace"
+    add_dirs = [runner.command[index + 1] for index, value in enumerate(runner.command) if value == "--add-dir"]
+    assert add_dirs == ["/openorchestra/input", "/openorchestra/output"]
+
+
 def test_codex_adapter_lowers_max_output_for_large_prompt(tmp_path: Path) -> None:
     runner = FakeRunner()
     user_prompt = _ascii_prompt_for_estimated_tokens(65_000)
@@ -391,6 +451,21 @@ def test_headless_adapter_normalizes_approval_mode_for_cli_flavors(tmp_path: Pat
     assert "auto_edit" in gemini_runner.command
     assert qwen_runner.command is not None
     assert "auto-edit" in qwen_runner.command
+
+
+def test_headless_adapter_uses_runtime_paths_in_docker_mode(tmp_path: Path) -> None:
+    runner = RuntimeAwareFakeRunner()
+
+    HeadlessCLIAdapter("gemini", runner=runner).run(_docker_context(tmp_path, config={}))
+
+    assert runner.command is not None
+    assert runner.runtime_spec is not None and runner.runtime_spec.is_docker
+    include_dirs = [
+        runner.command[index + 1]
+        for index, value in enumerate(runner.command)
+        if value == "--include-directories"
+    ]
+    assert include_dirs == ["/openorchestra/input", "/openorchestra/output"]
 
 
 def test_claude_adapter_uses_role_specific_max_output_tokens(tmp_path: Path) -> None:

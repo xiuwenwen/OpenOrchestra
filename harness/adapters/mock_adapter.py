@@ -72,8 +72,8 @@ class MockAgentAdapter(AgentAdapter):
             return json.dumps(
                 {
                     "schema_version": 1,
-                    "status": "tests_passed",
-                    "next_action": "continue",
+                    "tester_status_code": 0,
+                    "next_action_code": 0,
                     "failure_type": "none",
                     "environment_ready": True,
                     "environment_dependency_issue": False,
@@ -89,7 +89,10 @@ class MockAgentAdapter(AgentAdapter):
                     "oracle_results": [
                         {
                             "oracle_id": "A1",
-                            "status": "passed",
+                            "oracle_result_code": 0,
+                            "baseline_result_code": 3,
+                            "current_result_code": 0,
+                            "regression_delta_code": 2,
                             "evidence": "Mock verification passed.",
                             "commands_run": ["python -m compileall -q ."],
                             "output_excerpt": "mock compile passed",
@@ -139,7 +142,13 @@ class MockAgentAdapter(AgentAdapter):
                             "id": "A1",
                             "description": "Mock verification passes.",
                             "kind": "test",
+                            "verification_mode_code": 1,
                             "required": True,
+                            "owner": "tester",
+                            "stage": "pre_delivery",
+                            "runtime": "resolved_runtime",
+                            "required_for_tester": True,
+                            "required_for_final": True,
                             "commands": ["python -m compileall -q ."],
                             "expected_exception": "",
                             "must_contain": [],

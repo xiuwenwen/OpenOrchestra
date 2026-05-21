@@ -8,6 +8,8 @@ class AgentOutputPolicy:
         return agent_status == "COMPLETED" and validation_ok
 
     def invalid_output_status(self, *, validation_ok: bool, agent_status: str) -> str:
+        if agent_status != "COMPLETED":
+            return "FAILED"
         if validation_ok:
             return "FAILED"
         return "OUTPUT_INVALID"

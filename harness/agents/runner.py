@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,9 @@ from harness.artifacts.output_templates import seed_output_templates
 from harness.artifacts.validator import ValidationResult, delivery_issue_is_contract_only, required_output_may_be_empty
 from harness.core.errors import TaskFailedError
 from harness.core.progress import ProgressEvent
+from harness.events import TraceContext
+from harness.runtime.resolver import RuntimeResolver
+from harness.runtime.spec import PathMapping, RuntimeSpec
 
 
 class NonRetryableAgentError(TaskFailedError):
@@ -33,7 +38,7 @@ class NonRetryableAgentError(TaskFailedError):
 REQUESTED_OUTPUT_TOKENS_RE = re.compile(r"requested\s+(\d+)\s+output tokens")
 INPUT_TOKENS_RE = re.compile(r"(?:prompt contains at least\s+|parameter=input_tokens,\s*value=)(\d+)")
 MAX_OUTPUT_TOKENS_ENV_RE = re.compile(r"max_output_tokens_env:\s*`(\d+)`")
-
+AGENT_RUNTIME_WORKSPACE_DIR = "/openorchestra"
 
 class AgentPhaseRunner:
     def __init__(self, orchestrator: Any):
@@ -50,6 +55,7 @@ class AgentPhaseRunner:
         user_prompt: str | None = None,
         agent_count_override: int | None = None,
         phase_scope: dict[str, int | str | None] | None = None,
+        retry_feedback: list[str] | None = None,
     ) -> list[AgentRunResult]:
         o = self.orchestrator
         task_id = o.single_active_task_id(user_prompt)
@@ -148,6 +154,7 @@ class AgentPhaseRunner:
                     user_prompt,
                     required_outputs,
                     timeout_seconds,
+                    retry_feedback,
                 )
             else:
                 results = [
@@ -163,6 +170,7 @@ class AgentPhaseRunner:
                         user_prompt,
                         required_outputs,
                         timeout_seconds,
+                        retry_feedback=retry_feedback,
                     )
                     for agent_id in agent_ids
                 ]
@@ -317,6 +325,7 @@ class AgentPhaseRunner:
         user_prompt: str,
         required_outputs: list[str],
         timeout_seconds: int,
+        retry_feedback: list[str] | None = None,
     ) -> list[AgentRunResult]:
         max_retry = int(self.orchestrator.config["limits"]["max_agent_retry"])
         per_attempt_grace_seconds = 10
@@ -339,6 +348,7 @@ class AgentPhaseRunner:
                 user_prompt,
                 required_outputs,
                 timeout_seconds,
+                retry_feedback,
                 cancel_event,
             ): agent_id
             for agent_id in agent_ids
@@ -376,6 +386,7 @@ class AgentPhaseRunner:
         user_prompt: str,
         required_outputs: list[str],
         timeout_seconds: int,
+        retry_feedback: list[str] | None = None,
         cancel_event: threading.Event | None = None,
     ) -> AgentRunResult:
         o = self.orchestrator
@@ -430,6 +441,7 @@ class AgentPhaseRunner:
                     role,
                     downgraded_max_output_tokens,
                 )
+            runtime_spec = self.resolve_agent_runtime_spec(context_config, workspace, backend)
             context = AgentRunContext(
                 task_id=task_id,
                 phase_id=phase_id,
@@ -449,6 +461,13 @@ class AgentPhaseRunner:
                 timeout_seconds=timeout_seconds,
                 config=context_config,
                 metadata=metadata,
+                runtime_spec=runtime_spec,
+                runtime_workspace_dir=AGENT_RUNTIME_WORKSPACE_DIR if runtime_spec.is_docker else "",
+                runtime_repo_dir=runtime_spec.workdir if runtime_spec.is_docker else "",
+                runtime_input_dir=f"{AGENT_RUNTIME_WORKSPACE_DIR}/input" if runtime_spec.is_docker else "",
+                runtime_output_dir=f"{AGENT_RUNTIME_WORKSPACE_DIR}/output" if runtime_spec.is_docker else "",
+                runtime_log_dir=f"{AGENT_RUNTIME_WORKSPACE_DIR}/logs" if runtime_spec.is_docker else "",
+                retry_feedback=list(retry_feedback or []),
             )
             seed_output_templates(
                 context.output_dir,
@@ -458,6 +477,7 @@ class AgentPhaseRunner:
                 agent_id=context.agent_id,
             )
             context.log_dir.mkdir(parents=True, exist_ok=True)
+            self.write_runtime_path_manifest(context)
             (context.log_dir / "prompt.md").write_text(o.prompt_builder.build(context), encoding="utf-8")
             self.record_agent_attempt_trace(context, "started", backend, attempt, f"{agent_id} attempt {attempt + 1} invoking {adapter.__class__.__name__}")
             o.emit_progress(
@@ -486,22 +506,11 @@ class AgentPhaseRunner:
                     message = "Phase timed out before this agent result was accepted; ignoring late result"
                     o.repository.update_agent_run_status(run_id, "TIMEOUT", message)
                     raise TaskFailedError(message)
-                validation_result = o.validator.validate_required_outputs_result(workspace.output_dir, required_outputs)
-                review_data: dict[str, Any] = {}
-                validation_result, repaired_contract_artifacts = self.repair_trivial_contract_issues(
-                    result, context, validation_result
+                validation_result, repaired_contract_artifacts, review_data, artifact_output_dir, delivery_status = (
+                    self.validate_agent_output(result, context, backend)
                 )
-                if result.exit_code == 0 and not validation_result.ok and delivery_issue_is_contract_only(validation_result):
-                    review_data = self._review_delivery_contract(
-                        context=context,
-                        validation_result=validation_result,
-                        backend=o.backend_for(task_id, role),
-                    )
-                    if review_data.get("delivery_contract_review_decision") == "accept":
-                        validation_result = o.validator.validate_required_outputs_result(workspace.output_dir, required_outputs)
                 ok = validation_result.ok
                 errors = validation_result.errors
-                delivery_status = o.validator.parse_delivery_status(workspace.output_dir / "delivery.md")
                 result.validation_ok = ok
                 result.validation_errors = errors
                 if result.exit_code == 0 and self.output_policy.should_collect_artifacts(
@@ -509,7 +518,7 @@ class AgentPhaseRunner:
                     validation_ok=ok,
                 ):
                     result.artifacts = o.artifact_manager.collect_output_dir(
-                        task_id, phase_id, role, agent_id, workspace.output_dir
+                        task_id, phase_id, role, agent_id, artifact_output_dir
                     )
                     o.repository.update_agent_run_status(run_id, "COMPLETED")
                     self.record_backend_success(backend, context, attempt)
@@ -538,8 +547,7 @@ class AgentPhaseRunner:
                     return result
                 status = self.output_policy.invalid_output_status(validation_ok=ok, agent_status=result.status)
                 if result.exit_code != 0:
-                    suffix = f"; {'; '.join(errors)}" if errors else ""
-                    message = f"Agent exit_code={result.exit_code} status={result.status}{suffix}"
+                    message = self.agent_process_failure_message(result, context)
                 else:
                     message = "; ".join(errors) if errors else f"Agent exit_code={result.exit_code} status={result.status}"
                 request_size_failure = self.is_request_size_failure(result, context, message)
@@ -709,6 +717,147 @@ class AgentPhaseRunner:
             repaired,
         )
 
+    def validate_agent_output(
+        self,
+        result: AgentRunResult,
+        context: AgentRunContext,
+        backend: str,
+    ) -> tuple[ValidationResult, list[str], dict[str, Any], Path, str | None]:
+        o = self.orchestrator
+        if result.exit_code != 0:
+            return ValidationResult(), [], {}, context.output_dir, None
+        review_data: dict[str, Any] = {}
+        artifact_output_dir = context.output_dir
+        artifact_plane_result = self.canonicalize_with_artifact_plane(result, context)
+        if artifact_plane_result is not None:
+            validation_result = artifact_plane_result.validation_result
+            artifact_output_dir = artifact_plane_result.canonical_output_dir
+            repaired_artifacts = self.artifact_plane_repaired_artifacts(artifact_plane_result)
+        else:
+            validation_result = o.validator.validate_required_outputs_result(context.output_dir, context.required_outputs)
+            validation_result, repaired_artifacts = self.repair_trivial_contract_issues(
+                result, context, validation_result
+            )
+        if result.exit_code == 0 and not validation_result.ok and delivery_issue_is_contract_only(validation_result):
+            review_context = replace(context, output_dir=artifact_output_dir)
+            review_data = self._review_delivery_contract(
+                context=review_context,
+                validation_result=validation_result,
+                backend=backend,
+            )
+            if review_data.get("delivery_contract_review_decision") == "accept":
+                validation_result = o.validator.validate_required_outputs_result(
+                    artifact_output_dir,
+                    context.required_outputs,
+                )
+        delivery_status = o.validator.parse_delivery_status(artifact_output_dir / "delivery.md")
+        return validation_result, repaired_artifacts, review_data, artifact_output_dir, delivery_status
+
+    def resolve_agent_runtime_spec(self, config: dict[str, Any], workspace: Any, backend: str) -> RuntimeSpec:
+        spec = RuntimeResolver(config).resolve(context="agent")
+        if not spec.is_docker:
+            return spec
+        docker = config.get("runtime", {}).get("docker", {})
+        docker = docker if isinstance(docker, dict) else {}
+        backend_config_mounts = docker.get("backend_config_mounts", {})
+        if backend_config_mounts is None:
+            backend_config_mounts = {}
+        if not isinstance(backend_config_mounts, dict):
+            raise TaskFailedError("runtime.docker.backend_config_mounts must be an object")
+        configured_mounts = backend_config_mounts.get(backend, [])
+        if configured_mounts is None:
+            configured_mounts = []
+        if isinstance(configured_mounts, dict):
+            raise TaskFailedError(f"runtime.docker.backend_config_mounts.{backend} must be a list")
+        if not isinstance(configured_mounts, list):
+            raise TaskFailedError(f"runtime.docker.backend_config_mounts.{backend} must be a list")
+        Path(workspace.workspace_dir).mkdir(parents=True, exist_ok=True)
+        mounts = [PathMapping(Path(workspace.workspace_dir), AGENT_RUNTIME_WORKSPACE_DIR, read_only=False), *spec.mounts]
+        for index, item in enumerate(configured_mounts):
+            if not isinstance(item, dict):
+                raise TaskFailedError(f"runtime.docker.backend_config_mounts.{backend}[{index}] must be an object")
+            host = item.get("host")
+            container = item.get("container")
+            if not isinstance(host, str) or not host.strip():
+                raise TaskFailedError(f"runtime.docker.backend_config_mounts.{backend}[{index}].host must be a string")
+            if not isinstance(container, str) or not container.strip():
+                raise TaskFailedError(
+                    f"runtime.docker.backend_config_mounts.{backend}[{index}].container must be a string"
+                )
+            read_only = bool(item.get("read_only", True))
+            mounts.append(PathMapping(Path(host).expanduser(), container, read_only=read_only))
+            if read_only and Path(host).expanduser().is_dir():
+                mounts.append(self.backend_config_writable_session_env_mount(workspace, backend, container))
+        return replace(spec, mounts=tuple(mounts))
+
+    def backend_config_writable_session_env_mount(self, workspace: Any, backend: str, container_path: str) -> PathMapping:
+        safe_container = container_path.strip("/").replace("/", "__")
+        host_path = Path(workspace.workspace_dir) / "runtime" / "backend-config-writable" / backend / safe_container / "session-env"
+        host_path.mkdir(parents=True, exist_ok=True)
+        return PathMapping(host_path, f"{container_path.rstrip('/')}/session-env", read_only=False)
+
+    def write_runtime_path_manifest(self, context: AgentRunContext) -> Path:
+        payload = {
+            "schema_version": "runtime_path_contract.v1",
+            "task_id": context.task_id,
+            "phase_id": context.phase_id,
+            "role": context.role,
+            "agent_id": context.agent_id,
+            "runtime": {
+                "mode": context.runtime_mode,
+                "repo": context.runtime_repo_dir or str(context.repo_dir),
+                "input": context.runtime_input_dir or str(context.input_dir),
+                "output": context.runtime_output_dir or str(context.output_dir),
+                "logs": context.runtime_log_dir or str(context.log_dir),
+            },
+            "host": {
+                "workspace": str(context.workspace_dir),
+                "repo": str(context.repo_dir),
+                "input": str(context.input_dir),
+                "output": str(context.output_dir),
+                "logs": str(context.log_dir),
+            },
+            "mounts": [
+                {"host": str(context.repo_dir), "runtime": context.runtime_repo_dir or str(context.repo_dir), "read_only": False},
+                *[
+                    {"host": str(mount.host_path), "runtime": mount.container_path, "read_only": mount.read_only}
+                    for mount in context.runtime_spec.mounts
+                ],
+            ],
+        }
+        path = context.log_dir / "path_manifest.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return path
+
+    def canonicalize_with_artifact_plane(
+        self,
+        result: AgentRunResult,
+        context: AgentRunContext,
+    ) -> Any | None:
+        artifact_plane = getattr(self.orchestrator, "artifact_plane", None)
+        if result.exit_code != 0 or artifact_plane is None:
+            return None
+        return artifact_plane.canonicalize_output_dir(
+            task_id=context.task_id,
+            producer=context.agent_id,
+            output_dir=context.output_dir,
+            required_outputs=context.required_outputs,
+            trace=TraceContext.start(
+                trace_id=f"{context.task_id}:{context.phase_id}:{context.agent_id}",
+                correlation_id=context.task_id,
+            ),
+        )
+
+    def artifact_plane_repaired_artifacts(self, artifact_plane_result: Any) -> list[str]:
+        repaired: list[str] = []
+        for report in artifact_plane_result.reports:
+            if not report.changes:
+                continue
+            artifact = report.raw_artifact.artifact_type
+            if artifact not in repaired:
+                repaired.append(artifact)
+        return repaired
+
     def record_backend_success(self, backend: str, context: AgentRunContext, attempt: int) -> None:
         o = self.orchestrator
         previous = o.backend_health.check(backend)
@@ -740,8 +889,9 @@ class AgentPhaseRunner:
         status: str | None = None,
     ):
         o = self.orchestrator
-        snapshot = o.backend_health.record_failure(backend, message, status=status)
-        if snapshot.failure_kind in {"request_size", "output_contract"}:
+        failure_text = self.backend_failure_text(context, message)
+        snapshot = o.backend_health.record_failure(backend, failure_text, status=status)
+        if snapshot.failure_kind in {"request_size", "output_contract", "agent_runtime"}:
             return snapshot
         o.emit_progress(
             ProgressEvent(
@@ -758,6 +908,25 @@ class AgentPhaseRunner:
             )
         )
         return snapshot
+
+    def backend_failure_text(self, context: AgentRunContext, message: str) -> str:
+        texts = [message]
+        for name in ("stdout.log", "stderr.log", "request_diagnostics.md"):
+            path = context.log_dir / name
+            if path.exists() and path.is_file():
+                texts.append(path.read_text(encoding="utf-8", errors="replace"))
+        return "\n".join(texts)
+
+    def agent_process_failure_message(self, result: AgentRunResult, context: AgentRunContext) -> str:
+        message = f"Agent exit_code={result.exit_code} status={result.status}"
+        paths = (("stderr", result.stderr_path or context.log_dir / "stderr.log"), ("stdout", result.stdout_path or context.log_dir / "stdout.log"))
+        for label, path in paths:
+            if not path.exists() or not path.is_file():
+                continue
+            excerpt = " | ".join(line.strip() for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
+            if excerpt:
+                return f"{message}; {label}: {excerpt[:500].rstrip()}{'...' if len(excerpt) > 500 else ''}"
+        return message
 
     def backend_health_event_data(self, snapshot) -> dict[str, Any]:
         return {

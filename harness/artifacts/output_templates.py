@@ -4,6 +4,11 @@ import json
 import re
 from pathlib import Path
 
+from harness.artifacts.enums import (
+    ORACLE_RESULT_NOT_RUN,
+    REGRESSION_DELTA_UNKNOWN,
+)
+
 
 TEMPLATE_STATUS_FIELD = "harness_template_status"
 TEMPLATE_PENDING_VALUE = "pending_model_completion"
@@ -117,9 +122,10 @@ def _tester_result_template() -> str:
         json.dumps(
             {
                 "schema_version": 1,
-                "status": TEMPLATE_PENDING_VALUE,
-                "next_action": TEMPLATE_PENDING_VALUE,
+                "tester_status_code": TEMPLATE_PENDING_VALUE,
+                "next_action_code": TEMPLATE_PENDING_VALUE,
                 "failure_type": TEMPLATE_PENDING_VALUE,
+                "environment_ready": TEMPLATE_PENDING_VALUE,
                 "environment_dependency_issue": TEMPLATE_PENDING_VALUE,
                 "summary": "Replace this Harness output template with the tester decision.",
                 "setup_commands_run": [],
@@ -127,7 +133,10 @@ def _tester_result_template() -> str:
                 "oracle_results": [
                     {
                         "oracle_id": TEMPLATE_PENDING_VALUE,
-                        "status": TEMPLATE_PENDING_VALUE,
+                        "oracle_result_code": TEMPLATE_PENDING_VALUE,
+                        "baseline_result_code": ORACLE_RESULT_NOT_RUN,
+                        "current_result_code": TEMPLATE_PENDING_VALUE,
+                        "regression_delta_code": REGRESSION_DELTA_UNKNOWN,
                         "evidence": "Replace with concrete command/static evidence for this oracle.",
                         "commands_run": [],
                         "output_excerpt": "",
@@ -237,7 +246,13 @@ def _selected_plan_template() -> str:
                         "id": TEMPLATE_PENDING_VALUE,
                         "description": "Replace with the user-visible behavior to verify.",
                         "kind": "runtime",
+                        "verification_mode_code": TEMPLATE_PENDING_VALUE,
                         "required": True,
+                        "owner": "tester",
+                        "stage": "pre_delivery",
+                        "runtime": "resolved_runtime",
+                        "required_for_tester": True,
+                        "required_for_final": True,
                         "commands": [],
                         "expected_exception": "",
                         "must_contain": [],
@@ -268,6 +283,10 @@ def _environment_contract_template(relative_name: str) -> str:
                 "confidence": TEMPLATE_PENDING_VALUE,
                 "runtime": {
                     "type": TEMPLATE_PENDING_VALUE,
+                    "requested_type": TEMPLATE_PENDING_VALUE,
+                    "resolved_type": "",
+                    "image": "",
+                    "workdir": "",
                     "language": "",
                     "version": "",
                     "base_commit": "",
@@ -311,6 +330,7 @@ def _validation_contract_template(relative_name: str) -> str:
                 "source": "planner" if is_draft else "plan_review",
                 "confidence": TEMPLATE_PENDING_VALUE,
                 "runtime": TEMPLATE_PENDING_VALUE,
+                "resolved_runtime_id": "",
                 "tests": {
                     # `mode` carries the meaning; an empty command list alone is not a decision.
                     "mode": TEMPLATE_PENDING_VALUE,
@@ -324,6 +344,18 @@ def _validation_contract_template(relative_name: str) -> str:
                     "type": TEMPLATE_PENDING_VALUE,
                     "conditions": [],
                     "resolved": None,
+                },
+                "final_check": {
+                    # `unknown` means Harness should not invent a final evaluator command.
+                    "mode": "unknown",
+                    "authority": "",
+                    "commands": [],
+                    "required_result": {},
+                    "result_json_path": "",
+                    "pass_json_path": "",
+                    "pass_json_value": True,
+                    "failure_type": "source_bug",
+                    "notes": "",
                 },
                 "acceptance_oracle_ids": [],
                 "unknowns": [],
