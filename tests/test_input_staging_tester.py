@@ -125,6 +125,79 @@ def test_reviewer_receives_latest_complete_tester_result(tmp_path: Path) -> None
     assert "bug_report.md" in manifest
     assert "tester_result.json" in manifest
 
+
+def test_reviewer_input_excludes_superseded_tester_retry_outputs(tmp_path: Path) -> None:
+    orchestrator = Orchestrator(_config(tmp_path))
+    task_id = orchestrator.create_task("review should only see accepted tester retry verdict")
+    first_test_phase_id = orchestrator.repository.create_phase(task_id, TESTING, "tester", 0, status="COMPLETED")
+    retry_test_phase_id = orchestrator.repository.create_phase(
+        task_id,
+        TESTING,
+        "tester",
+        0,
+        status="COMPLETED",
+        loop_type="tester_result_retry",
+        iteration_id=1,
+    )
+    review_phase_id = orchestrator.repository.create_phase(task_id, REVIEWING, "reviewer", 0)
+
+    for phase_id, version, label in (
+        (first_test_phase_id, 1, "old"),
+        (retry_test_phase_id, 2, "retry"),
+    ):
+        artifact_dir = tmp_path / label
+        artifact_dir.mkdir()
+        bug_report = artifact_dir / "bug_report.md"
+        bug_report.write_text(f"artifact_result_code: 0\nlabel: {label}\n", encoding="utf-8")
+        tester_result = artifact_dir / "tester_result.json"
+        tester_result.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "status": "tests_passed",
+                    "next_action": "continue",
+                    "failure_type": "none",
+                    "environment_dependency_issue": False,
+                    "summary": label,
+                    "setup_commands_run": [],
+                    "test_commands_run": [],
+                    "oracle_results": [],
+                    "remaining_blockers": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        for artifact_type, path in (("bug_report.md", bug_report), ("tester_result.json", tester_result)):
+            orchestrator.repository.create_artifact(
+                ArtifactRef(
+                    artifact_id=str(uuid.uuid4()),
+                    task_id=task_id,
+                    phase_id=phase_id,
+                    role="tester",
+                    agent_id="tester-1",
+                    artifact_type=artifact_type,
+                    path=path,
+                    version=version,
+                    hash=f"{label}-{artifact_type}",
+                )
+            )
+
+    staged = orchestrator._stage_input_artifacts(
+        task_id,
+        tmp_path / "review-input-retry",
+        "reviewer",
+        REVIEWING,
+        exclude_phase_id=review_phase_id,
+        round_id=0,
+    )
+    manifest = staged[0].read_text(encoding="utf-8")
+
+    assert "tester_result.json v2" in manifest
+    assert "bug_report.md v2" in manifest
+    assert "tester_result.json v1" not in manifest
+    assert "bug_report.md v1" not in manifest
+
+
 def test_tester_receives_no_executor_markdown_artifacts(tmp_path: Path) -> None:
     orchestrator = Orchestrator(_config(tmp_path))
     task_id = orchestrator.create_task("test materialized repository directly")

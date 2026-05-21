@@ -45,6 +45,35 @@ def _artifact(
     }
 
 
+def _artifact_for_phase(
+    tmp_path: Path,
+    phases_by_id: dict[str, dict],
+    *,
+    phase_id: str,
+    role: str | None,
+    agent_id: str | None,
+    artifact_type: str,
+    label: str,
+    version: int = 1,
+    content: str | None = None,
+) -> dict:
+    phase_row = phases_by_id[phase_id]
+    path = tmp_path / f"{label}-{artifact_type}"
+    path.write_text(
+        content if content is not None else f"round_id: {phase_row['round_id']}\n",
+        encoding="utf-8",
+    )
+    return {
+        "artifact_id": f"{label}-{artifact_type}",
+        "phase_id": phase_id,
+        "role": role,
+        "agent_id": agent_id,
+        "artifact_type": artifact_type,
+        "path": str(path),
+        "version": version,
+    }
+
+
 def _project_context(tmp_path: Path) -> dict:
     path = tmp_path / "project_context.md"
     path.write_text("context", encoding="utf-8")
@@ -244,9 +273,11 @@ def test_project_context_visibility_is_role_scoped(tmp_path: Path) -> None:
 
 def test_fixing_visibility_uses_latest_complete_test_round_before_current(tmp_path: Path) -> None:
     phases_by_id: dict[str, dict] = {}
+    test_phase_id = "r0-test-phase"
+    phases_by_id[test_phase_id] = {"phase_id": test_phase_id, "phase_type": TESTING, "round_id": 0}
     artifacts = [
-        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=0, label="r0-bug"),
-        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", phase_type=TESTING, round_id=0, label="r0-result"),
+        _artifact_for_phase(tmp_path, phases_by_id, phase_id=test_phase_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", label="r0-bug"),
+        _artifact_for_phase(tmp_path, phases_by_id, phase_id=test_phase_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", label="r0-result"),
         _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="notes.md", phase_type=REGRESSION_TESTING, round_id=1, label="r1-non-test-report"),
     ]
 
@@ -392,12 +423,14 @@ def test_executor_review_fixing_visibility_excludes_reviewer_result(tmp_path: Pa
 
 def test_reviewer_visibility_includes_structured_tester_report_but_excludes_gate_noise(tmp_path: Path) -> None:
     phases_by_id: dict[str, dict] = {}
+    test_phase_id = "r3-test-phase"
+    phases_by_id[test_phase_id] = {"phase_id": test_phase_id, "phase_type": TESTING, "round_id": 3}
     artifacts = [
         _artifact(tmp_path, phases_by_id, role="reviewer", agent_id="reviewer-1", artifact_type="selected_plan.json", phase_type=PLAN_REVIEW, round_id=1, label="selected"),
         _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="merged_patch.diff", phase_type=PATCH_MERGE, round_id=3, label="merged"),
         _artifact(tmp_path, phases_by_id, role="executor", agent_id="executor-1", artifact_type="self_check.md", phase_type=PATCH_MERGE, round_id=3, label="self"),
-        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", phase_type=TESTING, round_id=3, label="bug"),
-        _artifact(tmp_path, phases_by_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", phase_type=TESTING, round_id=3, label="result"),
+        _artifact_for_phase(tmp_path, phases_by_id, phase_id=test_phase_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", label="bug"),
+        _artifact_for_phase(tmp_path, phases_by_id, phase_id=test_phase_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", label="result"),
         _artifact(tmp_path, phases_by_id, role="orchestrator", agent_id="orchestrator", artifact_type="test_gate.md", phase_type="TEST_GATE", round_id=3, label="gate"),
     ]
 
@@ -410,6 +443,36 @@ def test_reviewer_visibility_includes_structured_tester_report_but_excludes_gate
         "bug-bug_report.md",
         "result-tester_result.json",
     }
+
+
+def test_reviewer_visibility_uses_latest_complete_tester_phase_within_same_round(tmp_path: Path) -> None:
+    phases_by_id: dict[str, dict] = {}
+    old_phase_id = "old-test-phase"
+    retry_phase_id = "retry-test-phase"
+    phases_by_id[old_phase_id] = {
+        "phase_id": old_phase_id,
+        "phase_type": TESTING,
+        "round_id": 0,
+        "loop_type": None,
+        "iteration_id": None,
+    }
+    phases_by_id[retry_phase_id] = {
+        "phase_id": retry_phase_id,
+        "phase_type": TESTING,
+        "round_id": 0,
+        "loop_type": "tester_result_retry",
+        "iteration_id": 1,
+    }
+    artifacts = [
+        _artifact_for_phase(tmp_path, phases_by_id, phase_id=old_phase_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", label="old-bug", version=1),
+        _artifact_for_phase(tmp_path, phases_by_id, phase_id=old_phase_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", label="old-result", version=1),
+        _artifact_for_phase(tmp_path, phases_by_id, phase_id=retry_phase_id, role="tester", agent_id="tester-1", artifact_type="bug_report.md", label="retry-bug", version=2),
+        _artifact_for_phase(tmp_path, phases_by_id, phase_id=retry_phase_id, role="tester", agent_id="tester-1", artifact_type="tester_result.json", label="retry-result", version=2),
+    ]
+
+    visible = ArtifactVisibilityPolicy().filter_visible_artifacts(artifacts, phases_by_id, "reviewer", REVIEWING, 0)
+
+    assert _names(visible) == {"retry-bug-bug_report.md", "retry-result-tester_result.json"}
 
 
 def test_latest_visibility_uses_round_before_input_order(tmp_path: Path) -> None:

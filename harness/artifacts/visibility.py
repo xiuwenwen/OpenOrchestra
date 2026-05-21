@@ -63,7 +63,7 @@ class ArtifactVisibilityPolicy:
             default=None,
         )
         rejected_plan_review_round = self._latest_rejected_plan_review_round(artifacts, phases_by_id, round_id)
-        latest_complete_test_round = self._latest_complete_artifact_round_before(
+        latest_complete_test_phase = self._latest_complete_artifact_phase_before(
             artifacts,
             phases_by_id,
             round_id,
@@ -71,7 +71,7 @@ class ArtifactVisibilityPolicy:
             artifact_types=TEST_REPORT_ARTIFACTS,
             source_phases=_phases(TESTING, REGRESSION_TESTING),
         )
-        latest_complete_test_round_any = self._latest_complete_artifact_round(
+        latest_complete_test_phase_any = self._latest_complete_artifact_phase(
             artifacts,
             phases_by_id,
             source_role="tester",
@@ -101,8 +101,8 @@ class ArtifactVisibilityPolicy:
                     current_agent_id=current_agent_id,
                     latest_planning_round=latest_planning_round,
                     rejected_plan_review_round=rejected_plan_review_round,
-                    latest_complete_test_round=latest_complete_test_round,
-                    latest_complete_test_round_any=latest_complete_test_round_any,
+                    latest_complete_test_phase=latest_complete_test_phase,
+                    latest_complete_test_phase_any=latest_complete_test_phase_any,
                 ):
                     continue
                 if rule.round_policy in {ROUND_LATEST_PER_TYPE, ROUND_LATEST_BEFORE_CURRENT_PER_TYPE}:
@@ -171,8 +171,8 @@ class ArtifactVisibilityPolicy:
         current_agent_id: str | None,
         latest_planning_round: int | None,
         rejected_plan_review_round: int | None,
-        latest_complete_test_round: int | None,
-        latest_complete_test_round_any: int | None,
+        latest_complete_test_phase: str | None,
+        latest_complete_test_phase_any: str | None,
     ) -> bool:
         artifact_type = artifact["artifact_type"]
         artifact_role = artifact.get("role")
@@ -193,24 +193,26 @@ class ArtifactVisibilityPolicy:
             return False
         return self._artifact_round_matches_visibility_rule(
             rule,
+            artifact_phase_id=str(artifact.get("phase_id") or "") or None,
             effective_round=effective_round,
             target_round=target_round,
             latest_planning_round=latest_planning_round,
             rejected_plan_review_round=rejected_plan_review_round,
-            latest_complete_test_round=latest_complete_test_round,
-            latest_complete_test_round_any=latest_complete_test_round_any,
+            latest_complete_test_phase=latest_complete_test_phase,
+            latest_complete_test_phase_any=latest_complete_test_phase_any,
         )
 
     def _artifact_round_matches_visibility_rule(
         self,
         rule: ArtifactVisibilityRule,
         *,
+        artifact_phase_id: str | None,
         effective_round: int | None,
         target_round: int | None,
         latest_planning_round: int | None,
         rejected_plan_review_round: int | None,
-        latest_complete_test_round: int | None,
-        latest_complete_test_round_any: int | None,
+        latest_complete_test_phase: str | None,
+        latest_complete_test_phase_any: str | None,
     ) -> bool:
         if rule.round_policy == ROUND_ANY:
             return True
@@ -221,9 +223,9 @@ class ArtifactVisibilityPolicy:
         if rule.round_policy == ROUND_REJECTED_PLAN_REVIEW:
             return rejected_plan_review_round is not None and effective_round == rejected_plan_review_round
         if rule.round_policy == ROUND_LATEST_COMPLETE_TEST:
-            return latest_complete_test_round_any is not None and effective_round == latest_complete_test_round_any
+            return latest_complete_test_phase_any is not None and artifact_phase_id == latest_complete_test_phase_any
         if rule.round_policy == ROUND_LATEST_COMPLETE_TEST_BEFORE_CURRENT:
-            return latest_complete_test_round is not None and effective_round == latest_complete_test_round
+            return latest_complete_test_phase is not None and artifact_phase_id == latest_complete_test_phase
         if rule.round_policy == ROUND_BEFORE_CURRENT and target_round is None:
             return True
         if target_round is None:
@@ -240,7 +242,7 @@ class ArtifactVisibilityPolicy:
             return effective_round < target_round
         raise ValueError(f"Unknown artifact visibility round_policy: {rule.round_policy}")
 
-    def _latest_complete_artifact_round_before(
+    def _latest_complete_artifact_phase_before(
         self,
         artifacts: list[dict[str, Any]],
         phases_by_id: dict[str, dict[str, Any]],
@@ -249,31 +251,19 @@ class ArtifactVisibilityPolicy:
         source_role: str,
         artifact_types: frozenset[str],
         source_phases: frozenset[str],
-    ) -> int | None:
+    ) -> str | None:
         if target_round is None:
             return None
-        artifact_types_by_round: dict[int, set[str]] = {}
-        for artifact in artifacts:
-            if (artifact.get("role") or "") != source_role:
-                continue
-            artifact_type = str(artifact.get("artifact_type") or "")
-            if artifact_type not in artifact_types:
-                continue
-            phase_row = phases_by_id.get(artifact.get("phase_id") or "")
-            if not phase_row or phase_row.get("phase_type") not in source_phases or phase_row.get("round_id") is None:
-                continue
-            artifact_round = int(phase_row["round_id"])
-            if artifact_round >= target_round:
-                continue
-            artifact_types_by_round.setdefault(artifact_round, set()).add(artifact_type)
-        complete_rounds = [
-            artifact_round
-            for artifact_round, round_artifact_types in artifact_types_by_round.items()
-            if artifact_types <= round_artifact_types
-        ]
-        return max(complete_rounds, default=None)
+        return self._latest_complete_artifact_phase(
+            artifacts,
+            phases_by_id,
+            source_role=source_role,
+            artifact_types=artifact_types,
+            source_phases=source_phases,
+            before_round=target_round,
+        )
 
-    def _latest_complete_artifact_round(
+    def _latest_complete_artifact_phase(
         self,
         artifacts: list[dict[str, Any]],
         phases_by_id: dict[str, dict[str, Any]],
@@ -281,25 +271,33 @@ class ArtifactVisibilityPolicy:
         source_role: str,
         artifact_types: frozenset[str],
         source_phases: frozenset[str],
-    ) -> int | None:
-        artifact_types_by_round: dict[int, set[str]] = {}
+        before_round: int | None = None,
+    ) -> str | None:
+        artifact_types_by_phase: dict[str, set[str]] = {}
+        order_by_phase: dict[str, tuple[int, int, str, str]] = {}
         for artifact in artifacts:
             if (artifact.get("role") or "") != source_role:
                 continue
             artifact_type = str(artifact.get("artifact_type") or "")
             if artifact_type not in artifact_types:
                 continue
-            phase_row = phases_by_id.get(artifact.get("phase_id") or "")
+            phase_id = str(artifact.get("phase_id") or "")
+            phase_row = phases_by_id.get(phase_id)
             if not phase_row or phase_row.get("phase_type") not in source_phases or phase_row.get("round_id") is None:
                 continue
             artifact_round = int(phase_row["round_id"])
-            artifact_types_by_round.setdefault(artifact_round, set()).add(artifact_type)
-        complete_rounds = [
-            artifact_round
-            for artifact_round, round_artifact_types in artifact_types_by_round.items()
-            if artifact_types <= round_artifact_types
+            if before_round is not None and artifact_round >= before_round:
+                continue
+            artifact_types_by_phase.setdefault(phase_id, set()).add(artifact_type)
+            order_key = self._artifact_order_key(artifact, phases_by_id)
+            if phase_id not in order_by_phase or order_key > order_by_phase[phase_id]:
+                order_by_phase[phase_id] = order_key
+        complete_phases = [
+            phase_id
+            for phase_id, phase_artifact_types in artifact_types_by_phase.items()
+            if artifact_types <= phase_artifact_types
         ]
-        return max(complete_rounds, default=None)
+        return max(complete_phases, key=lambda phase_id: order_by_phase[phase_id], default=None)
 
     def _latest_rejected_plan_review_round(
         self,
